@@ -1,0 +1,1480 @@
+<template>
+  <div class="cost-settlement-page">
+    <el-card>
+      <!-- 顶部查询条件区域 -->
+      <div class="toolbar">
+        <el-form :inline="true" :model="queryForm" class="query-form">
+          <el-form-item label="会计期间">
+            <el-date-picker
+              v-model="queryForm.period"
+              type="month"
+              placeholder="选择会计期间"
+              value-format="YYYY-MM"
+              style="width: 160px"
+            />
+          </el-form-item>
+          <el-form-item label="商品编码/名称">
+            <el-input
+              v-model="queryForm.productSearch"
+              placeholder="输入商品编码或名称"
+              clearable
+              style="width: 200px"
+            />
+          </el-form-item>
+          <el-form-item label="仓库">
+            <el-select v-model="queryForm.warehouse" placeholder="选择仓库" clearable style="width: 150px">
+              <el-option label="全部仓库" value="" />
+              <el-option
+                v-for="warehouse in warehouses"
+                :key="warehouse.id"
+                :label="warehouse.name"
+                :value="warehouse.id"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item>
+            <el-button type="primary" @click="handleSearch">
+              <el-icon><Search /></el-icon>
+              查询
+            </el-button>
+            <el-button @click="handleReset">
+              <el-icon><RefreshLeft /></el-icon>
+              重置
+            </el-button>
+          </el-form-item>
+        </el-form>
+        
+        <!-- 右侧功能按钮 -->
+        <div class="action-buttons">
+          <el-button type="success" @click="handleCalculate">
+            <el-icon><Money /></el-icon>
+            开始计算
+          </el-button>
+          <el-button type="warning" @click="handleConfirm">
+            <el-icon><Check /></el-icon>
+            确认结算
+          </el-button>
+          <el-button type="info" @click="handleReverse">
+            <el-icon><Back /></el-icon>
+            反结算
+          </el-button>
+          <el-button type="primary" @click="handleExport">
+            <el-icon><Download /></el-icon>
+            导出 Excel
+          </el-button>
+          <el-button @click="handlePrint">
+            <el-icon><Printer /></el-icon>
+            打印
+          </el-button>
+        </div>
+      </div>
+
+      <!-- 中间表格展示区域 -->
+      <el-table
+        :data="settlementList"
+        style="width: 100%"
+        :table-layout="'fixed'"
+        border
+        :show-summary="true"
+        summary-method="getSummaries"
+      >
+        <el-table-column type="index" label="序号" width="60" align="center" />
+        <el-table-column prop="productCode" label="商品编码" width="120" />
+        <el-table-column prop="productName" label="商品名称" width="200" />
+        <el-table-column prop="specification" label="规格型号" width="150" />
+        <el-table-column prop="unit" label="单位" width="80" />
+        
+        <el-table-column prop="openingQty" label="期初数量" width="100" align="right">
+          <template #default="{ row }">{{ row.openingQty }}</template>
+        </el-table-column>
+        <el-table-column prop="openingCost" label="期初成本（不含税）" width="130" align="right">
+          <template #default="{ row }">¥{{ row.openingCost.toLocaleString() }}</template>
+        </el-table-column>
+        
+        <el-table-column prop="inboundQty" label="本期入库数量" width="110" align="right">
+          <template #default="{ row }">{{ row.inboundQty }}</template>
+        </el-table-column>
+        <el-table-column prop="inboundCost" label="本期入库成本（不含税）" width="150" align="right">
+          <template #default="{ row }">¥{{ row.inboundCost.toLocaleString() }}</template>
+        </el-table-column>
+        <el-table-column prop="inputTax" label="可抵扣进项税" width="130" align="right">
+          <template #default="{ row }">¥{{ row.inputTax.toLocaleString() }}</template>
+        </el-table-column>
+        
+        <el-table-column prop="outboundQty" label="本期出库数量" width="110" align="right">
+          <template #default="{ row }">{{ row.outboundQty }}</template>
+        </el-table-column>
+        <el-table-column prop="outboundCost" label="本期出库成本" width="130" align="right">
+          <template #default="{ row }">¥{{ row.outboundCost.toLocaleString() }}</template>
+        </el-table-column>
+        
+        <el-table-column prop="avgPrice" label="加权平均单价（不含税）" width="140" align="right">
+          <template #default="{ row }">¥{{ row.avgPrice.toFixed(2) }}</template>
+        </el-table-column>
+        
+        <el-table-column prop="closingQty" label="期末结存数量" width="110" align="right">
+          <template #default="{ row }">{{ row.closingQty }}</template>
+        </el-table-column>
+        <el-table-column prop="closingCost" label="期末结存成本" width="130" align="right">
+          <template #default="{ row }">¥{{ row.closingCost.toLocaleString() }}</template>
+        </el-table-column>
+        
+        <el-table-column label="操作" width="120" fixed="right" align="center">
+          <template #default="{ row }">
+            <el-button type="primary" size="small" @click="handleViewDetail(row)">明细</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <!-- 底部分页和统计 -->
+      <div class="pagination-wrapper">
+        <div class="summary-info">
+          <span>总数量：<strong>{{ totalQty }}</strong></span>
+          <span style="margin-left: 20px">总成本：<strong>¥{{ totalCost.toLocaleString() }}</strong></span>
+          <span style="margin-left: 20px">总进项税：<strong>¥{{ totalInputTax.toLocaleString() }}</strong></span>
+        </div>
+        <el-pagination
+          v-model:current-page="currentPage"
+          v-model:page-size="pageSize"
+          :page-sizes="[10, 20, 50, 100]"
+          :total="total"
+          layout="total, sizes, prev, pager, next, jumper"
+          @size-change="handleSizeChange"
+          @current-change="handleCurrentChange"
+        />
+      </div>
+    </el-card>
+
+    <!-- 结算明细弹窗 -->
+    <div v-if="dialogVisible" class="settlement-detail-overlay" @click="handleOverlayClick">
+      <div class="settlement-detail-dialog" @click.stop>
+        <!-- 头部固定区 -->
+        <div class="settlement-detail-header">
+          <span class="settlement-detail-title">成本结算明细</span>
+          <el-icon class="settlement-detail-close" @click="dialogVisible = false">
+            <Close />
+          </el-icon>
+        </div>
+
+        <div v-if="selectedRow" class="settlement-detail-body">
+          <!-- 商品基础信息固定区 -->
+          <div class="settlement-detail-info">
+            <el-descriptions :column="2" border size="default">
+              <el-descriptions-item label="商品编码">{{ selectedRow.productCode }}</el-descriptions-item>
+              <el-descriptions-item label="商品名称">{{ selectedRow.productName }}</el-descriptions-item>
+              <el-descriptions-item label="规格型号">{{ selectedRow.specification || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="单位">{{ selectedRow.unit }}</el-descriptions-item>
+              <el-descriptions-item label="会计期间">{{ queryForm.period }}</el-descriptions-item>
+              <el-descriptions-item label="加权平均单价">¥{{ selectedRow.avgPrice.toFixed(2) }}</el-descriptions-item>
+              <el-descriptions-item label="期初数量">{{ selectedRow.openingQty }}</el-descriptions-item>
+              <el-descriptions-item label="期初成本">¥{{ selectedRow.openingCost.toLocaleString() }}</el-descriptions-item>
+              <el-descriptions-item label="本期入库数量">{{ selectedRow.inboundQty }}</el-descriptions-item>
+              <el-descriptions-item label="本期入库成本">¥{{ selectedRow.inboundCost.toLocaleString() }}</el-descriptions-item>
+              <el-descriptions-item label="可抵扣进项税">¥{{ selectedRow.inputTax.toLocaleString() }}</el-descriptions-item>
+              <el-descriptions-item label="本期出库数量">{{ selectedRow.outboundQty }}</el-descriptions-item>
+              <el-descriptions-item label="本期出库成本">¥{{ selectedRow.outboundCost.toLocaleString() }}</el-descriptions-item>
+              <el-descriptions-item label="期末结存数量">{{ selectedRow.closingQty }}</el-descriptions-item>
+              <el-descriptions-item label="期末结存成本">¥{{ selectedRow.closingCost.toLocaleString() }}</el-descriptions-item>
+            </el-descriptions>
+          </div>
+
+          <!-- 明细表格滚动区 -->
+          <div class="settlement-detail-table-wrapper">
+            <h4 style="margin: 10px 0">入库明细</h4>
+            <el-table :data="inboundDetails" style="width: 100%">
+              <el-table-column prop="voucherNo" label="凭证号" width="140" />
+              <el-table-column prop="voucherDate" label="日期" width="120" />
+              <el-table-column prop="quantity" label="数量" width="100" align="right">
+                <template #default="{ row }">{{ row.quantity }}</template>
+              </el-table-column>
+              <el-table-column prop="totalAmount" label="价税合计" width="120" align="right">
+                <template #default="{ row }">¥{{ row.totalAmount.toLocaleString() }}</template>
+              </el-table-column>
+              <el-table-column prop="invoiceType" label="发票类型" width="100" />
+              <el-table-column prop="isDeduction" label="加计扣除" width="100">
+                <template #default="{ row }">{{ row.isDeduction ? '是' : '否' }}</template>
+              </el-table-column>
+              <el-table-column prop="inputTax" label="进项税" width="120" align="right">
+                <template #default="{ row }">¥{{ row.inputTax.toLocaleString() }}</template>
+              </el-table-column>
+              <el-table-column prop="cost" label="不含税成本" width="120" align="right">
+                <template #default="{ row }">¥{{ row.cost.toLocaleString() }}</template>
+              </el-table-column>
+            </el-table>
+
+            <h4 style="margin: 20px 0 10px 0">出库明细</h4>
+            <el-table :data="outboundDetails" style="width: 100%">
+              <el-table-column prop="voucherNo" label="凭证号" width="140" />
+              <el-table-column prop="voucherDate" label="日期" width="120" />
+              <el-table-column prop="quantity" label="数量" width="100" align="right">
+                <template #default="{ row }">{{ row.quantity }}</template>
+              </el-table-column>
+              <el-table-column prop="unitCost" label="单位成本" width="120" align="right">
+                <template #default="{ row }">¥{{ row.unitCost.toFixed(2) }}</template>
+              </el-table-column>
+              <el-table-column prop="totalCost" label="出库成本" width="120" align="right">
+                <template #default="{ row }">¥{{ row.totalCost.toLocaleString() }}</template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </div>
+
+        <!-- 底部关闭按钮固定区 -->
+        <div class="settlement-detail-footer">
+          <el-button @click="dialogVisible = false">关闭</el-button>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, reactive, computed, onMounted } from 'vue'
+import { Search, RefreshLeft, Check, Back, Download, Printer, Close, Money } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import exportToCsv from '../../utils/exportCsv'
+
+// 查询表单
+const queryForm = reactive({
+  period: '',
+  productSearch: '',
+  warehouse: ''
+})
+
+// 仓库列表
+const warehouses = ref([
+  { id: 1, name: '主仓库' },
+  { id: 2, name: '备用仓库' },
+  { id: 3, name: '临时仓库' }
+])
+
+// 结算数据列表
+const settlementList = ref<any[]>([])
+const allSettlementData = ref<any[]>([])
+
+// 分页
+const currentPage = ref(1)
+const pageSize = ref(20)
+const total = ref(0)
+
+// 弹窗
+const dialogVisible = ref(false)
+const selectedRow = ref<any>(null)
+const inboundDetails = ref<any[]>([])
+const outboundDetails = ref<any[]>([])
+
+// 统计
+const totalQty = computed(() => {
+  return settlementList.value.reduce((sum, row) => sum + Number(row.closingQty || 0), 0)
+})
+
+const totalCost = computed(() => {
+  return settlementList.value.reduce((sum, row) => sum + Number(row.closingCost || 0), 0)
+})
+
+const totalInputTax = computed(() => {
+  return settlementList.value.reduce((sum, row) => sum + Number(row.inputTax || 0), 0)
+})
+
+// 查询
+const handleSearch = () => {
+  loadSettlementData()
+}
+
+// 重置
+const handleReset = () => {
+  queryForm.period = ''
+  queryForm.productSearch = ''
+  queryForm.warehouse = ''
+  settlementList.value = []
+  allSettlementData.value = []
+}
+
+// 开始计算
+const handleCalculate = () => {
+  if (!queryForm.period) {
+    ElMessage.warning('请选择会计期间')
+    return
+  }
+  loadSettlementData()
+  ElMessage.success('成本计算完成')
+}
+
+// 确认结算
+const handleConfirm = () => {
+  if (settlementList.value.length === 0) {
+    ElMessage.warning('没有可结算的数据')
+    return
+  }
+  ElMessageBox.confirm(
+    `确定要确认 ${queryForm.period} 的成本结算吗？确认后数据将被锁定。`,
+    '确认结算',
+    {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning'
+    }
+  ).then(() => {
+    // 保存结算状态
+    const settlementRecord = {
+      period: queryForm.period,
+      confirmedAt: new Date().toISOString(),
+      data: settlementList.value
+    }
+    
+    const settlements = JSON.parse(localStorage.getItem('cost_settlements') || '[]')
+    // 删除该期间的旧记录
+    const filtered = settlements.filter((s: any) => s.period !== queryForm.period)
+    filtered.push(settlementRecord)
+    localStorage.setItem('cost_settlements', JSON.stringify(filtered))
+    
+    ElMessage.success('结算已确认')
+  }).catch(() => {})
+}
+
+// 反结算
+const handleReverse = () => {
+  if (!queryForm.period) {
+    ElMessage.warning('请选择会计期间')
+    return
+  }
+  
+  ElMessageBox.confirm(
+    `确定要反结算 ${queryForm.period} 吗？将解锁该期间的所有数据。`,
+    '反结算确认',
+    {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning'
+    }
+  ).then(() => {
+    let settlements = JSON.parse(localStorage.getItem('cost_settlements') || '[]')
+    settlements = settlements.filter((s: any) => s.period !== queryForm.period)
+    localStorage.setItem('cost_settlements', JSON.stringify(settlements))
+    
+    ElMessage.success('反结算成功')
+  }).catch(() => {})
+}
+
+// 导出 Excel
+const handleExport = () => {
+  if (settlementList.value.length === 0) {
+    ElMessage.warning('没有可导出的数据')
+    return
+  }
+  
+  const columns = [
+    { label: '商品编码', key: 'productCode' },
+    { label: '商品名称', key: 'productName' },
+    { label: '规格型号', key: 'specification' },
+    { label: '单位', key: 'unit' },
+    { label: '期初数量', key: 'openingQty' },
+    { label: '期初成本', key: 'openingCost' },
+    { label: '本期入库数量', key: 'inboundQty' },
+    { label: '本期入库成本', key: 'inboundCost' },
+    { label: '可抵扣进项税', key: 'inputTax' },
+    { label: '本期出库数量', key: 'outboundQty' },
+    { label: '本期出库成本', key: 'outboundCost' },
+    { label: '加权平均单价', key: 'avgPrice' },
+    { label: '期末结存数量', key: 'closingQty' },
+    { label: '期末结存成本', key: 'closingCost' }
+  ]
+  
+  const filename = `成本结算_${queryForm.period || '全部'}.csv`
+  exportToCsv(filename, columns, settlementList.value)
+}
+
+// 打印
+const handlePrint = () => {
+  if (settlementList.value.length === 0) {
+    ElMessage.warning('没有可打印的数据')
+    return
+  }
+  window.print()
+}
+
+// 查看明细
+const handleViewDetail = (row: any) => {
+  selectedRow.value = row
+  loadDetailData(row)
+  dialogVisible.value = true
+}
+
+const handleOverlayClick = () => {
+  dialogVisible.value = false
+}
+
+// 加载结算数据（核心计算逻辑）
+const loadSettlementData = () => {
+  allSettlementData.value = []
+  
+  // 获取所有产品
+  const products = JSON.parse(localStorage.getItem('products') || '[]')
+  
+  // 获取期初库存
+  const initialStock = JSON.parse(localStorage.getItem('stock_initial') || '[]')
+  
+  // 获取采购入库单
+  const inboundRecords = JSON.parse(localStorage.getItem('purchaseInbounds') || '[]')
+  
+  // 获取销售出库单
+  const outboundRecords = JSON.parse(localStorage.getItem('salesOutbounds') || '[]')
+  
+  // 过滤会计期间
+  const periodStart = queryForm.period ? new Date(queryForm.period + '-01') : new Date('1970-01-01')
+  const periodEnd = queryForm.period 
+    ? new Date(queryForm.period + '-01') 
+    : new Date()
+  if (queryForm.period) {
+    periodEnd.setMonth(periodEnd.getMonth() + 1)
+    periodEnd.setDate(0)
+  }
+  
+  products.forEach((product: any) => {
+    // 过滤条件
+    if (queryForm.productSearch) {
+      const search = queryForm.productSearch.toLowerCase()
+      if (!product.code.toLowerCase().includes(search) && 
+          !product.name.toLowerCase().includes(search)) {
+        return
+      }
+    }
+    
+    // 1. 获取期初数据
+    const initialRecord = initialStock.find((item: any) => item.productCode === product.code)
+    const openingQty = initialRecord ? Number(initialRecord.quantity || 0) : 0
+    const openingCost = initialRecord ? Number(initialRecord.amount || 0) : 0
+    
+    // 2. 计算本期入库
+    let totalInboundQty = 0
+    let totalInboundCost = 0
+    let totalInputTax = 0
+    
+    inboundRecords.forEach((record: any) => {
+      // 期间过滤
+      const recordDate = new Date(record.voucherDate)
+      if (recordDate < periodStart || recordDate > periodEnd) return
+      
+      const item = record.items.find((it: any) => it.productCode === product.code)
+      if (!item) return
+      
+      const quantity = Number(item.quantity || 0)
+      const totalAmount = Number(item.totalAmount || 0)
+      const invoiceType = record.invoiceType || '普票'
+      const isDeduction = record.invoiceDeduction || false
+      
+      // 价税分离计算
+      let cost = 0
+      let inputTax = 0
+      
+      if (invoiceType === '专票') {
+        // 专票：价税分离
+        const taxRate = 0.13 // 13% 税率
+        cost = Number((totalAmount / (1 + taxRate)).toFixed(2))
+        inputTax = Number((totalAmount - cost).toFixed(2))
+      } else if (invoiceType === '普票') {
+        if (isDeduction) {
+          // 普票 + 加计扣除：10% 进项税
+          inputTax = Number((totalAmount * 0.10).toFixed(2))
+          cost = Number((totalAmount - inputTax).toFixed(2))
+        } else {
+          // 普票 + 不加计：9% 进项税
+          inputTax = Number((totalAmount * 0.09).toFixed(2))
+          cost = Number((totalAmount - inputTax).toFixed(2))
+        }
+      }
+      
+      totalInboundQty += quantity
+      totalInboundCost += cost
+      totalInputTax += inputTax
+    })
+    
+    // 3. 计算加权平均单价
+    const totalQty = openingQty + totalInboundQty
+    const totalCost = openingCost + totalInboundCost
+    const avgPrice = totalQty > 0 ? totalCost / totalQty : 0
+    
+    // 4. 计算本期出库
+    let totalOutboundQty = 0
+    let totalOutboundCost = 0
+    
+    outboundRecords.forEach((record: any) => {
+      // 期间过滤
+      const recordDate = new Date(record.voucherDate)
+      if (recordDate < periodStart || recordDate > periodEnd) return
+      
+      const item = record.items.find((it: any) => it.productCode === product.code)
+      if (!item) return
+      
+      const quantity = Number(item.quantity || 0)
+      totalOutboundQty += quantity
+      totalOutboundCost += quantity * avgPrice
+    })
+    
+    // 5. 计算期末结存
+    const closingQty = totalQty - totalOutboundQty
+    const closingCost = totalCost - totalOutboundCost
+    
+    allSettlementData.value.push({
+      productCode: product.code,
+      productName: product.name,
+      specification: product.specification || '',
+      unit: product.unit || '',
+      openingQty: Number(openingQty.toFixed(2)),
+      openingCost: Number(openingCost.toFixed(2)),
+      inboundQty: Number(totalInboundQty.toFixed(2)),
+      inboundCost: Number(totalInboundCost.toFixed(2)),
+      inputTax: Number(totalInputTax.toFixed(2)),
+      outboundQty: Number(totalOutboundQty.toFixed(2)),
+      outboundCost: Number(totalOutboundCost.toFixed(2)),
+      avgPrice: Number(avgPrice.toFixed(2)),
+      closingQty: Number(closingQty.toFixed(2)),
+      closingCost: Number(closingCost.toFixed(2))
+    })
+  })
+  
+  // 更新列表和分页
+  updatePagination()
+}
+
+// 更新分页
+const updatePagination = () => {
+  const start = (currentPage.value - 1) * pageSize.value
+  const end = start + pageSize.value
+  settlementList.value = allSettlementData.value.slice(start, end)
+  total.value = allSettlementData.value.length
+}
+
+// 分页事件
+const handleSizeChange = (size: number) => {
+  pageSize.value = size
+  updatePagination()
+}
+
+const handleCurrentChange = (page: number) => {
+  currentPage.value = page
+  updatePagination()
+}
+
+// 表格汇总
+const getSummaries = (param: any) => {
+  const { columns, data } = param
+  const sums: any[] = []
+  
+  columns.forEach((column: any) => {
+    const prop = column.property
+    if (prop === 'productCode') {
+      sums.push('合计')
+      return
+    }
+    if (['productName', 'specification', 'unit'].includes(prop)) {
+      sums.push('-')
+      return
+    }
+    
+    const values = data.map((item: any) => item[prop])
+    if (values.every((v: any) => !isNaN(v))) {
+      const sum = values.reduce((prev: number, curr: number) => {
+        return Number(prev) + Number(curr)
+      }, 0)
+      sums.push(Number(sum.toFixed(2)))
+    } else {
+      sums.push('-')
+    }
+  })
+  
+  return sums
+}
+
+<template>
+  <div class="cost-settlement-page">
+    <el-card>
+      <div class="toolbar">
+        <el-form :inline="true" :model="queryForm" class="query-form">
+          <el-form-item label="会计期间">
+            <el-date-picker
+              v-model="queryForm.period"
+              type="month"
+              placeholder="选择会计期间"
+              value-format="YYYY-MM"
+              style="width: 160px"
+            />
+          </el-form-item>
+          <el-form-item label="商品编码/名称">
+            <el-input
+              v-model="queryForm.productSearch"
+              placeholder="输入商品编码或名称"
+              clearable
+              style="width: 200px"
+            />
+          </el-form-item>
+          <el-form-item label="仓库">
+            <el-select v-model="queryForm.warehouse" placeholder="选择仓库" clearable style="width: 150px">
+              <el-option label="全部仓库" value="" />
+              <el-option
+                v-for="warehouse in warehouses"
+                :key="warehouse.id"
+                :label="warehouse.name"
+                :value="warehouse.id"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item>
+            <el-button type="primary" @click="handleSearch">
+              <el-icon><Search /></el-icon>
+              查询
+            </el-button>
+            <el-button @click="handleReset">
+              <el-icon><RefreshLeft /></el-icon>
+              重置
+            </el-button>
+          </el-form-item>
+        </el-form>
+        
+        <!-- 右侧功能按钮 -->
+        <div class="action-buttons">
+          <el-button type="success" @click="handleCalculate">
+            <el-icon><Check /></el-icon>
+            开始计算
+          </el-button>
+          <el-button type="warning" @click="handleReverse">
+            <el-icon><Back /></el-icon>
+            反结算
+          </el-button>
+          <el-button type="primary" @click="handleExport">
+            <el-icon><Download /></el-icon>
+            导出 Excel
+          </el-button>
+          <el-button @click="handlePrint">
+            <el-icon><Printer /></el-icon>
+            打印
+          </el-button>
+        </div>
+      </div>
+
+      <!-- 中间表格展示区域 -->
+      <el-table
+        :data="settlementList"
+        style="width: 100%"
+        :table-layout="'fixed'"
+        border
+      >
+        <el-table-column type="index" label="序号" width="60" align="center" />
+        <el-table-column prop="productCode" label="商品编码" width="120" />
+        <el-table-column prop="productName" label="商品名称" width="200" />
+        <el-table-column prop="specification" label="规格型号" width="150" />
+        <el-table-column prop="unit" label="单位" width="80" />
+        
+        <el-table-column prop="openingQty" label="期初数量" width="100" align="right">
+          <template #default="{ row }">{{ row.openingQty }}</template>
+        </el-table-column>
+        <el-table-column prop="openingCost" label="期初成本（不含税）" width="130" align="right">
+          <template #default="{ row }">¥{{ row.openingCost.toLocaleString() }}</template>
+        </el-table-column>
+        
+        <el-table-column prop="inboundQty" label="本期入库数量" width="110" align="right">
+          <template #default="{ row }">{{ row.inboundQty }}</template>
+        </el-table-column>
+        <el-table-column prop="inboundCost" label="本期入库成本（不含税）" width="150" align="right">
+          <template #default="{ row }">¥{{ row.inboundCost.toLocaleString() }}</template>
+        </el-table-column>
+        <el-table-column prop="inputTax" label="可抵扣进项税" width="130" align="right">
+          <template #default="{ row }">¥{{ row.inputTax.toLocaleString() }}</template>
+        </el-table-column>
+        
+        <el-table-column prop="outboundQty" label="本期出库数量" width="110" align="right">
+          <template #default="{ row }">{{ row.outboundQty }}</template>
+        </el-table-column>
+        <el-table-column prop="outboundCost" label="本期出库成本" width="150" align="right">
+          <template #default="{ row }">¥{{ row.outboundCost.toLocaleString() }}</template>
+        </el-table-column>
+        
+        <el-table-column prop="avgPrice" label="加权平均单价" width="130" align="right">
+          <template #default="{ row }">¥{{ row.avgPrice.toFixed(2) }}</template>
+        </el-table-column>
+        
+        <el-table-column prop="closingQty" label="期末结存数量" width="110" align="right">
+          <template #default="{ row }">{{ row.closingQty }}</template>
+        </el-table-column>
+        <el-table-column prop="closingCost" label="期末结存成本" width="150" align="right">
+          <template #default="{ row }">¥{{ row.closingCost.toLocaleString() }}</template>
+        </el-table-column>
+        
+        <el-table-column label="操作" width="120" fixed="right">
+          <template #default="{ row }">
+            <el-button type="primary" size="small" @click="handleViewDetail(row)">明细</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <!-- 底部统计区域 -->
+      <div class="summary-bar">
+        <div class="summary-item">
+          <span class="summary-label">期末结存数量合计：</span>
+          <span class="summary-value">{{ totalQty.toLocaleString() }}</span>
+        </div>
+        <div class="summary-item">
+          <span class="summary-label">期末结存成本合计：</span>
+          <span class="summary-value">¥{{ totalCost.toLocaleString() }}</span>
+        </div>
+        <div class="summary-item">
+          <span class="summary-label">可抵扣进项税合计：</span>
+          <span class="summary-value">¥{{ totalInputTax.toLocaleString() }}</span>
+        </div>
+      </div>
+    </el-card>
+
+    <!-- 成本结算明细弹窗 -->
+    <div v-if="dialogVisible" class="settlement-detail-overlay" @click="handleOverlayClick">
+      <div class="settlement-detail-dialog" @click.stop>
+        <!-- 头部固定区 -->
+        <div class="settlement-detail-header">
+          <span class="settlement-detail-title">成本结算明细</span>
+          <el-icon class="settlement-detail-close" @click="dialogVisible = false">
+            <Close />
+          </el-icon>
+        </div>
+
+        <div v-if="selectedRow" class="settlement-detail-body">
+          <!-- 商品基础信息固定区 -->
+          <div class="settlement-detail-info">
+            <el-descriptions :column="2" border size="default">
+              <el-descriptions-item label="商品编码">{{ selectedRow.productCode }}</el-descriptions-item>
+              <el-descriptions-item label="商品名称">{{ selectedRow.productName }}</el-descriptions-item>
+              <el-descriptions-item label="规格型号">{{ selectedRow.specification || '-' }}</el-descriptions-item>
+              <el-descriptions-item label="单位">{{ selectedRow.unit }}</el-descriptions-item>
+              <el-descriptions-item label="会计期间">{{ queryForm.period }}</el-descriptions-item>
+              <el-descriptions-item label="加权平均单价">¥{{ selectedRow.avgPrice.toFixed(2) }}</el-descriptions-item>
+              <el-descriptions-item label="期初数量">{{ selectedRow.openingQty }}</el-descriptions-item>
+              <el-descriptions-item label="期初成本">¥{{ selectedRow.openingCost.toLocaleString() }}</el-descriptions-item>
+              <el-descriptions-item label="本期入库数量">{{ selectedRow.inboundQty }}</el-descriptions-item>
+              <el-descriptions-item label="本期入库成本">¥{{ selectedRow.inboundCost.toLocaleString() }}</el-descriptions-item>
+              <el-descriptions-item label="可抵扣进项税">¥{{ selectedRow.inputTax.toLocaleString() }}</el-descriptions-item>
+              <el-descriptions-item label="本期出库数量">{{ selectedRow.outboundQty }}</el-descriptions-item>
+              <el-descriptions-item label="本期出库成本">¥{{ selectedRow.outboundCost.toLocaleString() }}</el-descriptions-item>
+              <el-descriptions-item label="期末结存数量">{{ selectedRow.closingQty }}</el-descriptions-item>
+              <el-descriptions-item label="期末结存成本">¥{{ selectedRow.closingCost.toLocaleString() }}</el-descriptions-item>
+            </el-descriptions>
+          </div>
+
+          <!-- 明细表格滚动区 -->
+          <div class="settlement-detail-table-wrapper">
+            <h4 style="margin: 10px 0">入库明细</h4>
+            <el-table :data="inboundDetails" style="width: 100%">
+              <el-table-column prop="voucherNo" label="凭证号" width="140" />
+              <el-table-column prop="voucherDate" label="日期" width="120" />
+              <el-table-column prop="quantity" label="数量" width="100" align="right">
+                <template #default="{ row }">{{ row.quantity }}</template>
+              </el-table-column>
+              <el-table-column prop="totalAmount" label="价税合计" width="120" align="right">
+                <template #default="{ row }">¥{{ row.totalAmount.toLocaleString() }}</template>
+              </el-table-column>
+              <el-table-column prop="invoiceType" label="发票类型" width="100" />
+              <el-table-column prop="isDeduction" label="加计扣除" width="100">
+                <template #default="{ row }">{{ row.isDeduction ? '是' : '否' }}</template>
+              </el-table-column>
+              <el-table-column prop="inputTax" label="进项税" width="120" align="right">
+                <template #default="{ row }">¥{{ row.inputTax.toLocaleString() }}</template>
+              </el-table-column>
+              <el-table-column prop="cost" label="不含税成本" width="120" align="right">
+                <template #default="{ row }">¥{{ row.cost.toLocaleString() }}</template>
+              </el-table-column>
+            </el-table>
+
+            <h4 style="margin: 20px 0 10px 0">出库明细</h4>
+            <el-table :data="outboundDetails" style="width: 100%">
+              <el-table-column prop="voucherNo" label="凭证号" width="140" />
+              <el-table-column prop="voucherDate" label="日期" width="120" />
+              <el-table-column prop="quantity" label="数量" width="100" align="right">
+                <template #default="{ row }">{{ row.quantity }}</template>
+              </el-table-column>
+              <el-table-column prop="unitCost" label="单位成本" width="120" align="right">
+                <template #default="{ row }">¥{{ row.unitCost.toFixed(2) }}</template>
+              </el-table-column>
+              <el-table-column prop="totalCost" label="出库成本" width="120" align="right">
+                <template #default="{ row }">¥{{ row.totalCost.toLocaleString() }}</template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </div>
+
+        <!-- 底部关闭按钮固定区 -->
+        <div class="settlement-detail-footer">
+          <el-button @click="dialogVisible = false">关闭</el-button>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { Search, RefreshLeft, Check, Back, Download, Printer, Close } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import exportToCsv from '../../utils/exportCsv'
+
+// 查询表单
+const queryForm = reactive({
+  period: '',
+  productSearch: '',
+  warehouse: ''
+})
+
+// 仓库列表
+const warehouses = ref([
+  { id: 1, name: '主仓库' },
+  { id: 2, name: '备用仓库' },
+  { id: 3, name: '临时仓库' }
+])
+
+// 结算数据列表
+const settlementList = ref<any[]>([])
+const allSettlementData = ref<any[]>([])
+
+// 弹窗
+const dialogVisible = ref(false)
+const selectedRow = ref<any>(null)
+const inboundDetails = ref<any[]>([])
+const outboundDetails = ref<any[]>([])
+
+// 打开明细弹窗时禁止页面滚动
+watch(dialogVisible, (v) => {
+  try { document.body.style.overflow = v ? 'hidden' : '' } catch {}
+})
+
+// 统计
+const totalQty = computed(() => {
+  return settlementList.value.reduce((sum, row) => sum + Number(row.closingQty || 0), 0)
+})
+
+const totalCost = computed(() => {
+  return settlementList.value.reduce((sum, row) => sum + Number(row.closingCost || 0), 0)
+})
+
+const totalInputTax = computed(() => {
+  return settlementList.value.reduce((sum, row) => sum + Number(row.inputTax || 0), 0)
+})
+
+// 查询
+const handleSearch = () => {
+  const q = (queryForm.productSearch || '').toLowerCase()
+  if (!q && !queryForm.warehouse) {
+    settlementList.value = allSettlementData.value.slice()
+    return
+  }
+  
+  settlementList.value = allSettlementData.value.filter(item => {
+    const matchProduct = !q || 
+      (item.productCode || '').toLowerCase().includes(q) ||
+      (item.productName || '').toLowerCase().includes(q)
+    const matchWarehouse = !queryForm.warehouse || item.warehouseId === queryForm.warehouse
+    return matchProduct && matchWarehouse
+  })
+}
+
+// 重置
+const handleReset = () => {
+  queryForm.period = ''
+  queryForm.productSearch = ''
+  queryForm.warehouse = ''
+  settlementList.value = []
+  allSettlementData.value = []
+}
+
+// 开始计算
+const handleCalculate = () => {
+  if (!queryForm.period) {
+    ElMessage.warning('请选择会计期间')
+    return
+  }
+  loadSettlementData()
+  ElMessage.success('成本计算完成')
+}
+
+// 反结算
+const handleReverse = () => {
+  if (!queryForm.period) {
+    ElMessage.warning('请选择会计期间')
+    return
+  }
+  
+  ElMessageBox.confirm('确定要反结算吗？这将删除该期间的结算数据', '提示', {
+    confirmButtonText: '确定',
+    cancelButtonText: '取消',
+    type: 'warning'
+  }).then(() => {
+    let settlements = JSON.parse(localStorage.getItem('cost_settlements') || '[]')
+    settlements = settlements.filter((s: any) => s.period !== queryForm.period)
+    localStorage.setItem('cost_settlements', JSON.stringify(settlements))
+    
+    allSettlementData.value = []
+    settlementList.value = []
+    ElMessage.success('反结算成功')
+  }).catch(() => {})
+}
+
+// 导出 Excel
+const handleExport = () => {
+  if (settlementList.value.length === 0) {
+    ElMessage.warning('没有可导出的数据')
+    return
+  }
+  
+  const columns = [
+    { label: '商品编码', key: 'productCode' },
+    { label: '商品名称', key: 'productName' },
+    { label: '规格型号', key: 'specification' },
+    { label: '单位', key: 'unit' },
+    { label: '期初数量', key: 'openingQty' },
+    { label: '期初成本', key: 'openingCost' },
+    { label: '本期入库数量', key: 'inboundQty' },
+    { label: '本期入库成本', key: 'inboundCost' },
+    { label: '可抵扣进项税', key: 'inputTax' },
+    { label: '本期出库数量', key: 'outboundQty' },
+    { label: '本期出库成本', key: 'outboundCost' },
+    { label: '加权平均单价', key: 'avgPrice' },
+    { label: '期末结存数量', key: 'closingQty' },
+    { label: '期末结存成本', key: 'closingCost' }
+  ]
+  
+  const filename = `成本结算_${queryForm.period || '全部'}.csv`
+  exportToCsv(filename, columns, settlementList.value)
+}
+
+// 打印
+const handlePrint = () => {
+  if (settlementList.value.length === 0) {
+    ElMessage.warning('没有可打印的数据')
+    return
+  }
+  window.print()
+}
+
+// 查看明细
+const handleViewDetail = (row: any) => {
+  selectedRow.value = row
+  loadDetailData(row)
+  dialogVisible.value = true
+}
+
+const handleOverlayClick = () => {
+  dialogVisible.value = false
+}
+
+// 加载结算数据
+const loadSettlementData = () => {
+  const period = queryForm.period
+  if (!period) {
+    ElMessage.warning('请选择会计期间')
+    return
+  }
+  
+  // 获取期间范围
+  const periodStart = new Date(period + '-01')
+  const periodEnd = new Date(new Date(periodStart).setMonth(periodStart.getMonth() + 1))
+  
+  // 获取产品列表
+  const products = JSON.parse(localStorage.getItem('products') || '[]')
+  
+  // 获取期初库存
+  const openingStock = JSON.parse(localStorage.getItem('opening_stock') || '[]')
+  
+  // 获取采购入库记录
+  const purchaseInbounds = JSON.parse(localStorage.getItem('purchase_inbounds') || '[]')
+  
+  // 获取销售出库记录
+  const salesOutbounds = JSON.parse(localStorage.getItem('sales_outbounds') || '[]')
+  
+  // 为每个产品计算成本结算
+  const settlements: any[] = []
+  
+  products.forEach((product: any) => {
+    // 获取期初库存
+    const openingRecord = openingStock.find((s: any) => s.productCode === product.code)
+    const openingQty = openingRecord ? Number(openingRecord.quantity || 0) : 0
+    const openingCost = openingRecord ? Number(openingRecord.cost || 0) : 0
+    
+    // 获取期间内的入库记录
+    const inboundRecords = purchaseInbounds
+      .filter((rec: any) => {
+        const recDate = new Date(rec.voucherDate || rec.date)
+        return recDate >= periodStart && recDate < periodEnd
+      })
+      .flatMap((rec: any) => (rec.items || []).filter((item: any) => item.productCode === product.code))
+    
+    // 获取期间内的出库记录
+    const outboundRecords = salesOutbounds
+      .filter((rec: any) => {
+        const recDate = new Date(rec.voucherDate || rec.date)
+        return recDate >= periodStart && recDate < periodEnd
+      })
+      .flatMap((rec: any) => (rec.items || []).filter((item: any) => item.productCode === product.code))
+    
+    // 计算入库数量和成本
+    let inboundQty = 0
+    let inboundCost = 0
+    let inputTax = 0
+    
+    inboundRecords.forEach((item: any) => {
+      const quantity = Number(item.quantity || 0)
+      const unitPrice = Number(item.unitPrice || 0)
+      const totalAmount = quantity * unitPrice
+      const invoiceType = item.invoiceType || 'none' // none, special, general
+      const isAgricultural = item.isAgricultural || false
+      const isDeduction = item.isDeduction || false
+      
+      let taxRate = 0
+      let cost = totalAmount
+      
+      if (invoiceType === 'special') {
+        // 专用发票：9% 税率
+        taxRate = 0.09
+        cost = totalAmount / (1 + taxRate)
+        inputTax = totalAmount - cost
+      } else if (invoiceType === 'general') {
+        // 普通发票：不可抵扣
+        taxRate = 0
+        cost = totalAmount
+        inputTax = 0
+      } else if (isAgricultural) {
+        // 免税农产品：9% 扣除率
+        taxRate = 0.09
+        cost = totalAmount / (1 + taxRate)
+        inputTax = totalAmount - cost
+        if (isDeduction) {
+          // 加计扣除：额外 1%
+          const additionalDeduction = totalAmount / (1 + 0.09) * 0.01
+          inputTax += additionalDeduction
+          cost -= additionalDeduction
+        }
+      }
+      
+      inboundQty += quantity
+      inboundCost += cost
+    })
+    
+    // 计算出库数量和成本（使用月末加权平均法）
+    let outboundQty = 0
+    let outboundCost = 0
+    
+    // 加权平均单价 = (期初成本 + 本期入库成本) / (期初数量 + 本期入库数量)
+    const totalQty = openingQty + inboundQty
+    const totalCost = openingCost + inboundCost
+    const avgPrice = totalQty > 0 ? totalCost / totalQty : 0
+    
+    outboundRecords.forEach((item: any) => {
+      const quantity = Number(item.quantity || 0)
+      outboundQty += quantity
+      outboundCost += quantity * avgPrice
+    })
+    
+    // 期末结存
+    const closingQty = totalQty - outboundQty
+    const closingCost = closingQty * avgPrice
+    
+    settlements.push({
+      productCode: product.code,
+      productName: product.name,
+      specification: product.specification || '',
+      unit: product.unit || '',
+      warehouseId: product.warehouseId || 1,
+      period,
+      openingQty,
+      openingCost,
+      inboundQty,
+      inboundCost,
+      inputTax,
+      outboundQty,
+      outboundCost,
+      avgPrice,
+      closingQty,
+      closingCost
+    })
+  })
+  
+  // 保存到 localStorage
+  const existingSettlements = JSON.parse(localStorage.getItem('cost_settlements') || '[]')
+  const filteredSettlements = existingSettlements.filter((s: any) => s.period !== period)
+  filteredSettlements.push(...settlements)
+  localStorage.setItem('cost_settlements', JSON.stringify(filteredSettlements))
+  
+  allSettlementData.value = settlements
+  settlementList.value = settlements
+}
+
+// 加载明细数据
+const loadDetailData = (row: any) => {
+  inboundDetails.value = []
+  outboundDetails.value = []
+  
+  // 获取期间范围
+  const periodStart = queryForm.period ? new Date(queryForm.period + '-01') : new Date('1970-01-01')
+  const periodEnd = new Date(new Date(periodStart).setMonth(periodStart.getMonth() + 1))
+  
+  // 获取采购入库记录
+  const purchaseInbounds = JSON.parse(localStorage.getItem('purchase_inbounds') || '[]')
+  
+  // 获取销售出库记录
+  const salesOutbounds = JSON.parse(localStorage.getItem('sales_outbounds') || '[]')
+  
+  // 入库明细
+  purchaseInbounds
+    .filter((rec: any) => {
+      const recDate = new Date(rec.voucherDate || rec.date)
+      return recDate >= periodStart && recDate < periodEnd
+    })
+    .forEach((rec: any) => {
+      const items = (rec.items || []).filter((item: any) => item.productCode === row.productCode)
+      items.forEach((item: any) => {
+        const quantity = Number(item.quantity || 0)
+        const unitPrice = Number(item.unitPrice || 0)
+        const totalAmount = quantity * unitPrice
+        const invoiceType = item.invoiceType || 'none'
+        const isAgricultural = item.isAgricultural || false
+        const isDeduction = item.isDeduction || false
+        
+        let taxRate = 0
+        let cost = totalAmount
+        let inputTax = 0
+        
+        if (invoiceType === 'special') {
+          taxRate = 0.09
+          cost = totalAmount / (1 + taxRate)
+          inputTax = totalAmount - cost
+        } else if (invoiceType === 'general') {
+          cost = totalAmount
+          inputTax = 0
+        } else if (isAgricultural) {
+          taxRate = 0.09
+          cost = totalAmount / (1 + taxRate)
+          inputTax = totalAmount - cost
+          if (isDeduction) {
+            const additionalDeduction = totalAmount / (1 + 0.09) * 0.01
+            inputTax += additionalDeduction
+            cost -= additionalDeduction
+          }
+        }
+        
+        inboundDetails.value.push({
+          voucherNo: rec.voucherNo || '',
+          voucherDate: rec.voucherDate || '',
+          quantity,
+          totalAmount,
+          invoiceType: invoiceType === 'special' ? '专用发票' : invoiceType === 'general' ? '普通发票' : '无发票',
+          isDeduction,
+          inputTax,
+          cost
+        })
+      })
+    })
+  
+  // 出库明细
+  salesOutbounds
+    .filter((rec: any) => {
+      const recDate = new Date(rec.voucherDate || rec.date)
+      return recDate >= periodStart && recDate < periodEnd
+    })
+    .forEach((rec: any) => {
+      const items = (rec.items || []).filter((item: any) => item.productCode === row.productCode)
+      items.forEach((item: any) => {
+        const quantity = Number(item.quantity || 0)
+        const unitCost = row.avgPrice
+        const totalCost = quantity * unitCost
+        
+        outboundDetails.value.push({
+          voucherNo: rec.voucherNo || '',
+          voucherDate: rec.voucherDate || '',
+          quantity,
+          unitCost,
+          totalCost
+        })
+      })
+    })
+}
+
+// 表格汇总
+const getSummaries = (param: any) => {
+  const { columns, data } = param
+  const sums: any[] = []
+  
+  columns.forEach((column: any) => {
+    const prop = column.property
+    if (prop === 'productCode') {
+      sums.push('合计')
+      return
+    }
+    if (['productName', 'specification', 'unit'].includes(prop)) {
+      sums.push('-')
+      return
+    }
+    
+    const values = data.map((item: any) => item[prop])
+    if (values.every((v: any) => !isNaN(v))) {
+      const sum = values.reduce((prev: number, curr: number) => {
+        return Number(prev) + Number(curr)
+      }, 0)
+      sums.push(Number(sum.toFixed(2)))
+    } else {
+      sums.push('-')
+    }
+  })
+  
+  return sums
+}
+
+// 加载明细数据
+const loadDetailData = (row: any) => {
+  inboundDetails.value = []
+  outboundDetails.value = []
+  
+  // 获取期间范围
+  const periodStart = queryForm.period ? new Date(queryForm.period + '-01') : new Date('1970-01-01')
+  const periodEnd = queryForm.period 
+    ? new Date(queryForm.period + '-01') 
+    : new Date()
+  if (queryForm.period) {
+    periodEnd.setMonth(periodEnd.getMonth() + 1)
+    periodEnd.setDate(0)
+  }
+  
+  // 加载入库明细
+  const inboundRecords = JSON.parse(localStorage.getItem('purchaseInbounds') || '[]')
+  inboundRecords.forEach((record: any) => {
+    const recordDate = new Date(record.voucherDate)
+    if (recordDate < periodStart || recordDate > periodEnd) return
+    
+    const item = record.items.find((it: any) => it.productCode === row.productCode)
+    if (!item) return
+    
+    const quantity = Number(item.quantity || 0)
+    const totalAmount = Number(item.totalAmount || 0)
+    const invoiceType = record.invoiceType || '普票'
+    const isDeduction = record.invoiceDeduction || false
+    
+    let inputTax = 0
+    let cost = 0
+    
+    if (invoiceType === '专票') {
+      const taxRate = 0.13
+      cost = Number((totalAmount / (1 + taxRate)).toFixed(2))
+      inputTax = Number((totalAmount - cost).toFixed(2))
+    } else if (isDeduction) {
+      inputTax = Number((totalAmount * 0.10).toFixed(2))
+      cost = Number((totalAmount - inputTax).toFixed(2))
+    } else {
+      inputTax = Number((totalAmount * 0.09).toFixed(2))
+      cost = Number((totalAmount - inputTax).toFixed(2))
+    }
+    
+    inboundDetails.value.push({
+      voucherNo: record.voucherNo,
+      voucherDate: record.voucherDate,
+      quantity,
+      totalAmount,
+      invoiceType,
+      isDeduction,
+      inputTax,
+      cost
+    })
+  })
+  
+  // 加载出库明细
+  const outboundRecords = JSON.parse(localStorage.getItem('salesOutbounds') || '[]')
+  outboundRecords.forEach((record: any) => {
+    const recordDate = new Date(record.voucherDate)
+    if (recordDate < periodStart || recordDate > periodEnd) return
+    
+    const item = record.items.find((it: any) => it.productCode === row.productCode)
+    if (!item) return
+    
+    const quantity = Number(item.quantity || 0)
+    const unitCost = row.avgPrice
+    const totalCost = quantity * unitCost
+    
+    outboundDetails.value.push({
+      voucherNo: record.voucherNo,
+      voucherDate: record.voucherDate,
+      quantity,
+      unitCost,
+      totalCost
+    })
+  })
+}
+
+// 初始化
+onMounted(() => {
+  // 默认选择当前月份
+  const now = new Date()
+  queryForm.period = now.toISOString().slice(0, 7) // YYYY-MM
+})
+</script>
+
+<style scoped>
+.cost-settlement-page {
+  padding: 20px;
+}
+
+.toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+  gap: 15px;
+}
+
+.query-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.action-buttons {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.pagination-wrapper {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 20px;
+}
+
+.summary-info {
+  font-size: 14px;
+  color: #606266;
+}
+
+.summary-info span {
+  margin-right: 20px;
+}
+
+.summary-info strong {
+  color: #303133;
+  font-weight: 600;
+}
+
+/* 弹窗样式 - 完全参照实时库存查询 */
+.settlement-detail-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 2000;
+}
+
+.settlement-detail-dialog {
+  background: #fff;
+  border-radius: 4px;
+  width: 90%;
+  max-width: 1200px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+}
+
+.settlement-detail-header {
+  padding: 15px 20px;
+  border-bottom: 1px solid #e4e7ed;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #f5f7fa;
+  border-radius: 4px 4px 0 0;
+  flex-shrink: 0;
+}
+
+.settlement-detail-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.settlement-detail-close {
+  font-size: 20px;
+  cursor: pointer;
+  color: #909399;
+  transition: color 0.3s;
+}
+
+.settlement-detail-close:hover {
+  color: #303133;
+}
+
+.settlement-detail-body {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+}
+
+.settlement-detail-info {
+  margin-bottom: 20px;
+  flex-shrink: 0;
+}
+
+.settlement-detail-table-wrapper {
+  flex: 1;
+  overflow-y: auto;
+  padding-right: 10px;
+}
+
+.settlement-detail-table-wrapper h4 {
+  margin: 15px 0 10px 0;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #e4e7ed;
+  color: #303133;
+  font-weight: 600;
+}
+
+.settlement-detail-footer {
+  padding: 15px 20px;
+  border-top: 1px solid #e4e7ed;
+  text-align: right;
+  background: #f5f7fa;
+  border-radius: 0 0 4px 4px;
+  flex-shrink: 0;
+}
+
+/* 滚动条样式 */
+.settlement-detail-table-wrapper::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.settlement-detail-table-wrapper::-webkit-scrollbar-thumb {
+  background-color: #c0c4cc;
+  border-radius: 4px;
+}
+
+.settlement-detail-table-wrapper::-webkit-scrollbar-track {
+  background-color: #f5f7fa;
+}
+
+/* 打印样式 */
+@media print {
+  .toolbar,
+  .pagination-wrapper,
+  .action-buttons {
+    display: none;
+  }
+  
+  .cost-settlement-page {
+    padding: 0;
+  }
+  
+  el-card {
+    border: none;
+    box-shadow: none;
+  }
+}
+</style>

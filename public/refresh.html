@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>强制刷新 - 入库单测试</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Microsoft YaHei', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 600px;
+            width: 100%;
+            text-align: center;
+        }
+        
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 28px;
+        }
+        
+        .info {
+            background: #f0f7ff;
+            border-left: 4px solid #667eea;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+            text-align: left;
+        }
+        
+        .info h3 {
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+        
+        .info ul {
+            list-style: none;
+            padding: 0;
+        }
+        
+        .info li {
+            padding: 8px 0;
+            color: #555;
+            border-bottom: 1px solid #e1e8ed;
+        }
+        
+        .info li:last-child {
+            border-bottom: none;
+        }
+        
+        .info li::before {
+            content: "✓ ";
+            color: #52c41a;
+            font-weight: bold;
+            margin-right: 8px;
+        }
+        
+        .btn {
+            display: inline-block;
+            padding: 15px 40px;
+            margin: 10px;
+            border: none;
+            border-radius: 50px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+        }
+        
+        .btn-secondary {
+            background: #f0f0f0;
+            color: #333;
+        }
+        
+        .btn-secondary:hover {
+            background: #e0e0e0;
+        }
+        
+        .warning {
+            background: #fff7e6;
+            border-left: 4px solid #fa8c16;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 8px;
+            text-align: left;
+        }
+        
+        .warning h4 {
+            color: #fa8c16;
+            margin-bottom: 8px;
+        }
+        
+        .warning p {
+            color: #666;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+        
+        .status {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+        
+        .status.success {
+            background: #f6ffed;
+            border: 1px solid #b7eb8f;
+            color: #52c41a;
+        }
+        
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 10px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔄 强制刷新入库单页面</h1>
+        
+        <div class="info">
+            <h3>📋 操作步骤</h3>
+            <ul>
+                <li>清除浏览器缓存</li>
+                <li>禁用缓存刷新页面</li>
+                <li>重新加载入库单页面</li>
+                <li>验证新界面显示</li>
+            </ul>
+        </div>
+        
+        <div class="warning">
+            <h4>⚠️ 重要提示</h4>
+            <p>
+                如果您看到的还是旧界面，请尝试：
+                <br>1. 按 <strong>Ctrl + Shift + Delete</strong> 清除浏览器缓存
+                <br>2. 按 <strong>Ctrl + F5</strong> 强制刷新
+                <br>3. 或使用无痕模式打开
+            </p>
+        </div>
+        
+        <div id="status"></div>
+        
+        <div style="margin-top: 30px;">
+            <button class="btn btn-primary" onclick="forceRefresh()">
+                🔄 强制刷新并跳转
+            </button>
+            <a href="http://localhost:5174/" class="btn btn-secondary">
+                📄 直接访问
+            </a>
+        </div>
+    </div>
+    
+    <script>
+        function forceRefresh() {
+            const status = document.getElementById('status');
+            status.innerHTML = '<div class="status"><div class="loading"></div>正在清除缓存...</div>';
+            
+            // 清除 service worker
+            if ('serviceWorker' in navigator) {
+                navigator.serviceWorker.getRegistrations().then(function(registrations) {
+                    for(let registration of registrations) {
+                        registration.unregister();
+                    }
+                });
+            }
+            
+            // 清除缓存
+            if ('caches' in window) {
+                caches.keys().then(function(names) {
+                    for (let name of names) caches.delete(name);
+                });
+            }
+            
+            // 延迟跳转
+            setTimeout(() => {
+                status.innerHTML = '<div class="status success">✓ 缓存已清除，正在跳转...</div>';
+                
+                // 添加时间戳防止缓存
+                const url = 'http://localhost:5174/?t=' + Date.now();
+                window.location.href = url;
+            }, 1500);
+        }
+        
+        // 自动执行
+        window.addEventListener('load', function() {
+            const status = document.getElementById('status');
+            status.innerHTML = '<div class="status success">✓ 页面已加载，点击按钮开始刷新</div>';
+        });
+    </script>
+</body>
+</html>

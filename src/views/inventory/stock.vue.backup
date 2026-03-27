@@ -1,0 +1,660 @@
+<template>
+  <div class="inventory-stock-page">
+    <el-card>
+      <div class="toolbar">
+        <el-input
+          v-model="searchQuery"
+          placeholder="搜索产品编码/名称"
+          style="width: 300px"
+          clearable
+        >
+          <template #append>
+            <el-button @click="handleSearch">
+              <el-icon><Search /></el-icon>
+            </el-button>
+          </template>
+        </el-input>
+        <el-button type="primary" @click="handleExport" style="margin-left: 10px;">
+          <el-icon><Download /></el-icon>
+          导出库存
+        </el-button>
+      </div>
+      <el-table :data="stockList" style="width: 100%" :table-layout="'fixed'">
+        <el-table-column prop="productCode" label="产品编码" width="120" />
+        <el-table-column prop="productName" label="产品名称" width="220" />
+        <el-table-column prop="specification" label="规格" width="160" />
+        <el-table-column prop="category" label="分类" width="120" />
+        <el-table-column prop="warehouseName" label="仓库" width="120" />
+        <el-table-column prop="stockQuantity" label="库存数量" width="100">
+          <template #default="{ row }">
+            <el-tag :type="getStockType(row.stockQuantity, row.warningQuantity)">
+              {{ row.stockQuantity }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="warningQuantity" label="预警数量" width="100" />
+        <el-table-column prop="unit" label="单位" width="80" />
+        <el-table-column prop="costPrice" label="成本价" width="100">
+          <template #default="{ row }">
+            ¥{{ row.costPrice }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="totalValue" label="库存金额" width="120">
+          <template #default="{ row }">
+            ¥{{ (row.stockQuantity * row.costPrice).toLocaleString() }}
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="150" fixed="right">
+          <template #default="{ row }">
+            <el-button type="primary" size="small" @click="handleView(row)">明细</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+    <!-- 库存明细弹窗 -->
+    <div v-if="dialogVisible" class="stock-detail-overlay" @click="handleOverlayClick">
+      <div class="stock-detail-dialog" @click.stop>
+        <!-- ① 头部固定区 -->
+        <div class="stock-detail-header">
+          <span class="stock-detail-title">库存明细</span>
+          <el-icon class="stock-detail-close" @click="dialogVisible = false">
+            <Close />
+          </el-icon>
+        </div>
+
+        <div v-if="selectedRow" class="stock-detail-body">
+          <!-- ② 明细表格滚动区 -->
+          <div class="stock-detail-table-wrapper">
+            <el-table :data="ledgerEntries" style="width: 100%" :show-summary="false">
+              <el-table-column prop="productCode" label="产品编码" width="120" fixed />
+              <el-table-column prop="productName" label="产品名称" width="200" />
+              <el-table-column prop="warehouseName" label="仓库" width="120" />
+              <el-table-column prop="specification" label="规格" width="160" />
+              <el-table-column prop="unit" label="单位" width="80" />
+              <el-table-column prop="date" label="日期" width="120" />
+              <el-table-column prop="docNo" label="单号" width="140" />
+              
+              <!-- 入库数据区域 -->
+              <el-table-column label="入库数据" align="center">
+                <el-table-column prop="inboundQty" label="数量" width="100" class-name="inbound-col">
+                  <template #default="{ row }">
+                    <span v-if="row.inboundQty > 0" style="color: #67c23a">{{ row.inboundQty }}</span>
+                    <span v-else>-</span>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="inboundUnitPrice" label="单价（含税）" width="120" class-name="inbound-col">
+                  <template #default="{ row }">
+                    <span v-if="row.inboundQty > 0">¥{{ (row.inboundUnitPrice || 0).toFixed(2) }}</span>
+                    <span v-else>-</span>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="inboundAmount" label="金额" width="120" class-name="inbound-col">
+                  <template #default="{ row }">
+                    <span v-if="row.inboundQty > 0">¥{{ (row.inboundAmount || 0).toFixed(2) }}</span>
+                    <span v-else>-</span>
+                  </template>
+                </el-table-column>
+              </el-table-column>
+              
+              <!-- 出库数据区域 -->
+              <el-table-column label="出库数据" align="center">
+                <el-table-column prop="outboundQty" label="数量" width="100" class-name="outbound-col">
+                  <template #default="{ row }">
+                    <span v-if="row.outboundQty > 0" style="color: #f56c6c">{{ row.outboundQty }}</span>
+                    <span v-else>-</span>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="outboundUnitPrice" label="单价（含税）" width="120" class-name="outbound-col">
+                  <template #default="{ row }">
+                    <span v-if="row.outboundQty > 0">¥{{ (row.outboundUnitPrice || 0).toFixed(2) }}</span>
+                    <span v-else>-</span>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="outboundAmount" label="金额" width="120" class-name="outbound-col">
+                  <template #default="{ row }">
+                    <span v-if="row.outboundQty > 0">¥{{ (row.outboundAmount || 0).toFixed(2) }}</span>
+                    <span v-else>-</span>
+                  </template>
+                </el-table-column>
+              </el-table-column>
+              
+              <!-- 库存信息区域 -->
+              <el-table-column label="库存结余" align="center">
+                <el-table-column prop="runningQty" label="库存数量" width="120" class-name="stock-col" />
+              </el-table-column>
+              
+              <el-table-column prop="counter" label="往来单位/供应商/客户" min-width="160" />
+              <el-table-column prop="remark" label="备注" min-width="160" />
+            </el-table>
+          </div>
+        </div>
+
+        <!-- 底部关闭按钮固定区 -->
+        <div class="stock-detail-footer">
+          <el-button @click="dialogVisible = false">关闭</el-button>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, onMounted, watch } from 'vue'
+import { Search, Download, Close } from '@element-plus/icons-vue'
+import exportToCsv from '../../utils/exportCsv'
+
+const searchQuery = ref('')
+const stockList = ref<any[]>([])
+const allStock = ref<any[]>([])
+const dialogVisible = ref(false)
+// 打开明细弹窗时禁止页面滚动，避免弹窗随着页面上下移动
+watch(dialogVisible, (v) => {
+  try { document.body.style.overflow = v ? 'hidden' : '' } catch {}
+})
+const selectedRow = ref<any>(null)
+const ledgerEntries = ref<any[]>([])
+
+const handleSearch = () => {
+  const q = (searchQuery.value || '').toLowerCase()
+  if (!q) {
+    stockList.value = allStock.value.slice()
+    return
+  }
+  stockList.value = allStock.value.filter(item => {
+    return (item.productCode || '').toLowerCase().includes(q)
+      || (item.productName || '').toLowerCase().includes(q)
+      || (String(item.specification || '').toLowerCase().includes(q))
+  })
+}
+
+const handleExport = () => {
+  const columns = [
+    { label: '产品编码', key: 'productCode' },
+    { label: '产品名称', key: 'productName' },
+    { label: '规格', key: 'specification' },
+    { label: '分类', key: 'category' },
+    { label: '仓库', key: 'warehouseName' },
+    { label: '库存数量', key: 'stockQuantity' },
+    { label: '单位', key: 'unit' },
+    { label: '成本价', key: 'costPrice' }
+  ]
+  exportToCsv('stock.csv', columns, stockList.value)
+}
+
+const handleView = (row: any) => {
+  selectedRow.value = row
+  // 构建明细账并展示
+  loadLedger(row)
+  dialogVisible.value = true
+}
+
+const handleOverlayClick = () => {
+  dialogVisible.value = false
+}
+
+const loadLedger = (row: any) => {
+  ledgerEntries.value = []
+  if (!row) return
+  const code = String(row.productCode || '').trim()
+  const name = String(row.productName || '').trim()
+
+  // 临时存储所有明细记录
+  const tempEntries: any[] = []
+
+  // 遍历 localStorage 中可能的数组，查找包含 items 的记录
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i)
+    if (!key) continue
+    const raw = localStorage.getItem(key)
+    if (!raw) continue
+    try {
+      const arr = JSON.parse(raw)
+      if (!Array.isArray(arr)) continue
+      for (const rec of arr) {
+        const items = rec.items || rec.products || rec.details || rec.lines || rec.itemsList
+        if (!Array.isArray(items)) continue
+        for (const it of items) {
+          const itCode = String(it.productCode || it.code || it.sku || '').trim()
+          const itName = String(it.productName || it.name || '').trim()
+          const itId = it.productId || it.id || null
+          const match = (itId && row.productId && itId === row.productId) || (itCode && code && itCode === code) || (itName && name && itName === name)
+          if (!match) continue
+
+          // 推断单据类型
+          let typeLabel = key
+          let isInbound = false
+          let isOutbound = false
+          const inboundKeys = ['purchaseInbounds','inbound_records','inbounds','purchase_inbounds']
+          const outboundKeys = ['outbound_records','outbounds','sales_outbounds','salesOutbounds','delivery_records']
+          const returnsKeys = ['purchaseReturns','salesReturns','purchase_returns','sales_returns']
+          
+          if (inboundKeys.includes(key) || key.toLowerCase().includes('inbound')) { 
+            typeLabel = '入库'
+            isInbound = true 
+          }
+          else if (outboundKeys.includes(key) || (key.toLowerCase().includes('outbound') && !key.toLowerCase().includes('return')) || key.toLowerCase().includes('delivery')) { 
+            typeLabel = '出库'
+            isOutbound = true 
+          }
+          else if (returnsKeys.includes(key) || key.toLowerCase().includes('return')) { 
+            typeLabel = '退货'
+            isOutbound = true // 退货也作为出库处理
+          }
+          else if (key.toLowerCase().includes('order')) { 
+            typeLabel = '订单'
+          }
+
+          const qty = Number(it.quantity || it.qty || it.count || it.num || 0)
+          const docNo = rec.voucherNo || rec.orderNo || rec.number || rec.no || ''
+          const date = rec.voucherDate || rec.orderDate || rec.date || rec.createdAt || ''
+          const counter = rec.supplierName || rec.supplier || rec.customerName || rec.customer || ''
+          const remark = rec.remark || rec.note || ''
+          
+          // 获取精确时间戳：优先使用创建时间（包含时分秒），否则使用日期 + 单号模拟
+          const timestamp = rec.createdAt || rec.createdTime || rec.createTime || rec.timestamp || 
+                           (date ? `${date}_${docNo}` : docNo)
+
+          // 直接读取含税单价
+          const unitPriceInc = Number(it.unitPriceInc || it.unitPriceTaxIncluded || it.priceWithTax || it.unitPrice || it.price || 0)
+          const entryAmount = Number((qty * unitPriceInc).toFixed(2))
+
+          // 根据单据类型分别存储入库和出库数据
+          if (isInbound) {
+            tempEntries.push({
+              productCode: itCode,
+              productName: itName,
+              warehouseName: selectedRow.warehouseName || '默认仓库',
+              specification: selectedRow.specification || selectedRow.spec || '-',
+              unit: selectedRow.unit || '-',
+              date,
+              type: typeLabel,
+              docNo,
+              inboundQty: qty,
+              inboundUnitPrice: unitPriceInc,
+              inboundAmount: entryAmount,
+              outboundQty: 0,
+              outboundUnitPrice: 0,
+              outboundAmount: 0,
+              counter,
+              remark,
+              _sortDate: date,
+              _timestamp: timestamp // 用于排序的时间戳
+            })
+          } else if (isOutbound) {
+            tempEntries.push({
+              productCode: itCode,
+              productName: itName,
+              warehouseName: selectedRow.warehouseName || '默认仓库',
+              specification: selectedRow.specification || selectedRow.spec || '-',
+              unit: selectedRow.unit || '-',
+              date,
+              type: typeLabel,
+              docNo,
+              inboundQty: 0,
+              inboundUnitPrice: 0,
+              inboundAmount: 0,
+              outboundQty: qty,
+              outboundUnitPrice: unitPriceInc,
+              outboundAmount: entryAmount,
+              counter,
+              remark,
+              _sortDate: date,
+              _timestamp: timestamp // 用于排序的时间戳
+            })
+          }
+        }
+      }
+    } catch {
+      // ignore parsing errors
+    }
+  }
+  
+  // 按创建时间精确排序（包括时分秒）
+  // 正序排列：先创建的在上，后创建的在下
+  tempEntries.sort((a, b) => {
+    // 获取时间戳（转换为毫秒时间戳）
+    const timeA = a._timestamp ? new Date(a._timestamp).getTime() : 0
+    const timeB = b._timestamp ? new Date(b._timestamp).getTime() : 0
+    
+    // 如果时间戳有效，按时间排序
+    if (timeA > 0 && timeB > 0) {
+      return timeA - timeB
+    }
+    
+    // 如果时间戳无效，按单号排序（兼容旧数据）
+    return String(a.docNo || '').localeCompare(String(b.docNo || ''))
+  })
+
+  // 计算初始库存（尝试从 localStorage 中查找初始库存记录）
+  let openingQty = 0
+  let openingAmount = 0
+  try {
+    const openingKeys = ['stock_initial','initial_stock','opening_stock']
+    for (const k of openingKeys) {
+      const raw = localStorage.getItem(k)
+      if (!raw) continue
+      try {
+        const arr = JSON.parse(raw)
+        if (Array.isArray(arr)) {
+          const found = arr.find((r: any) => String(r.productCode || r.code || r.productCode) === String(row.productCode))
+          if (found) {
+            openingQty = Number(found.quantity || found.qty || 0)
+            openingAmount = Number(found.amount || found.total || 0)
+            break
+          }
+        }
+      } catch { }
+    }
+  } catch { }
+
+  // 逐条计算运行数量与运行金额，并计算成本价
+  let runningQty = openingQty
+  let runningAmount = openingAmount
+  let lastCost = runningQty ? runningAmount / runningQty : 0
+  
+  ledgerEntries.value = tempEntries.map((en: any) => {
+    // 处理入库
+    if (en.inboundQty > 0) {
+      runningQty = Number((runningQty + en.inboundQty).toFixed(4))
+      runningAmount = Number((runningAmount + en.inboundAmount).toFixed(2))
+    }
+    // 处理出库
+    if (en.outboundQty > 0) {
+      // 出库时减少总成本（按当前成本价计算）
+      const outboundCost = lastCost * en.outboundQty
+      runningQty = Number((runningQty - en.outboundQty).toFixed(4))
+      runningAmount = Number((runningAmount - outboundCost).toFixed(2))
+    }
+    
+    // 计算当前成本价（加权平均）
+    const costPrice = runningQty > 0 ? Number((runningAmount / runningQty).toFixed(2)) : lastCost
+    lastCost = costPrice || lastCost
+    
+    return { ...en, runningQty, runningAmount, costPrice }
+  })
+}
+
+const getStockType = (stock: number, warning: number) => {
+  if (stock <= 0) return 'danger'
+  if (stock <= warning) return 'warning'
+  return 'success'
+}
+
+// 从出入库交易记录中计算库存
+const calculateStockFromTransactions = (productList: any[]) => {
+  const stockMap = new Map<string, any>()
+  
+  // 初始化库存映射
+  productList.forEach(p => {
+    const key = `${p.productCode}_${p.warehouseName || '默认仓库'}`
+    stockMap.set(key, {
+      ...p,
+      stockQuantity: 0,
+      costPrice: 0,
+      totalValue: 0,
+      _totalCost: 0, // 总成本
+      _totalQty: 0   // 总数量
+    })
+  })
+  
+  // 遍历 localStorage 中所有可能的出入库记录
+  const inboundKeys = ['purchaseInbounds', 'inbound_records', 'inbounds', 'purchase_inbounds']
+  const outboundKeys = ['outbound_records', 'outbounds', 'sales_outbounds', 'salesOutbounds', 'delivery_records']
+  
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i)
+    if (!key) continue
+    
+    // 只处理出入库相关的键
+    const isInbound = inboundKeys.includes(key) || key.toLowerCase().includes('inbound')
+    const isOutbound = outboundKeys.includes(key) || (key.toLowerCase().includes('outbound') && !key.toLowerCase().includes('return'))
+    
+    if (!isInbound && !isOutbound) continue
+    
+    const raw = localStorage.getItem(key)
+    if (!raw) continue
+    
+    try {
+      const arr = JSON.parse(raw)
+      if (!Array.isArray(arr)) continue
+      
+      for (const rec of arr) {
+        const items = rec.items || rec.products || rec.details || rec.lines || rec.itemsList
+        if (!Array.isArray(items)) continue
+        
+        for (const it of items) {
+          const itCode = String(it.productCode || it.code || it.sku || '').trim()
+          const itName = String(it.productName || it.name || '').trim()
+          const itId = it.productId || it.id || null
+    
+          // 匹配产品
+          for (const [key, stock] of stockMap.entries()) {
+            const match = (itId && stock.productId && itId === stock.productId) || 
+                         (itCode && stock.productCode && itCode === stock.productCode) || 
+                         (itName && stock.productName && itName === stock.productName)
+            
+            if (!match) continue
+            
+            const qty = Number(it.quantity || it.qty || it.count || it.num || 0)
+            const unitPrice = Number(it.unitPrice || it.unitPriceInc || it.price || it.unit_price || 0)
+            const amount = qty * unitPrice
+            
+            if (isInbound) {
+              // 入库：增加库存
+              stock._totalQty += qty
+              stock._totalCost += amount
+              stock.stockQuantity = Number(stock._totalQty)
+              stock.costPrice = stock._totalQty > 0 ? Number((stock._totalCost / stock._totalQty).toFixed(2)) : 0
+              stock.totalValue = Number((stock.stockQuantity * stock.costPrice).toFixed(2))
+            } else if (isOutbound) {
+              // 出库：减少库存
+              stock._totalQty -= qty
+              // 出库时减少总成本（按当前成本价计算）
+              const outboundCost = stock.costPrice * qty
+              stock._totalCost -= outboundCost
+              stock.stockQuantity = Number(stock._totalQty)
+              // 成本价保持不变（加权平均）
+              if (stock._totalQty > 0) {
+                stock.costPrice = Number((stock._totalCost / stock._totalQty).toFixed(2))
+              }
+              stock.totalValue = Number((stock.stockQuantity * stock.costPrice).toFixed(2))
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.error(`解析 ${key} 失败:`, e)
+    }
+  }
+  
+  // 转换为数组并清理内部字段
+  return Array.from(stockMap.values()).map(s => {
+    const { _totalCost, _totalQty, ...rest } = s
+    return rest
+  })
+}
+
+const loadStock = () => {
+  // 尝试读取产品列表
+  const savedProducts = localStorage.getItem('products')
+  const products = savedProducts ? JSON.parse(savedProducts) : [
+    { id: 1, code: 'P001', name: '测试产品 A', unit: '个', costPrice: 10, specification: '规格 A' },
+    { id: 2, code: 'P002', name: '测试产品 B', unit: '个', costPrice: 20, specification: '规格 B' }
+  ]
+
+  // 基于产品生成库存数据并计算
+  const initialStock = products.map((p: any) => ({
+    productCode: p.code,
+    productName: p.name,
+    specification: p.specification || p.spec || p.model || '',
+    category: p.category || '-',
+    warehouseName: '默认仓库',
+    unit: p.unit || '-',
+    warningQuantity: 0,
+    productId: p.id
+  }))
+  
+  allStock.value = calculateStockFromTransactions(initialStock)
+  stockList.value = allStock.value.slice()
+}
+
+onMounted(() => loadStock())
+</script>
+
+<style scoped>
+.inventory-stock-page { 
+  padding: 20px; 
+}
+
+.toolbar { 
+  margin-bottom: 20px; 
+}
+
+/* ==================== 遮罩层 ==================== */
+.stock-detail-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  z-index: 9998;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ==================== 弹窗主体 ==================== */
+.stock-detail-dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 85vw;
+  min-width: 1400px;
+  height: 90vh;
+  min-height: 800px;
+  background: #fff;
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ==================== ① 头部固定区 ==================== */
+.stock-detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  background: #fff;
+  border-bottom: 1px solid #e4e7ed;
+  flex-shrink: 0;
+}
+
+.stock-detail-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.stock-detail-close {
+  font-size: 18px;
+  color: #909399;
+  cursor: pointer;
+  transition: color 0.3s;
+}
+
+.stock-detail-close:hover {
+  color: #606266;
+}
+
+/* ==================== 弹窗主体内容区 ==================== */
+.stock-detail-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* ==================== ② 产品基础信息固定区 ==================== */
+.stock-detail-info {
+  padding: 16px 20px;
+  background: #fff;
+  border-bottom: 1px solid #e4e7ed;
+  flex-shrink: 0;
+}
+
+/* ==================== ③ 明细表格滚动区 ==================== */
+.stock-detail-table-wrapper {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0;
+  background: #fff;
+}
+
+/* 滚动条样式（与 Element Plus 统一） */
+.stock-detail-table-wrapper::-webkit-scrollbar {
+  width: 8px;
+}
+
+.stock-detail-table-wrapper::-webkit-scrollbar-thumb {
+  background: #c0c4cc;
+  border-radius: 4px;
+}
+
+.stock-detail-table-wrapper::-webkit-scrollbar-thumb:hover {
+  background: #a8abb2;
+}
+
+.stock-detail-table-wrapper::-webkit-scrollbar-track {
+  background: #f5f7fa;
+}
+
+/* ==================== 表格列分组背景色 ==================== */
+/* 入库数据区域 - 浅绿色背景 */
+:deep(.inbound-col .el-table__cell) {
+  background-color: #f1f8e9 !important;
+}
+
+:deep(.inbound-col .el-table__header th) {
+  background-color: #dcedc8 !important;
+  color: #388e3c;
+  font-weight: 600;
+}
+
+/* 出库数据区域 - 浅红色背景 */
+:deep(.outbound-col .el-table__cell) {
+  background-color: #ffebee !important;
+}
+
+:deep(.outbound-col .el-table__header th) {
+  background-color: #ffcdd2 !important;
+  color: #c62828;
+  font-weight: 600;
+}
+
+/* 库存结余区域 - 浅蓝色背景 */
+:deep(.stock-col .el-table__cell) {
+  background-color: #e3f2fd !important;
+}
+
+:deep(.stock-col .el-table__header th) {
+  background-color: #bbdefb !important;
+  color: #1565c0;
+  font-weight: 600;
+}
+
+/* ==================== 底部关闭按钮固定区 ==================== */
+.stock-detail-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 12px 20px;
+  background: #fff;
+  border-top: 1px solid #e4e7ed;
+  flex-shrink: 0;
+}
+</style>
