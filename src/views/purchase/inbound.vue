@@ -152,7 +152,21 @@
                   :key="employee.id"
                   :label="employee.name"
                   :value="employee.id"
-                />
+                >
+                  <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                    <span>{{ employee.name }}</span>
+                    <el-switch
+                      :model-value="defaultHandlerId === employee.id"
+                      :active-value="true"
+                      :inactive-value="false"
+                      inline-prompt
+                      active-text="默认"
+                      inactive-text=""
+                      style="--el-switch-width: 60px; --el-switch-inactive-color: #dcdfe6;"
+                      :disabled="dialogType === 'view'"
+                    />
+                  </div>
+                </el-option>
               </el-select>
             </el-form-item>
           </el-col>
@@ -256,7 +270,7 @@
           <el-table-column label="税率 (%)" width="120">
             <template #default="{ row }">
               <el-select v-model="row.taxRate" filterable allow-create placeholder="选择或输入税率" style="width: 100%" @change="onTaxRateChange(row)">
-                <el-option label="免税" :value="'免税'" />
+                <el-option label="免税" :value="'免税'" :disabled="formData.invoiceType === '专票'" />
                 <el-option label="1%" :value="1" />
                 <el-option label="3%" :value="3" />
                 <el-option label="5%" :value="5" />
@@ -271,16 +285,35 @@
               <el-input v-model="row.taxAmount" disabled />
             </template>
           </el-table-column>
-          <el-table-column label="金额" width="120">
+          <el-table-column label="金额（不含税）" width="120">
             <template #default="{ row }">
-              <el-input-number v-model="row.totalAmount" :min="0" :precision="2" :controls="false" style="width: 100%" @change="onAmountChange(row)" />
+              <el-input-number
+                v-model="row.totalAmountEx"
+                :min="0"
+                :precision="2"
+                :controls="false"
+                style="width: 100%"
+                @change="onAmountExChange(row)"
+              />
+            </template>
+          </el-table-column>
+          <el-table-column label="金额（含税）" width="120">
+            <template #default="{ row }">
+              <el-input-number
+                v-model="row.totalAmount"
+                :min="0"
+                :precision="2"
+                :controls="false"
+                style="width: 100%"
+                @change="onAmountInclChange(row)"
+              />
             </template>
           </el-table-column>
           <el-table-column label="加计扣除" width="120">
             <template #default="{ row }">
               <el-switch
                 v-model="row.allowDeduction"
-                :disabled="row.taxRate !== '免税'"
+                :disabled="!canEnableDeduction(row)"
                 active-color="#13ce66"
                 inactive-color="#909399"
                 @change="onDeductionSwitchChange(row)"
@@ -322,7 +355,7 @@
           <el-col :span="12" style="text-align: right">
             <div style="font-size: 14px">
               <span style="margin-right: 10px">发票：
-                <el-switch v-model="formData.invoiceIssued" active-text="已开票" inactive-text="未开票" active-color="#13ce66" inactive-color="#ff4949" />
+                <el-switch v-model="formData.invoiceIssued" @change="handleInvoiceIssuedChange" active-text="已开票" inactive-text="未开票" active-color="#13ce66" inactive-color="#ff4949" />
               </span>
               <span v-if="formData.invoiceIssued" style="margin-left: 10px">
                 发票类型：
@@ -372,16 +405,17 @@ interface InboundItem {
   productId?: number
   productName: string
   specification: string
-  quantity: number
+  quantity?: number
   unit: string
-  unitPrice: number
+  unitPrice?: number
   unitPriceEx?: number
-  taxRate: number | string
-  taxAmount: number
-  totalAmount: number
+  taxRate?: number | string
+  taxAmount?: number
+  totalAmount?: number
+  totalAmountEx?: number
   deductionAmount?: number
   allowDeduction?: boolean
-  _lastEdited?: 'unitEx' | 'unitIncl' | 'amount'
+  _lastEdited?: 'unitEx' | 'unitIncl' | 'amountEx' | 'amountIncl' | 'quantity'
 }
 
 interface InboundRecord {
@@ -440,6 +474,9 @@ const selectedRow = ref<InboundRecord | null>(null)
 const selectedRecords = ref<InboundRecord[]>([])
 const isViewMode = ref(false)
 
+// 默认经办人 ID
+const defaultHandlerId = ref<number | undefined>(undefined)
+
 // 表单数据
 const formData = reactive<InboundRecord>({
   voucherNo: '',
@@ -467,7 +504,7 @@ const rules = {
 
 // 计算合计金额
 const totalAmount = computed(() => {
-  return formData.items.reduce((sum, item) => sum + item.totalAmount, 0)
+  return formData.items.reduce((sum, item) => sum + (item.totalAmount || 0), 0)
 })
 
 // 生成凭证号
@@ -527,7 +564,7 @@ const loadProducts = async () => {
         id: p.id,
         code: p.code,
         name: p.name,
-        specification: p.specification || '',
+        specification: p.specification || p.spec || '',  // 优先使用 spec 字段
         unit: p.unit || '',
         costPrice: p.costPrice || 0
       }))
@@ -565,15 +602,25 @@ const loadSuppliers = async () => {
 }
 
 // 加载员工列表
-const loadEmployees = async () => {
+const loadEmployees = () => {
   try {
-    const savedEmployees = localStorage.getItem('employees')
-    if (savedEmployees) {
-      const allEmployees = JSON.parse(savedEmployees)
-      // 只加载启用的员工
-      employees.value = allEmployees.filter((e: Employee) => (e.status as any) === 1 || (e.status as any) === true)
+    const saved = localStorage.getItem('employees')
+    if (saved) {
+      const allEmployees = JSON.parse(saved)
+      // 只加载在职员工（兼容多种状态字段）
+      employees.value = allEmployees.filter((e: any) => 
+        (e.status as any) === 'active' || 
+        (e.status as any) === 1 || 
+        (e.status as any) === true
+      )
     } else {
       employees.value = []
+    }
+    
+    // 加载默认经办人
+    const savedDefaultHandler = localStorage.getItem('defaultHandlerId')
+    if (savedDefaultHandler) {
+      defaultHandlerId.value = parseInt(savedDefaultHandler)
     }
   } catch (error) {
     console.error('加载员工列表失败:', error)
@@ -606,7 +653,7 @@ const handleAdd = () => {
     voucherDate: dayjs().format('YYYY-MM-DD'),
     supplierId: undefined,
     supplierName: '',
-    handlerId: undefined,
+    handlerId: defaultHandlerId.value, // 使用默认经办人
     handlerName: '',
     operator: localStorage.getItem('currentUser') ? JSON.parse(localStorage.getItem('currentUser')!).name : '系统用户',
     items: [],
@@ -615,6 +662,15 @@ const handleAdd = () => {
     paidAmount: 0,
     invoiceIssued: false
   })
+  
+  // 如果有默认经办人，自动加载经办人名称
+  if (defaultHandlerId.value) {
+    const employee = employees.value.find(e => e.id === defaultHandlerId.value)
+    if (employee) {
+      formData.handlerName = employee.name
+    }
+  }
+  
   dialogVisible.value = true
 }
 
@@ -696,14 +752,15 @@ const addItem = () => {
     productId: undefined,
     productName: '',
     specification: '',
-    quantity: 1,
+    quantity: undefined,
     unit: '',
-    unitPrice: 0,
-    unitPriceEx: 0,
+    unitPrice: undefined,
+    unitPriceEx: undefined,
     taxRate: 13, // 默认税率 13%
-    taxAmount: 0,
-    totalAmount: 0,
-    deductionAmount: 0,
+    taxAmount: undefined,
+    totalAmount: undefined,
+    totalAmountEx: undefined,
+    deductionAmount: undefined,
     allowDeduction: false,
     _lastEdited: 'unitEx'
   })
@@ -721,7 +778,8 @@ const handleProductChange = (index: number, productId: number) => {
   if (product) {
     const item = formData.items[index]
     item.productName = product.name
-    item.specification = product.specification || ''
+    // 优先使用 spec（产品表字段），其次使用 specification，最后使用 code 作为备用
+    item.specification = product.spec || product.specification || product.code || ''
     item.unit = product.unit || ''
     item.unitPriceEx = product.costPrice || 0
     item._lastEdited = 'unitEx'
@@ -741,10 +799,12 @@ const calculateRowTotal = (item: InboundItem) => {
   const last = item._lastEdited
 
   if (last === 'unitEx') {
+    // 从单价（不含税）计算
     const unitEx = Number(item.unitPriceEx || 0)
     let unitIncl: number
     let taxAmount: number
     let totalAmount: number
+    let totalAmountEx: number
     let deductionAmount: number
     
     if (isDeduction) {
@@ -752,75 +812,128 @@ const calculateRowTotal = (item: InboundItem) => {
       // 反推：金额 = 单价（不含税）* 数量 / (1-9%)
       totalAmount = round2(unitEx * qty / 0.91)
       unitIncl = round2(totalAmount / qty) // 单价（含税）= 金额 / 数量
+      totalAmountEx = round2(unitEx * qty)
       taxAmount = round2(qty * (unitIncl - unitEx))
       deductionAmount = round2(totalAmount * 0.09) // 加计扣除 = 金额 × 9%
     } else {
       // 正常模式
       unitIncl = r === 0 ? unitEx : round2(unitEx * (1 + r))
+      totalAmountEx = round2(unitEx * qty)
       taxAmount = round2(qty * (unitIncl - unitEx))
       totalAmount = round2(unitIncl * qty)
       deductionAmount = 0
     }
     item.unitPrice = unitIncl
+    item.totalAmountEx = totalAmountEx
     item.taxAmount = taxAmount
     item.totalAmount = totalAmount
     item.deductionAmount = deductionAmount
   } else if (last === 'unitIncl') {
+    // 从单价（含税）计算
     const unitIncl = Number(item.unitPrice || 0)
     let unitEx: number
     let taxAmount: number
     let totalAmount: number
+    let totalAmountEx: number
     let deductionAmount: number
     
     if (isDeduction) {
       // 加计扣除模式：单价（不含税）= 单价（含税）* (1-9%)
       totalAmount = round2(unitIncl * qty) // 金额 = 单价（含税）* 数量
       unitEx = round2(unitIncl * 0.91) // 单价（不含税）= 单价（含税）* (1-9%)
+      totalAmountEx = round2(unitEx * qty)
       taxAmount = round2(qty * (unitIncl - unitEx))
       deductionAmount = round2(totalAmount * 0.09) // 加计扣除 = 金额 × 9%
     } else {
       // 正常模式
       unitEx = r === 0 ? unitIncl : round2(unitIncl / (1 + r))
+      totalAmountEx = round2(unitEx * qty)
       taxAmount = round2(qty * (unitIncl - unitEx))
       totalAmount = round2(unitIncl * qty)
       deductionAmount = 0
     }
     item.unitPriceEx = unitEx
+    item.totalAmountEx = totalAmountEx
     item.taxAmount = taxAmount
     item.totalAmount = totalAmount
     item.deductionAmount = deductionAmount
-  } else if (last === 'amount') {
-    const total = Number(item.totalAmount || 0)
+  } else if (last === 'amountEx') {
+    // 从金额（不含税）计算
+    const totalEx = Number(item.totalAmountEx || 0)
     if (qty === 0) {
       item.unitPrice = 0
       item.unitPriceEx = 0
       item.taxAmount = 0
+      item.totalAmount = 0
       item.deductionAmount = 0
     } else {
       let unitIncl: number
       let unitEx: number
       let taxAmount: number
+      let totalAmount: number
+      let deductionAmount: number
+      
+      if (isDeduction) {
+        // 加计扣除模式：金额（不含税）= 金额 * (1-9%)
+        // 反推：金额 = 金额（不含税）/ (1-9%)
+        totalAmount = round2(totalEx / 0.91)
+        unitIncl = round2(totalAmount / qty) // 单价（含税）= 金额 / 数量
+        unitEx = round2(totalEx / qty) // 单价（不含税）= 金额（不含税）/ 数量
+        taxAmount = round2(qty * (unitIncl - unitEx))
+        deductionAmount = round2(totalAmount * 0.09) // 加计扣除 = 金额 × 9%
+      } else {
+        // 正常模式
+        unitEx = round2(totalEx / qty)
+        unitIncl = r === 0 ? unitEx : round2(unitEx * (1 + r))
+        taxAmount = round2(qty * (unitIncl - unitEx))
+        totalAmount = round2(unitIncl * qty)
+        deductionAmount = 0
+      }
+      item.unitPrice = unitIncl
+      item.unitPriceEx = unitEx
+      item.taxAmount = taxAmount
+      item.totalAmount = totalAmount
+      item.deductionAmount = deductionAmount
+    }
+  } else if (last === 'amountIncl') {
+    // 从金额（含税）计算
+    const total = Number(item.totalAmount || 0)
+    if (qty === 0) {
+      item.unitPrice = 0
+      item.unitPriceEx = 0
+      item.taxAmount = 0
+      item.totalAmountEx = 0
+      item.deductionAmount = 0
+    } else {
+      let unitIncl: number
+      let unitEx: number
+      let taxAmount: number
+      let totalAmountEx: number
       let deductionAmount: number
       
       if (isDeduction) {
         // 加计扣除模式：单价（不含税）= 金额 * (1-9%) / 数量
         unitIncl = round2(total / qty) // 单价（含税）= 金额 / 数量
         unitEx = round2(total * 0.91 / qty) // 单价（不含税）= 金额 * (1-9%) / 数量
+        totalAmountEx = round2(unitEx * qty)
         taxAmount = round2(qty * (unitIncl - unitEx))
         deductionAmount = round2(total * 0.09) // 加计扣除 = 金额 × 9%
       } else {
         // 正常模式
         unitIncl = round2(total / qty)
         unitEx = r === 0 ? unitIncl : round2(unitIncl / (1 + r))
+        totalAmountEx = round2(unitEx * qty)
         taxAmount = round2(qty * (unitIncl - unitEx))
         deductionAmount = 0
       }
       item.unitPrice = unitIncl
       item.unitPriceEx = unitEx
+      item.totalAmountEx = totalAmountEx
       item.taxAmount = taxAmount
       item.deductionAmount = deductionAmount
     }
-  } else {
+  } else if (last === 'quantity') {
+    // 从数量重新计算（需要已有单价）
     if (item.unitPriceEx || item.unitPriceEx === 0) {
       item._lastEdited = 'unitEx'
       calculateRowTotal(item)
@@ -831,8 +944,35 @@ const calculateRowTotal = (item: InboundItem) => {
       calculateRowTotal(item)
       return
     }
+    if (item.totalAmountEx || item.totalAmountEx === 0) {
+      item._lastEdited = 'amountEx'
+      calculateRowTotal(item)
+      return
+    }
     if (item.totalAmount || item.totalAmount === 0) {
-      item._lastEdited = 'amount'
+      item._lastEdited = 'amountIncl'
+      calculateRowTotal(item)
+      return
+    }
+  } else {
+    // 尝试从已有字段推断
+    if (item.unitPriceEx !== undefined) {
+      item._lastEdited = 'unitEx'
+      calculateRowTotal(item)
+      return
+    }
+    if (item.unitPrice !== undefined) {
+      item._lastEdited = 'unitIncl'
+      calculateRowTotal(item)
+      return
+    }
+    if (item.totalAmountEx !== undefined) {
+      item._lastEdited = 'amountEx'
+      calculateRowTotal(item)
+      return
+    }
+    if (item.totalAmount !== undefined) {
+      item._lastEdited = 'amountIncl'
       calculateRowTotal(item)
       return
     }
@@ -851,43 +991,101 @@ const onUnitPriceInclChange = (item: InboundItem) => {
   calculateRowTotal(item)
 }
 
-const onAmountChange = (item: InboundItem) => {
-  item._lastEdited = 'amount'
+const onAmountExChange = (item: InboundItem) => {
+  item._lastEdited = 'amountEx'
   calculateRowTotal(item)
+}
+
+const onAmountInclChange = (item: InboundItem) => {
+  item._lastEdited = 'amountIncl'
+  calculateRowTotal(item)
+}
+
+const onQuantityChange = (item: InboundItem) => {
+  item._lastEdited = 'quantity'
+  calculateRowTotal(item)
+}
+
+// 判断是否可以启用加计扣除
+const canEnableDeduction = (item: InboundItem) => {
+  return formData.invoiceIssued === true && 
+         formData.invoiceType === '普票' && 
+         item.taxRate === '免税'
 }
 
 // 处理加计扣除开关变化
 const onDeductionSwitchChange = (item: InboundItem) => {
-  // 如果税率不是免税，自动关闭开关
-  if (item.taxRate !== '免税') {
+  // 如果不满足条件，自动关闭开关
+  if (!canEnableDeduction(item)) {
     item.allowDeduction = false
-    ElMessage.warning('只有免税商品才允许加计扣除')
+    if (!formData.invoiceIssued) {
+      ElMessage.warning('请先标记为已开票')
+    } else if (formData.invoiceType !== '普票') {
+      ElMessage.warning('只有普票才允许加计扣除')
+    } else if (item.taxRate !== '免税') {
+      ElMessage.warning('只有免税商品才允许加计扣除')
+    }
   }
   // 重新计算该行
   calculateRowTotal(item)
 }
 
 const onTaxRateChange = (item: InboundItem) => {
-  // 如果税率不是免税，关闭加计扣除开关
-  if (item.taxRate !== '免税' && item.allowDeduction) {
+  // 如果不满足加计扣除条件，关闭开关
+  if (!canEnableDeduction(item) && item.allowDeduction) {
     item.allowDeduction = false
   }
   calculateRowTotal(item)
 }
 
-const onQuantityChange = (item: InboundItem) => {
-  calculateRowTotal(item)
-}
-
 // 处理发票类型变化
 const handleInvoiceTypeChange = () => {
+  // 如果发票类型不是普票，关闭所有行的加计扣除开关
+  if (formData.invoiceType !== '普票') {
+    formData.items.forEach(item => {
+      if (item.allowDeduction) {
+        item.allowDeduction = false
+      }
+    })
+    ElMessage.info('只有普票才允许加计扣除')
+  }
+  
+  // 如果发票类型是专票，不允许选择免税税率
+  if (formData.invoiceType === '专票') {
+    let hasChanged = false
+    formData.items.forEach(item => {
+      if (item.taxRate === '免税') {
+        item.taxRate = 13 // 默认改为 13%
+        hasChanged = true
+      }
+    })
+    if (hasChanged) {
+      ElMessage.warning('专票不允许免税，已自动改为 13% 税率')
+    }
+  }
+  
+  // 重新计算所有行
+  formData.items.forEach(item => calculateRowTotal(item))
+}
+
+// 处理发票状态变化
+const handleInvoiceIssuedChange = (value: boolean) => {
+  // 如果未开票，关闭所有行的加计扣除开关
+  if (!value) {
+    formData.items.forEach(item => {
+      if (item.allowDeduction) {
+        item.allowDeduction = false
+      }
+    })
+    ElMessage.info('请先标记为已开票')
+  }
   // 重新计算所有行
   formData.items.forEach(item => calculateRowTotal(item))
 }
 
 // 计算单据总额
 const calculateTotalAmount = () => {
-  formData.totalAmount = formData.items.reduce((sum, item) => sum + item.totalAmount, 0)
+  formData.totalAmount = formData.items.reduce((sum, item) => sum + (item.totalAmount || 0), 0)
 }
 
 // 处理供应商变化
@@ -904,6 +1102,17 @@ const handleHandlerChange = (handlerId: number) => {
   if (employee) {
     formData.handlerName = employee.name
   }
+  
+  // 保存默认经办人
+  saveDefaultHandler(handlerId)
+}
+
+// 保存默认经办人
+const saveDefaultHandler = (handlerId: number | undefined) => {
+  if (handlerId) {
+    localStorage.setItem('defaultHandlerId', handlerId.toString())
+    defaultHandlerId.value = handlerId
+  }
 }
 
 // 提交表单
@@ -919,8 +1128,22 @@ const handleSubmit = async () => {
     
     // 验证每行商品
     for (let i = 0; i < formData.items.length; i++) {
-      if (!formData.items[i].productId) {
+      const item = formData.items[i]
+      if (!item.productId) {
         ElMessage.warning(`第 ${i + 1} 行请选择商品`)
+        return
+      }
+      if (!item.quantity || item.quantity <= 0) {
+        ElMessage.warning(`第 ${i + 1} 行请输入数量`)
+        return
+      }
+      if (!item.taxRate || (typeof item.taxRate === 'number' && item.taxRate < 0)) {
+        ElMessage.warning(`第 ${i + 1} 行请选择税率`)
+        return
+      }
+      // 验证至少填写一个金额相关字段
+      if (!item.unitPriceEx && !item.unitPrice && !item.totalAmountEx && !item.totalAmount) {
+        ElMessage.warning(`第 ${i + 1} 行请至少填写单价或金额`)
         return
       }
     }
@@ -1067,13 +1290,13 @@ const printInboundForm = (row: InboundRecord) => {
         <td>${index + 1}</td>
         <td>${item.productName}</td>
         <td>${item.specification}</td>
-        <td>${item.quantity}</td>
+        <td>${item.quantity ?? 0}</td>
         <td>${item.unit}</td>
         <td>${(item.unitPriceEx ?? item.unitPrice ?? 0).toFixed(2)}</td>
         <td>${(item.unitPrice ?? 0).toFixed(2)}</td>
         <td>${item.taxRate}%</td>
-        <td>${item.taxAmount.toFixed(2)}</td>
-        <td>${item.totalAmount.toFixed(2)}</td>
+        <td>${(item.taxAmount ?? 0).toFixed(2)}</td>
+        <td>${(item.totalAmount ?? 0).toFixed(2)}</td>
       </tr>
     `).join('')
 

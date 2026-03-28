@@ -65,76 +65,15 @@
         <div v-if="selectedRow" class="stock-detail-body">
           <!-- ② 明细表格滚动区 -->
           <div class="stock-detail-table-wrapper">
-            <el-table 
-              :data="ledgerEntries" 
-              style="width: 100%" 
-              :show-summary="false"
-              element-loading-text="加载中..."
-              border
-            >
-              <el-table-column prop="date" label="日期" width="120" fixed />
-              <el-table-column prop="docNo" label="单号" width="140" fixed />
-              <el-table-column prop="warehouseName" label="仓库" width="120" />
-              <el-table-column prop="productCode" label="产品编码" width="120" />
+            <el-table :data="ledgerEntries" style="width: 100%" :show-summary="false">
+              <el-table-column prop="productCode" label="产品编码" width="120" fixed />
               <el-table-column prop="productName" label="产品名称" width="200" />
+              <el-table-column prop="warehouseName" label="仓库" width="120" />
               <el-table-column prop="specification" label="规格" width="160" />
               <el-table-column prop="unit" label="单位" width="80" />
-              
-              <!-- 入库数据区域 -->
-              <el-table-column label="入库数据" align="center">
-                <el-table-column prop="inboundQty" label="数量" width="100" class-name="inbound-col">
-                  <template #default="{ row }">
-                    <span v-if="row.inboundQty > 0" style="color: #67c23a">{{ row.inboundQty }}</span>
-                    <span v-else-if="row.inboundQty < 0" style="color: #f56c6c">{{ row.inboundQty }}</span>
-                    <span v-else>-</span>
-                  </template>
-                </el-table-column>
-                <el-table-column prop="inboundUnitPrice" label="单价（含税）" width="120" class-name="inbound-col">
-                  <template #default="{ row }">
-                    <span v-if="row.inboundQty > 0">¥{{ (row.inboundUnitPrice || 0).toFixed(2) }}</span>
-                    <span v-else-if="row.inboundQty < 0">¥{{ (row.inboundUnitPrice || 0).toFixed(2) }}</span>
-                    <span v-else>-</span>
-                  </template>
-                </el-table-column>
-                <el-table-column prop="inboundAmount" label="金额" width="120" class-name="inbound-col">
-                  <template #default="{ row }">
-                    <span v-if="row.inboundQty > 0">¥{{ (row.inboundAmount || 0).toFixed(2) }}</span>
-                    <span v-else-if="row.inboundQty < 0">¥{{ (row.inboundAmount || 0).toFixed(2) }}</span>
-                    <span v-else>-</span>
-                  </template>
-                </el-table-column>
-              </el-table-column>
-              
-              <!-- 出库数据区域 -->
-              <el-table-column label="出库数据" align="center">
-                <el-table-column prop="outboundQty" label="数量" width="100" class-name="outbound-col">
-                  <template #default="{ row }">
-                    <span v-if="row.outboundQty > 0" style="color: #f56c6c">{{ row.outboundQty }}</span>
-                    <span v-else-if="row.outboundQty < 0" style="color: #67c23a">{{ row.outboundQty }}</span>
-                    <span v-else>-</span>
-                  </template>
-                </el-table-column>
-                <el-table-column prop="outboundUnitPrice" label="单价（含税）" width="120" class-name="outbound-col">
-                  <template #default="{ row }">
-                    <span v-if="row.outboundQty > 0">¥{{ (row.outboundUnitPrice || 0).toFixed(2) }}</span>
-                    <span v-else-if="row.outboundQty < 0">¥{{ (row.outboundUnitPrice || 0).toFixed(2) }}</span>
-                    <span v-else>-</span>
-                  </template>
-                </el-table-column>
-                <el-table-column prop="outboundAmount" label="金额" width="120" class-name="outbound-col">
-                  <template #default="{ row }">
-                    <span v-if="row.outboundQty > 0">¥{{ (row.outboundAmount || 0).toFixed(2) }}</span>
-                    <span v-else-if="row.outboundQty < 0">¥{{ (row.outboundAmount || 0).toFixed(2) }}</span>
-                    <span v-else>-</span>
-                  </template>
-                </el-table-column>
-              </el-table-column>
-              
-              <!-- 库存信息区域 -->
-              <el-table-column label="库存结余" align="center">
-                <el-table-column prop="runningQty" label="库存数量" width="120" class-name="stock-col" />
-              </el-table-column>
-              
+              <el-table-column prop="date" label="日期" width="120" />
+              <el-table-column prop="docNo" label="单号" width="140" />
+              <el-table-column prop="runningQty" label="库存数量" width="120" />
               <el-table-column prop="counter" label="往来单位/供应商/客户" min-width="160" />
               <el-table-column prop="remark" label="备注" min-width="160" />
             </el-table>
@@ -236,15 +175,11 @@ const loadLedger = (row: any) => {
           let typeLabel = key
           let isInbound = false
           let isOutbound = false
-          let isPurchaseReturn = false  // 采购退货（负数入库）
-          let isSalesReturn = false     // 销售退货（负数出库）
-          
           const inboundKeys = ['purchaseInbounds','inbound_records','inbounds','purchase_inbounds']
           const outboundKeys = ['outbound_records','outbounds','sales_outbounds','salesOutbounds','delivery_records']
-          const purchaseReturnsKeys = ['purchaseReturns','purchase_returns']
-          const salesReturnsKeys = ['salesReturns','sales_returns']
+          const returnsKeys = ['purchaseReturns','salesReturns','purchase_returns','sales_returns']
           
-          if (inboundKeys.includes(key) || (key.toLowerCase().includes('inbound') && !key.toLowerCase().includes('return'))) { 
+          if (inboundKeys.includes(key) || key.toLowerCase().includes('inbound')) { 
             typeLabel = '入库'
             isInbound = true 
           }
@@ -252,13 +187,9 @@ const loadLedger = (row: any) => {
             typeLabel = '出库'
             isOutbound = true 
           }
-          else if (purchaseReturnsKeys.includes(key) || (key.toLowerCase().includes('return') && key.toLowerCase().includes('purchase'))) { 
-            typeLabel = '采购退货'
-            isPurchaseReturn = true // 采购退货 = 负数入库（减少库存）
-          }
-          else if (salesReturnsKeys.includes(key) || (key.toLowerCase().includes('return') && key.toLowerCase().includes('sales'))) { 
-            typeLabel = '销售退货'
-            isSalesReturn = true // 销售退货 = 负数出库（增加库存）
+          else if (returnsKeys.includes(key) || key.toLowerCase().includes('return')) { 
+            typeLabel = '退货'
+            isOutbound = true // 退货也作为出库处理
           }
           else if (key.toLowerCase().includes('order')) { 
             typeLabel = '订单'
@@ -280,7 +211,6 @@ const loadLedger = (row: any) => {
 
           // 根据单据类型分别存储入库和出库数据
           if (isInbound) {
-            // 正常入库：正数
             tempEntries.push({
               productCode: itCode,
               productName: itName,
@@ -299,10 +229,9 @@ const loadLedger = (row: any) => {
               counter,
               remark,
               _sortDate: date,
-              _timestamp: timestamp
+              _timestamp: timestamp // 用于排序的时间戳
             })
           } else if (isOutbound) {
-            // 正常出库：正数
             tempEntries.push({
               productCode: itCode,
               productName: itName,
@@ -321,51 +250,7 @@ const loadLedger = (row: any) => {
               counter,
               remark,
               _sortDate: date,
-              _timestamp: timestamp
-            })
-          } else if (isPurchaseReturn) {
-            // 采购退货：负数入库（减少库存）
-            tempEntries.push({
-              productCode: itCode,
-              productName: itName,
-              warehouseName: selectedRow.warehouseName || '默认仓库',
-              specification: selectedRow.specification || selectedRow.spec || '-',
-              unit: selectedRow.unit || '-',
-              date,
-              type: typeLabel,
-              docNo,
-              inboundQty: -qty,  // 负数
-              inboundUnitPrice: unitPriceInc,
-              inboundAmount: -entryAmount,  // 负数
-              outboundQty: 0,
-              outboundUnitPrice: 0,
-              outboundAmount: 0,
-              counter,
-              remark,
-              _sortDate: date,
-              _timestamp: timestamp
-            })
-          } else if (isSalesReturn) {
-            // 销售退货：负数出库（增加库存）
-            tempEntries.push({
-              productCode: itCode,
-              productName: itName,
-              warehouseName: selectedRow.warehouseName || '默认仓库',
-              specification: selectedRow.specification || selectedRow.spec || '-',
-              unit: selectedRow.unit || '-',
-              date,
-              type: typeLabel,
-              docNo,
-              inboundQty: 0,
-              inboundUnitPrice: 0,
-              inboundAmount: 0,
-              outboundQty: -qty,  // 负数
-              outboundUnitPrice: unitPriceInc,
-              outboundAmount: -entryAmount,  // 负数
-              counter,
-              remark,
-              _sortDate: date,
-              _timestamp: timestamp
+              _timestamp: timestamp // 用于排序的时间戳
             })
           }
         }
@@ -419,15 +304,14 @@ const loadLedger = (row: any) => {
   let lastCost = runningQty ? runningAmount / runningQty : 0
   
   ledgerEntries.value = tempEntries.map((en: any) => {
-    // 处理入库（包括正数入库和负数入库）
-    if (en.inboundQty !== 0) {
+    // 处理入库
+    if (en.inboundQty > 0) {
       runningQty = Number((runningQty + en.inboundQty).toFixed(4))
       runningAmount = Number((runningAmount + en.inboundAmount).toFixed(2))
     }
-    // 处理出库（包括正数出库和负数出库）
-    if (en.outboundQty !== 0) {
+    // 处理出库
+    if (en.outboundQty > 0) {
       // 出库时减少总成本（按当前成本价计算）
-      // 负数出库（销售退货）会增加库存和总成本
       const outboundCost = lastCost * en.outboundQty
       runningQty = Number((runningQty - en.outboundQty).toFixed(4))
       runningAmount = Number((runningAmount - outboundCost).toFixed(2))
@@ -467,30 +351,16 @@ const calculateStockFromTransactions = (productList: any[]) => {
   // 遍历 localStorage 中所有可能的出入库记录
   const inboundKeys = ['purchaseInbounds', 'inbound_records', 'inbounds', 'purchase_inbounds']
   const outboundKeys = ['outbound_records', 'outbounds', 'sales_outbounds', 'salesOutbounds', 'delivery_records']
-  const purchaseReturnsKeys = ['purchaseReturns', 'purchase_returns']
-  const salesReturnsKeys = ['salesReturns', 'sales_returns']
   
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i)
     if (!key) continue
     
-    // 判断单据类型
-    let isInbound = false
-    let isOutbound = false
-    let isPurchaseReturn = false  // 采购退货 = 负数入库
-    let isSalesReturn = false     // 销售退货 = 负数出库
+    // 只处理出入库相关的键
+    const isInbound = inboundKeys.includes(key) || key.toLowerCase().includes('inbound')
+    const isOutbound = outboundKeys.includes(key) || (key.toLowerCase().includes('outbound') && !key.toLowerCase().includes('return'))
     
-    if (inboundKeys.includes(key) || (key.toLowerCase().includes('inbound') && !key.toLowerCase().includes('return'))) {
-      isInbound = true
-    } else if (outboundKeys.includes(key) || (key.toLowerCase().includes('outbound') && !key.toLowerCase().includes('return')) || key.toLowerCase().includes('delivery')) {
-      isOutbound = true
-    } else if (purchaseReturnsKeys.includes(key) || (key.toLowerCase().includes('return') && key.toLowerCase().includes('purchase'))) {
-      isPurchaseReturn = true
-    } else if (salesReturnsKeys.includes(key) || (key.toLowerCase().includes('return') && key.toLowerCase().includes('sales'))) {
-      isSalesReturn = true
-    } else {
-      continue
-    }
+    if (!isInbound && !isOutbound) continue
     
     const raw = localStorage.getItem(key)
     if (!raw) continue
@@ -521,35 +391,23 @@ const calculateStockFromTransactions = (productList: any[]) => {
             const amount = qty * unitPrice
             
             if (isInbound) {
-              // 正常入库：增加库存
+              // 入库：增加库存
               stock._totalQty += qty
               stock._totalCost += amount
               stock.stockQuantity = Number(stock._totalQty)
               stock.costPrice = stock._totalQty > 0 ? Number((stock._totalCost / stock._totalQty).toFixed(2)) : 0
               stock.totalValue = Number((stock.stockQuantity * stock.costPrice).toFixed(2))
             } else if (isOutbound) {
-              // 正常出库：减少库存
+              // 出库：减少库存
               stock._totalQty -= qty
+              // 出库时减少总成本（按当前成本价计算）
               const outboundCost = stock.costPrice * qty
               stock._totalCost -= outboundCost
               stock.stockQuantity = Number(stock._totalQty)
+              // 成本价保持不变（加权平均）
               if (stock._totalQty > 0) {
                 stock.costPrice = Number((stock._totalCost / stock._totalQty).toFixed(2))
               }
-              stock.totalValue = Number((stock.stockQuantity * stock.costPrice).toFixed(2))
-            } else if (isPurchaseReturn) {
-              // 采购退货：负数入库（减少库存）
-              stock._totalQty -= qty
-              stock._totalCost -= amount
-              stock.stockQuantity = Number(stock._totalQty)
-              stock.costPrice = stock._totalQty > 0 ? Number((stock._totalCost / stock._totalQty).toFixed(2)) : 0
-              stock.totalValue = Number((stock.stockQuantity * stock.costPrice).toFixed(2))
-            } else if (isSalesReturn) {
-              // 销售退货：负数出库（增加库存）
-              stock._totalQty += qty
-              stock._totalCost += amount
-              stock.stockQuantity = Number(stock._totalQty)
-              stock.costPrice = stock._totalQty > 0 ? Number((stock._totalCost / stock._totalQty).toFixed(2)) : 0
               stock.totalValue = Number((stock.stockQuantity * stock.costPrice).toFixed(2))
             }
           }
@@ -707,39 +565,7 @@ onMounted(() => loadStock())
   background: #f5f7fa;
 }
 
-/* ==================== 表格列分组背景色 ==================== */
-/* 入库数据区域 - 浅绿色背景 */
-:deep(.el-table .inbound-col) {
-  background-color: #f1f8e9 !important;
-}
 
-:deep(.el-table__header .inbound-col) {
-  background-color: #dcedc8 !important;
-  color: #388e3c !important;
-  font-weight: 600;
-}
-
-/* 出库数据区域 - 浅红色背景 */
-:deep(.el-table .outbound-col) {
-  background-color: #ffebee !important;
-}
-
-:deep(.el-table__header .outbound-col) {
-  background-color: #ffcdd2 !important;
-  color: #c62828 !important;
-  font-weight: 600;
-}
-
-/* 库存结余区域 - 浅蓝色背景 */
-:deep(.el-table .stock-col) {
-  background-color: #e3f2fd !important;
-}
-
-:deep(.el-table__header .stock-col) {
-  background-color: #bbdefb !important;
-  color: #1565c0 !important;
-  font-weight: 600;
-}
 
 /* ==================== 底部关闭按钮固定区 ==================== */
 .stock-detail-footer {

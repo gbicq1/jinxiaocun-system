@@ -542,14 +542,14 @@ const addItem = () => {
     productId: undefined, 
     productName: '', 
     specification: '', 
-    quantity: 1, 
+    quantity: undefined, 
     unit: '', 
-    unitPrice: 0,
-    unitPriceEx: 0,
+    unitPrice: undefined,
+    unitPriceEx: undefined,
     taxRate: 13, 
-    taxAmount: 0, 
-    totalAmount: 0,
-    deductionAmount: 0,
+    taxAmount: undefined, 
+    totalAmount: undefined,
+    deductionAmount: undefined,
     allowDeduction: false,
     _lastEdited: 'unitEx'
   })
@@ -565,7 +565,8 @@ const handleProductChange = (index: number, productId: number) => {
   if (product) {
     const item = formData.items[index]
     item.productName = product.name
-    item.specification = product.specification || ''
+    // 优先使用 spec（产品表字段），其次使用 specification，最后使用 code 作为备用
+    item.specification = product.spec || product.specification || product.code || ''
     item.unit = product.unit || ''
     item.unitPriceEx = product.salePrice || 0
     item._lastEdited = 'unitEx'

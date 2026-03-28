@@ -234,6 +234,7 @@
                 <el-table-column prop="runningQty" label="库存数量" width="120" class-name="stock-col">
                   <template #default="{ row }">
                     <span v-if="row.rowType === 'carryover'" style="font-weight: bold">{{ row.runningQty }}</span>
+                    <span v-else-if="row.runningQty \u003c 0" style="color: #f56c6c; font-weight: bold;">{{ row.runningQty }} ⚠️</span>
                     <span v-else>{{ row.runningQty }}</span>
                   </template>
                 </el-table-column>
@@ -927,6 +928,13 @@ const loadDetailData = (row: any) => {
         const previousCostPrice = runningQty > 0 ? runningCost / runningQty : 0
         entry.outboundUnitPrice = previousCostPrice
         entry.outboundAmount = entry.outboundQty * previousCostPrice
+        
+        // 检查库存是否充足
+        const availableQty = runningQty
+        if (entry.outboundQty > availableQty) {
+          console.warn(`⚠️ 警告：出库数量 (${entry.outboundQty}) 超过可用库存 (${availableQty})，将产生负库存！`)
+          console.warn(`   单据号：${entry.docNo}, 日期：${entry.date}`)
+        }
         
         // 更新库存数量和成本
         runningQty -= entry.outboundQty

@@ -137,8 +137,8 @@
                 @change="handleOriginalVoucherChange"
               >
                 <el-option
-                  v-for="item in inboundList"
-                  :key="item.id"
+                  v-for="(item, index) in inboundList"
+                  :key="item.id || item.voucherNo || index"
                   :label="`${item.voucherNo} - ${item.voucherDate}`"
                   :value="item.voucherNo"
                 >
@@ -155,6 +155,7 @@
                 placeholder="选择供应商"
                 style="width: 100%"
                 filterable
+                @change="handleSupplierChange"
               >
                 <el-option
                   v-for="supplier in suppliers"
@@ -181,7 +182,21 @@
                   :key="u.id"
                   :label="u.name"
                   :value="u.name"
-                />
+                >
+                  <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                    <span>{{ u.name }}</span>
+                    <el-switch
+                      :model-value="defaultOperator === u.name"
+                      :active-value="true"
+                      :inactive-value="false"
+                      inline-prompt
+                      active-text="默认"
+                      inactive-text=""
+                      style="--el-switch-width: 60px; --el-switch-inactive-color: #dcdfe6;"
+                      :disabled="dialogType === 'view'"
+                    />
+                  </div>
+                </el-option>
               </el-select>
             </el-form-item>
           </el-col>
@@ -220,9 +235,9 @@
             <template #default="{ row }">
               <el-select
                 v-model="row.productId"
-                placeholder="选择商品"
-                filterable
+                placeholder="请选择商品"
                 style="width: 100%"
+                filterable
                 @change="handleProductChange(row)"
               >
                 <el-option
@@ -234,60 +249,98 @@
               </el-select>
             </template>
           </el-table-column>
-          <el-table-column prop="productName" label="商品名称" min-width="150" />
-          <el-table-column prop="specification" label="规格" width="120" />
-          <el-table-column prop="unit" label="单位" width="80" />
-          <el-table-column label="退货数量" width="120">
+          <el-table-column label="商品名称" min-width="150">
+            <template #default="{ row }">
+              <el-input v-model="row.productName" disabled />
+            </template>
+          </el-table-column>
+          <el-table-column label="规格" width="120">
+            <template #default="{ row }">
+              <el-input v-model="row.specification" disabled />
+            </template>
+          </el-table-column>
+          <el-table-column label="数量" width="100">
             <template #default="{ row }">
               <el-input-number
                 v-model="row.quantity"
-                :min="1"
+                :min="0"
                 :precision="2"
-                controls-position="right"
+                :controls="false"
                 style="width: 100%"
-                @change="calculateRowTotals(row)"
+                @change="onQuantityChange(row)"
               />
             </template>
           </el-table-column>
-          <el-table-column label="单价 (不含税)" width="120">
+          <el-table-column label="单位" width="80">
+            <template #default="{ row }">
+              <el-input v-model="row.unit" disabled />
+            </template>
+          </el-table-column>
+          <el-table-column label="单价（不含税）" width="120">
+            <template #default="{ row }">
+              <el-input-number
+                v-model="row.unitPriceEx"
+                :min="0"
+                :precision="2"
+                :step="0.01"
+                :controls="false"
+                style="width: 100%"
+                @change="onUnitPriceExChange(row)"
+              />
+            </template>
+          </el-table-column>
+
+          <el-table-column label="单价 (含税)" width="120">
             <template #default="{ row }">
               <el-input-number
                 v-model="row.unitPrice"
+                :min="0"
                 :precision="2"
                 :step="0.01"
-                controls-position="right"
+                :controls="false"
                 style="width: 100%"
-                @change="calculateRowTotals(row)"
+                @change="onUnitPriceInclChange(row)"
               />
             </template>
           </el-table-column>
-          <el-table-column label="税率 (%)" width="100">
+
+          <el-table-column label="税率 (%)" width="120">
             <template #default="{ row }">
-              <el-input-number
-                v-model="row.taxRate"
-                :min="0"
-                :max="100"
-                :precision="2"
-                :step="1"
-                controls-position="right"
-                style="width: 100%"
-                @change="calculateRowTotals(row)"
-              />
+              <el-select v-model="row.taxRate" filterable allow-create placeholder="选择或输入税率" style="width: 100%" @change="onTaxRateChange(row)">
+                <el-option label="免税" :value="'免税'" />
+                <el-option label="1%" :value="1" />
+                <el-option label="3%" :value="3" />
+                <el-option label="5%" :value="5" />
+                <el-option label="6%" :value="6" />
+                <el-option label="9%" :value="9" />
+                <el-option label="13%" :value="13" />
+              </el-select>
             </template>
           </el-table-column>
-          <el-table-column label="退货金额" width="120">
+          <el-table-column label="税额" width="100">
             <template #default="{ row }">
-              -¥{{ Math.abs(row.amount || 0).toFixed(2) }}
+              <el-input v-model="row.taxAmount" disabled />
+            </template>
+          </el-table-column>
+          <el-table-column label="金额" width="120">
+            <template #default="{ row }">
+              <el-input-number v-model="row.totalAmount" :min="0" :precision="2" :controls="false" style="width: 100%" @change="onAmountChange(row)" />
+            </template>
+          </el-table-column>
+          <el-table-column label="加计扣除" width="120">
+            <template #default="{ row }">
+              <el-switch
+                v-model="row.allowDeduction"
+                :disabled="row.taxRate !== '免税'"
+                active-color="#13ce66"
+                inactive-color="#909399"
+                @change="onDeductionSwitchChange(row)"
+              />
             </template>
           </el-table-column>
           <el-table-column label="操作" width="80" fixed="right">
             <template #default="{ $index }">
-              <el-button
-                type="danger"
-                size="small"
-                @click="removeItem($index)"
-                :disabled="isViewMode"
-              >
+              <el-button type="danger" size="small" @click="removeItem($index)">
                 删除
               </el-button>
             </template>
@@ -362,14 +415,18 @@ import dayjs from 'dayjs'
 // 类型定义
 interface ReturnItem {
   productId?: number
-  productName?: string
-  specification?: string
-  unit?: string
+  productName: string
+  specification: string
   quantity: number
+  unit: string
   unitPrice: number
-  taxRate: number
-  amount: number
+  unitPriceEx?: number
+  taxRate: number | string
   taxAmount: number
+  totalAmount: number
+  deductionAmount?: number
+  allowDeduction?: boolean
+  _lastEdited?: 'unitEx' | 'unitIncl' | 'amount'
 }
 
 interface ReturnRecord {
@@ -384,6 +441,7 @@ interface ReturnRecord {
   items: ReturnItem[]
   totalAmount: number
   remark?: string
+  createdAt?: string
 }
 
 interface Product {
@@ -425,6 +483,9 @@ const inboundList = ref<InboundRecord[]>([])
 const products = ref<Product[]>([])
 const suppliers = ref<Supplier[]>([])
 const selectedRows = ref<ReturnRecord[]>([])
+
+// 默认经办人 ID
+const defaultHandlerId = ref<number | undefined>(undefined)
 
 // 表单数据
 const formRef = ref()
@@ -471,14 +532,28 @@ const loadReturnsList = async () => {
 // 加载入库单列表（用于选择原入库单）
 const loadInboundList = async () => {
   try {
-    const savedInbounds = localStorage.getItem('purchaseInbounds')
-    if (savedInbounds) {
-      inboundList.value = JSON.parse(savedInbounds)
+    // 尝试多个可能的键名
+    const possibleKeys = ['inbound_records', 'purchaseInbounds', 'purchase_inbounds']
+    let foundData = null
+    
+    for (const key of possibleKeys) {
+      const savedInbounds = localStorage.getItem(key)
+      if (savedInbounds) {
+        foundData = JSON.parse(savedInbounds)
+        break
+      }
+    }
+    
+    if (foundData) {
+      inboundList.value = foundData
+      console.log('成功加载入库单列表，共', foundData.length, '条记录')
     } else {
       inboundList.value = []
+      console.log('未找到入库单数据')
     }
   } catch (error) {
     console.error('加载入库单列表失败:', error)
+    inboundList.value = []
   }
 }
 
@@ -519,30 +594,30 @@ const users = ref<any[]>([])
 const normalizeUser = (u: any) => ({ id: u.id ?? u.userId ?? u.uid ?? Date.now(), name: u.name || u.realname || u.realName || u.employeeName || u.fullName || u.username || u.userName || '' })
 const loadUsers = async () => {
   try {
-    const candidateKeys = ['system_users', 'employees', 'staff', 'users', 'employee_list']
+    // 优先从 employees 键加载员工数据
+    const employeeKeys = ['employees', 'employee_list', 'staff', 'system_users']
     let found: any[] = []
-    for (const k of candidateKeys) {
+    
+    for (const k of employeeKeys) {
       const raw = localStorage.getItem(k)
       if (raw) {
-        try { found = JSON.parse(raw); break } catch { continue }
-      }
-    }
-    // 如果没有在常用键里找到，尝试遍历 localStorage 寻找数组结构的用户数据
-    if (!found || found.length === 0) {
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i)
-        if (!key) continue
-        if (['system_users','employees','staff','users','employee_list'].includes(key)) continue
-        const raw = localStorage.getItem(key)
         try {
-          const parsed = JSON.parse(raw as string)
-          if (Array.isArray(parsed) && parsed.length > 0 && parsed[0] && (parsed[0].name || parsed[0].realname || parsed[0].employeeName)) {
-            found = parsed
-            break
+          const parsed = JSON.parse(raw)
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            // 检查是否是员工数据（包含员工特有字段）
+            if (parsed[0].employeeName || parsed[0].realname || parsed[0].realName || parsed[0].status || parsed[0].department) {
+              // 过滤在职员工
+              found = parsed.filter((e: any) => 
+                (e.status as any) === 'active' || 
+                (e.status as any) === 1 || 
+                (e.status as any) === true ||
+                (e.status as any) === '在职' ||
+                !e.status  // 如果没有 status 字段，默认在职
+              )
+              break
+            }
           }
-        } catch {
-          // ignore
-        }
+        } catch { continue }
       }
     }
 
@@ -556,6 +631,12 @@ const loadUsers = async () => {
       } catch {
         users.value = []
       }
+    }
+    
+    // 加载默认经办人
+    const savedDefaultHandler = localStorage.getItem('defaultHandlerId')
+    if (savedDefaultHandler) {
+      defaultHandlerId.value = parseInt(savedDefaultHandler)
     }
   } catch (error) {
     console.error('加载系统用户失败:', error)
@@ -575,6 +656,7 @@ const loadCurrentUser = () => {
 // 新增
 const handleAdd = () => {
   resetForm()
+  loadInboundList() // 加载入库单列表
   dialogTitle.value = '新增退货单'
   isViewMode.value = false
   dialogVisible.value = true
@@ -582,8 +664,18 @@ const handleAdd = () => {
 
 // 编辑
 const handleEdit = (row: ReturnRecord) => {
+  loadInboundList() // 加载入库单列表
   Object.assign(formData, row)
   formData.items = JSON.parse(JSON.stringify(row.items))
+  
+  // 确保供应商名称正确显示
+  if (formData.supplierId) {
+    const supplier = suppliers.value.find(s => s.id === formData.supplierId)
+    if (supplier) {
+      formData.supplierName = supplier.name
+    }
+  }
+  
   dialogTitle.value = '编辑退货单'
   isViewMode.value = false
   dialogVisible.value = true
@@ -661,7 +753,7 @@ const handleSubmit = async () => {
     }
 
     // 计算总金额
-    formData.totalAmount = formData.items.reduce((sum, item) => sum + item.amount, 0)
+    calculateTotalAmount()
 
     // 生成凭证号（如果是新增）
     if (!formData.id) {
@@ -717,18 +809,30 @@ const handleOriginalVoucherChange = (voucherNo: string) => {
     formData.supplierId = inbound.supplierId
     formData.supplierName = inbound.supplierName
     
-    // 加载原入库单的商品
+    // 加载原入库单的商品，同步所有字段包括税率和加计扣除
     formData.items = inbound.items.map((item: any) => ({
       productId: item.productId,
       productName: item.productName,
       specification: item.specification,
-      unit: item.unit,
       quantity: 0,
+      unit: item.unit,
       unitPrice: item.unitPrice || 0,
-      taxRate: item.taxRate || 0,
-      amount: 0,
-      taxAmount: 0
+      unitPriceEx: item.unitPriceEx || 0,
+      taxRate: item.taxRate !== undefined ? item.taxRate : '免税',
+      taxAmount: 0,
+      totalAmount: 0,
+      deductionAmount: item.deductionAmount || 0,
+      allowDeduction: item.allowDeduction || false,
+      _lastEdited: 'unitEx'
     }))
+  }
+}
+
+// 供应商选择变化
+const handleSupplierChange = (supplierId: number) => {
+  const supplier = suppliers.value.find(s => s.id === supplierId)
+  if (supplier) {
+    formData.supplierName = supplier.name
   }
 }
 
@@ -737,17 +841,168 @@ const handleProductChange = (row: ReturnItem) => {
   const product = products.value.find(p => p.id === row.productId)
   if (product) {
     row.productName = product.name
-    row.specification = product.specification || ''
+    // 优先使用 spec（产品表字段），其次使用 specification，最后使用 code 作为备用
+    row.specification = product.spec || product.specification || product.code || ''
     row.unit = product.unit || '个'
-    row.unitPrice = product.costPrice || 0
-    calculateRowTotals(row)
+    row.unitPriceEx = product.costPrice || 0
+    row._lastEdited = 'unitEx'
+    calculateRowTotal(row)
   }
 }
 
-// 计算行合计
-const calculateRowTotals = (row: ReturnItem) => {
-  row.amount = row.quantity * row.unitPrice
-  row.taxAmount = row.amount * (row.taxRate / 100)
+// 计算单行总额（支持不含税/含税/金额任填其一）
+const round2 = (v: number) => Math.round(v * 100) / 100
+
+const calculateRowTotal = (item: ReturnItem) => {
+  const qty = item.quantity || 0
+  const taxRaw = item.taxRate === '免税' ? 0 : Number(item.taxRate || 0)
+  const r = taxRaw / 100
+  const isDeduction = item.allowDeduction || false
+
+  const last = item._lastEdited
+
+  if (last === 'unitEx') {
+    const unitEx = Number(item.unitPriceEx || 0)
+    let unitIncl: number
+    let taxAmount: number
+    let totalAmount: number
+    let deductionAmount: number
+    
+    if (isDeduction) {
+      // 加计扣除模式：单价（不含税）= 金额 * (1-9%) / 数量
+      // 反推：金额 = 单价（不含税）* 数量 / (1-9%)
+      totalAmount = round2(unitEx * qty / 0.91)
+      unitIncl = round2(totalAmount / qty) // 单价（含税）= 金额 / 数量
+      taxAmount = round2(qty * (unitIncl - unitEx))
+      deductionAmount = round2(totalAmount * 0.09) // 加计扣除 = 金额 × 9%
+    } else {
+      // 正常模式
+      unitIncl = r === 0 ? unitEx : round2(unitEx * (1 + r))
+      taxAmount = round2(qty * (unitIncl - unitEx))
+      totalAmount = round2(unitIncl * qty)
+      deductionAmount = 0
+    }
+    item.unitPrice = unitIncl
+    item.taxAmount = taxAmount
+    item.totalAmount = totalAmount
+    item.deductionAmount = deductionAmount
+  } else if (last === 'unitIncl') {
+    const unitIncl = Number(item.unitPrice || 0)
+    let unitEx: number
+    let taxAmount: number
+    let totalAmount: number
+    let deductionAmount: number
+    
+    if (isDeduction) {
+      // 加计扣除模式：单价（不含税）= 单价（含税）* (1-9%)
+      totalAmount = round2(unitIncl * qty) // 金额 = 单价（含税）* 数量
+      unitEx = round2(unitIncl * 0.91) // 单价（不含税）= 单价（含税）* (1-9%)
+      taxAmount = round2(qty * (unitIncl - unitEx))
+      deductionAmount = round2(totalAmount * 0.09) // 加计扣除 = 金额 × 9%
+    } else {
+      // 正常模式
+      unitEx = r === 0 ? unitIncl : round2(unitIncl / (1 + r))
+      taxAmount = round2(qty * (unitIncl - unitEx))
+      totalAmount = round2(unitIncl * qty)
+      deductionAmount = 0
+    }
+    item.unitPriceEx = unitEx
+    item.taxAmount = taxAmount
+    item.totalAmount = totalAmount
+    item.deductionAmount = deductionAmount
+  } else if (last === 'amount') {
+    const total = Number(item.totalAmount || 0)
+    if (qty === 0) {
+      item.unitPrice = 0
+      item.unitPriceEx = 0
+      item.taxAmount = 0
+      item.deductionAmount = 0
+    } else {
+      let unitIncl: number
+      let unitEx: number
+      let taxAmount: number
+      let deductionAmount: number
+      
+      if (isDeduction) {
+        // 加计扣除模式：单价（不含税）= 金额 * (1-9%) / 数量
+        unitIncl = round2(total / qty) // 单价（含税）= 金额 / 数量
+        unitEx = round2(total * 0.91 / qty) // 单价（不含税）= 金额 * (1-9%) / 数量
+        taxAmount = round2(qty * (unitIncl - unitEx))
+        deductionAmount = round2(total * 0.09) // 加计扣除 = 金额 × 9%
+      } else {
+        // 正常模式
+        unitIncl = round2(total / qty)
+        unitEx = r === 0 ? unitIncl : round2(unitIncl / (1 + r))
+        taxAmount = round2(qty * (unitIncl - unitEx))
+        deductionAmount = 0
+      }
+      item.unitPrice = unitIncl
+      item.unitPriceEx = unitEx
+      item.taxAmount = taxAmount
+      item.deductionAmount = deductionAmount
+    }
+  } else {
+    if (item.unitPriceEx || item.unitPriceEx === 0) {
+      item._lastEdited = 'unitEx'
+      calculateRowTotal(item)
+      return
+    }
+    if (item.unitPrice || item.unitPrice === 0) {
+      item._lastEdited = 'unitIncl'
+      calculateRowTotal(item)
+      return
+    }
+    if (item.totalAmount || item.totalAmount === 0) {
+      item._lastEdited = 'amount'
+      calculateRowTotal(item)
+      return
+    }
+  }
+
+  calculateTotalAmount()
+}
+
+const onUnitPriceExChange = (item: ReturnItem) => {
+  item._lastEdited = 'unitEx'
+  calculateRowTotal(item)
+}
+
+const onUnitPriceInclChange = (item: ReturnItem) => {
+  item._lastEdited = 'unitIncl'
+  calculateRowTotal(item)
+}
+
+const onAmountChange = (item: ReturnItem) => {
+  item._lastEdited = 'amount'
+  calculateRowTotal(item)
+}
+
+// 处理加计扣除开关变化
+const onDeductionSwitchChange = (item: ReturnItem) => {
+  // 如果税率不是免税，自动关闭开关
+  if (item.taxRate !== '免税') {
+    item.allowDeduction = false
+    ElMessage.warning('只有免税商品才允许加计扣除')
+  }
+  // 重新计算该行
+  calculateRowTotal(item)
+}
+
+const onTaxRateChange = (item: ReturnItem) => {
+  // 如果税率不是免税，关闭加计扣除开关
+  if (item.taxRate !== '免税' && item.allowDeduction) {
+    item.allowDeduction = false
+  }
+  calculateRowTotal(item)
+}
+
+const onQuantityChange = (item: ReturnItem) => {
+  calculateRowTotal(item)
+}
+
+// 计算单据总额
+const calculateTotalAmount = () => {
+  formData.totalAmount = formData.items.reduce((sum, item) => sum + item.totalAmount, 0)
 }
 
 // 添加商品
@@ -756,18 +1011,23 @@ const addItem = () => {
     productId: undefined,
     productName: '',
     specification: '',
+    quantity: undefined,
     unit: '个',
-    quantity: 0,
-    unitPrice: 0,
-    taxRate: 0,
-    amount: 0,
-    taxAmount: 0
+    unitPrice: undefined,
+    unitPriceEx: undefined,
+    taxRate: 13, // 默认税率 13%
+    taxAmount: undefined,
+    totalAmount: undefined,
+    deductionAmount: undefined,
+    allowDeduction: false,
+    _lastEdited: 'unitEx'
   })
 }
 
 // 删除商品
 const removeItem = (index: number) => {
   formData.items.splice(index, 1)
+  calculateTotalAmount()
 }
 
 // 重置表单
@@ -784,6 +1044,12 @@ const resetForm = () => {
     totalAmount: 0,
     remark: ''
   })
+  
+  // 设置默认经办人
+  if (defaultHandlerId.value) {
+    formData.operator = users.value.find(u => u.id === defaultHandlerId.value)?.name || ''
+  }
+  
   formRef.value?.clearValidate()
 }
 
@@ -846,11 +1112,11 @@ const generatePrintContent = (data: ReturnRecord) => {
       <td>${item.specification || '-'}</td>
       <td>${item.quantity}</td>
       <td>${item.unit}</td>
-      <td>${item.unitPrice.toFixed(2)}</td>
-      <td>${(item.unitPrice * (1 + item.taxRate / 100)).toFixed(2)}</td>
+      <td>${(item.unitPriceEx || 0).toFixed(2)}</td>
+      <td>${(item.unitPrice || 0).toFixed(2)}</td>
       <td>${item.taxRate}%</td>
-      <td>${item.taxAmount.toFixed(2)}</td>
-      <td>${item.amount.toFixed(2)}</td>
+      <td>${(item.taxAmount || 0).toFixed(2)}</td>
+      <td>${(item.totalAmount || 0).toFixed(2)}</td>
     </tr>
   `).join('')
 
@@ -889,8 +1155,8 @@ const generatePrintContent = (data: ReturnRecord) => {
               <th>规格</th>
               <th>退货数量</th>
               <th>单位</th>
-              <th>单价</th>
-              <th>含税单价</th>
+              <th>单价 (不含税)</th>
+              <th>单价 (含税)</th>
               <th>税率</th>
               <th>税额</th>
               <th>退货金额</th>

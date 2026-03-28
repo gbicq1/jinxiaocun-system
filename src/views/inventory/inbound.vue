@@ -431,13 +431,25 @@ const loadInboundList = async () => {
 // 加载产品列表
 const loadProducts = async () => {
   try {
-    // 模拟数据
-    productList.value = [
-      { id: 1, code: 'P001', name: '测试产品 A', specification: '规格 A', unit: '个', costPrice: 10.50 },
-      { id: 2, code: 'P002', name: '测试产品 B', specification: '规格 B', unit: '个', costPrice: 20.00 }
-    ]
+    // 从 localStorage 加载真实产品数据
+    const savedProducts = localStorage.getItem('products')
+    if (savedProducts) {
+      const allProducts = JSON.parse(savedProducts)
+      // 只加载启用的产品
+      productList.value = allProducts.filter((p: any) => p.status === 1).map((p: any) => ({
+        id: p.id,
+        code: p.code,
+        name: p.name,
+        specification: p.specification || p.spec || '',  // 优先使用 spec 字段
+        unit: p.unit || '',
+        costPrice: p.costPrice || 0
+      }))
+    } else {
+      productList.value = []
+    }
   } catch (error) {
-    console.error(error)
+    console.error('加载产品列表失败:', error)
+    productList.value = []
   }
 }
 
@@ -531,12 +543,12 @@ const addItem = () => {
     productId: undefined,
     productName: '',
     specification: '',
-    quantity: 1,
+    quantity: undefined,
     unit: '',
-    unitPrice: 0,
+    unitPrice: undefined,
     taxRate: 13, // 默认税率 13%
-    taxAmount: 0,
-    totalAmount: 0
+    taxAmount: undefined,
+    totalAmount: undefined
   })
 }
 
@@ -552,7 +564,8 @@ const handleProductChange = (index: number, productId: number) => {
   if (product) {
     const item = formData.items[index]
     item.productName = product.name
-    item.specification = product.specification || ''
+    // 优先使用 spec（产品表字段），其次使用 specification，最后使用 code 作为备用
+    item.specification = product.spec || product.specification || product.code || ''
     item.unit = product.unit || ''
     item.unitPrice = product.costPrice || 0
     calculateRowTotal(item)

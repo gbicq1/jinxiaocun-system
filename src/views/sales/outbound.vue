@@ -139,7 +139,22 @@
           <el-col :span="12">
             <el-form-item label="经办人" prop="handlerId">
               <el-select v-model="formData.handlerId" placeholder="请选择经办人" style="width: 100%" filterable @change="handleHandlerChange">
-                <el-option v-for="employee in employees" :key="employee.id" :label="employee.name" :value="employee.id" />
+                <el-option v-for="employee in employees" :key="employee.id" :label="employee.name" :value="employee.id">
+                  <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                    <span>{{ employee.name }}</span>
+                    <el-switch
+                      :model-value="defaultHandlerId === employee.id"
+                      :active-value="true"
+                      :inactive-value="false"
+                      inline-prompt
+                      active-text="默认"
+                      inactive-text=""
+                      style="--el-switch-width: 60px; --el-switch-inactive-color: #dcdfe6;"
+                      :disabled="isViewMode"
+                      @change="(val) => setDefaultHandler(employee.id, val)"
+                    />
+                  </div>
+                </el-option>
               </el-select>
             </el-form-item>
           </el-col>
@@ -333,6 +348,9 @@ const dialogTitle = ref('新增出库单')
 const selectedRows = ref<OutboundRecord[]>([])
 const isViewMode = ref(false) // 新增：控制是否为查看模式
 
+// 默认经办人 ID
+const defaultHandlerId = ref<number | undefined>(undefined)
+
 // 查询表单数据
 const queryForm = reactive({
   dateRange: [] as string[],
@@ -480,8 +498,33 @@ const loadCustomers = () => {
 }
 
 const loadEmployees = () => {
-  const saved = localStorage.getItem('employees')
-  employees.value = saved ? JSON.parse(saved) : []
+  try {
+    const saved = localStorage.getItem('employees')
+    if (saved) {
+      const allEmployees = JSON.parse(saved)
+      console.log('加载的员工数据:', allEmployees)
+      // 只加载在职员工（兼容多种状态字段）
+      employees.value = allEmployees.filter((e: any) => 
+        (e.status as any) === 'active' || 
+        (e.status as any) === 1 || 
+        (e.status as any) === true
+      )
+      console.log('过滤后的在职员工:', employees.value)
+    } else {
+      employees.value = []
+      console.log('没有员工数据，使用空数组')
+    }
+    
+    // 加载默认经办人
+    const savedDefaultHandler = localStorage.getItem('defaultHandlerId')
+    if (savedDefaultHandler) {
+      defaultHandlerId.value = parseInt(savedDefaultHandler)
+      console.log('默认经办人 ID:', defaultHandlerId.value)
+    }
+  } catch (error) {
+    console.error('加载员工列表失败:', error)
+    employees.value = []
+  }
 }
 
 const loadCurrentUser = () => {
@@ -503,14 +546,25 @@ const handleAdd = () => {
     voucherDate: dayjs().format('YYYY-MM-DD'),
     customerId: undefined,
     customerName: '',
-    operator: user ? JSON.parse(user).name : '系统用户',    handlerId: undefined,
-    handlerName: '',    items: [],
+    operator: user ? JSON.parse(user).name : '系统用户',
+    handlerId: defaultHandlerId.value, // 使用默认经办人
+    handlerName: '',
+    items: [],
     totalAmount: 0,
     receivedAmount: 0,
     invoiceIssued: false,
     status: 'draft',
     remark: ''
   })
+  
+  // 如果有默认经办人，自动加载经办人名称
+  if (defaultHandlerId.value) {
+    const employee = employees.value.find(e => e.id === defaultHandlerId.value)
+    if (employee) {
+      formData.handlerName = employee.name
+    }
+  }
+  
   selectedRows.value = []
   dialogVisible.value = true
 }
@@ -561,14 +615,14 @@ const addItem = () => {
     productId: undefined, 
     productName: '', 
     specification: '', 
-    quantity: 1, 
+    quantity: undefined, 
     unit: '', 
-    unitPrice: 0, 
-    unitPriceEx: 0, 
+    unitPrice: undefined, 
+    unitPriceEx: undefined, 
     taxRate: 13, 
-    taxAmount: 0, 
-    totalAmount: 0,
-    deductionAmount: 0,
+    taxAmount: undefined, 
+    totalAmount: undefined,
+    deductionAmount: undefined,
     allowDeduction: false,
     _lastEdited: 'unitIncl' 
   })
@@ -584,7 +638,8 @@ const handleProductChange = (index: number, productId: number) => {
   if (product) {
     const item = formData.items[index]
     item.productName = product.name
-    item.specification = product.specification || ''
+    // 优先使用 spec（产品表字段），其次使用 specification，最后使用 code 作为备用
+    item.specification = product.spec || product.specification || product.code || ''
     item.unit = product.unit || ''
     item.unitPriceEx = product.salePrice || 0
     item._lastEdited = 'unitEx'
@@ -756,6 +811,14 @@ const handleHandlerChange = (handlerId: number) => {
   const employee = employees.value.find(e => e.id === handlerId)
   if (employee) {
     formData.handlerName = employee.name
+  }
+}
+
+const setDefaultHandler = (employeeId: number, isActive: boolean) => {
+  if (isActive) {
+    defaultHandlerId.value = employeeId
+    localStorage.setItem('defaultHandlerId', employeeId.toString())
+    ElMessage.success('已设置为默认经办人')
   }
 }
 

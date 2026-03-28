@@ -50,7 +50,11 @@
             -¥{{ Math.abs(row.totalAmount).toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
           </template>
         </el-table-column>
-        <el-table-column prop="operator" label="经办人" width="100" />
+        <el-table-column prop="operator" label="经办人" width="100">
+          <template #default="{ row }">
+            {{ row.handlerName || row.operator }}
+          </template>
+        </el-table-column>
         <el-table-column prop="remark" label="备注" min-width="150" />
         <el-table-column label="操作" width="260" fixed="right">
           <template #default="{ row }">
@@ -174,14 +178,29 @@
             </el-form-item>
           </el-col>
           <el-col :span="12">
-            <el-form-item label="经办人" prop="operator">
-              <el-select v-model="formData.operator" placeholder="选择经办人" filterable>
+            <el-form-item label="经办人" prop="handlerId">
+              <el-select v-model="formData.handlerId" placeholder="选择经办人" filterable @change="handleHandlerChange">
                 <el-option
                   v-for="u in users"
                   :key="u.id"
                   :label="u.name"
-                  :value="u.name"
-                />
+                  :value="u.id"
+                >
+                  <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                    <span>{{ u.name }}</span>
+                    <el-switch
+                      :model-value="defaultHandlerId === u.id"
+                      :active-value="true"
+                      :inactive-value="false"
+                      inline-prompt
+                      active-text="默认"
+                      inactive-text=""
+                      style="--el-switch-width: 60px; --el-switch-inactive-color: #dcdfe6;"
+                      :disabled="isViewMode"
+                      @change="(val: boolean) => setDefaultHandler(u.id, val)"
+                    />
+                  </div>
+                </el-option>
               </el-select>
             </el-form-item>
           </el-col>
@@ -394,6 +413,7 @@ interface ReturnItem {
   taxRate: number
   amount: number
   taxAmount: number
+  totalInc?: number  // 含税金额
 }
 
 interface ReturnRecord {
@@ -403,11 +423,14 @@ interface ReturnRecord {
   originalOrderNo?: string
   customerId?: number
   customerName: string
-  operator: string
+  handlerId?: number
+  handlerName: string
+  operator?: string  // 兼容旧数据
   returnReason?: string
   items: ReturnItem[]
   totalAmount: number
   remark?: string
+  createdAt?: string
 }
 
 interface Product {
@@ -415,6 +438,7 @@ interface Product {
   code: string
   name: string
   specification?: string
+  spec?: string  // 兼容两种字段名
   unit?: string
   costPrice?: number
   status?: number | boolean
@@ -450,6 +474,7 @@ const products = ref<Product[]>([])
 const customers = ref<Customer[]>([])
 const users = ref<any[]>([])
 const selectedRows = ref<ReturnRecord[]>([])
+const defaultHandlerId = ref<number | undefined>(undefined)
 
 // 表单数据
 const formRef = ref()
@@ -459,7 +484,8 @@ const formData = reactive<ReturnRecord>({
   originalOrderNo: '',
   customerId: undefined,
   customerName: '',
-  operator: '',
+  handlerId: undefined,
+  handlerName: '',
   returnReason: '',
   items: [],
   totalAmount: 0,
@@ -469,7 +495,7 @@ const formData = reactive<ReturnRecord>({
 const rules = {
   voucherDate: [{ required: true, message: '请选择退货日期', trigger: 'change' }],
   customerId: [{ required: true, message: '请选择客户', trigger: 'change' }],
-  operator: [{ required: true, message: '请输入经办人', trigger: 'blur' }],
+  handlerId: [{ required: true, message: '请选择经办人', trigger: 'change' }],
   returnReason: [{ required: true, message: '请输入退货原因', trigger: 'blur' }]
 }
 
@@ -544,34 +570,37 @@ const loadCustomers = async () => {
 const normalizeUser = (u: any) => ({ id: u.id ?? u.userId ?? u.uid ?? Date.now(), name: u.name || u.realname || u.realName || u.employeeName || u.fullName || u.username || u.userName || '' })
 const loadUsers = async () => {
   try {
-    const candidateKeys = ['system_users', 'employees', 'staff', 'users', 'employee_list']
+    // 优先从 employees 键加载员工数据
+    const employeeKeys = ['employees', 'employee_list', 'staff', 'system_users']
     let found: any[] = []
-    for (const k of candidateKeys) {
+    
+    for (const k of employeeKeys) {
       const raw = localStorage.getItem(k)
       if (raw) {
-        try { found = JSON.parse(raw); break } catch { continue }
-      }
-    }
-    if (!found || found.length === 0) {
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i)
-        if (!key) continue
-        if (['system_users','employees','staff','users','employee_list'].includes(key)) continue
-        const raw = localStorage.getItem(key)
         try {
-          const parsed = JSON.parse(raw as string)
-          if (Array.isArray(parsed) && parsed.length > 0 && parsed[0] && (parsed[0].name || parsed[0].realname || parsed[0].employeeName)) {
-            found = parsed
-            break
+          const parsed = JSON.parse(raw)
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            // 检查是否是员工数据（包含员工特有字段）
+            if (parsed[0].employeeName || parsed[0].realname || parsed[0].realName || parsed[0].status || parsed[0].department) {
+              // 过滤在职员工
+              found = parsed.filter((e: any) => 
+                (e.status as any) === 'active' || 
+                (e.status as any) === 1 || 
+                (e.status as any) === true ||
+                (e.status as any) === '在职' ||
+                !e.status  // 如果没有 status 字段，默认在职
+              )
+              break
+            }
           }
-        } catch {
-          // ignore
-        }
+        } catch { continue }
       }
     }
 
     users.value = (found || []).map(normalizeUser)
+    console.log('加载的员工数据:', users.value)
 
+    // 回退：使用当前登录用户作为单条选项
     if ((!users.value || users.value.length === 0) && localStorage.getItem('currentUser')) {
       try {
         const cur = JSON.parse(localStorage.getItem('currentUser')!)
@@ -579,6 +608,13 @@ const loadUsers = async () => {
       } catch {
         users.value = []
       }
+    }
+    
+    // 加载默认经办人
+    const savedDefaultHandler = localStorage.getItem('defaultHandlerId')
+    if (savedDefaultHandler) {
+      defaultHandlerId.value = parseInt(savedDefaultHandler)
+      console.log('默认经办人 ID:', defaultHandlerId.value)
     }
   } catch (error) {
     console.error('加载系统用户失败:', error)
@@ -590,12 +626,30 @@ const handleAdd = () => {
   resetForm()
   dialogTitle.value = '新增退货单'
   isViewMode.value = false
+  
+  // 设置默认经办人
+  if (defaultHandlerId.value) {
+    formData.handlerId = defaultHandlerId.value
+    const employee = users.value.find(e => e.id === defaultHandlerId.value)
+    if (employee) {
+      formData.handlerName = employee.name
+    }
+  }
+  
   dialogVisible.value = true
 }
 
 const handleEdit = (row: ReturnRecord) => {
   Object.assign(formData, row)
   formData.items = JSON.parse(JSON.stringify(row.items))
+  // 兼容旧数据：如果只有 operator 字段，转换为 handlerId 和 handlerName
+  if (row.operator && !row.handlerId) {
+    formData.handlerName = row.operator
+    const employee = users.value.find(e => e.name === row.operator)
+    if (employee) {
+      formData.handlerId = employee.id
+    }
+  }
   dialogTitle.value = '编辑退货单'
   isViewMode.value = false
   dialogVisible.value = true
@@ -604,6 +658,14 @@ const handleEdit = (row: ReturnRecord) => {
 const handleView = (row: ReturnRecord) => {
   Object.assign(formData, row)
   formData.items = JSON.parse(JSON.stringify(row.items))
+  // 兼容旧数据：如果只有 operator 字段，转换为 handlerId 和 handlerName
+  if (row.operator && !row.handlerId) {
+    formData.handlerName = row.operator
+    const employee = users.value.find(e => e.name === row.operator)
+    if (employee) {
+      formData.handlerId = employee.id
+    }
+  }
   dialogTitle.value = '查看退货单'
   isViewMode.value = true
   dialogVisible.value = true
@@ -734,11 +796,27 @@ const handleOriginalOrderChange = (orderNo: string) => {
   }
 }
 
+const handleHandlerChange = (handlerId: number) => {
+  const employee = users.value.find(e => e.id === handlerId)
+  if (employee) {
+    formData.handlerName = employee.name
+  }
+}
+
+const setDefaultHandler = (employeeId: number, isActive: boolean) => {
+  if (isActive) {
+    defaultHandlerId.value = employeeId
+    localStorage.setItem('defaultHandlerId', employeeId.toString())
+    ElMessage.success('已设置为默认经办人')
+  }
+}
+
 const handleProductChange = (row: ReturnItem) => {
   const product = products.value.find(p => p.id === row.productId)
   if (product) {
     row.productName = product.name
-    row.specification = product.specification || ''
+    // 优先使用 spec（产品表字段），其次使用 specification，最后使用 code 作为备用
+    row.specification = product.spec || product.specification || product.code || ''
     row.unit = product.unit || '个'
     row.unitPrice = product.costPrice || 0
     // initialize derived fields
@@ -814,7 +892,8 @@ const resetForm = () => {
     originalOrderNo: '',
     customerId: undefined,
     customerName: '',
-    operator: localStorage.getItem('currentUser') ? JSON.parse(localStorage.getItem('currentUser')!).name : '',
+    handlerId: undefined,
+    handlerName: '',
     returnReason: '',
     items: [],
     totalAmount: 0,
@@ -906,7 +985,7 @@ const generatePrintContent = (data: ReturnRecord) => {
           <div>退货日期：${data.voucherDate}</div>
           <div>原订单号：${data.originalOrderNo || '-'}</div>
           <div>客户：${data.customerName}</div>
-          <div>经办人：${data.operator}</div>
+          <div>经办人：${data.handlerName || data.operator}</div>
           <div>退货原因：${data.returnReason || '-'}</div>
           <div>备注：${data.remark || '-'}</div>
         </div>
