@@ -1,0 +1,97 @@
+/* ==================== 全局滚动条样式 - 加宽版 ==================== */
+
+/* 所有滚动条宽度 */
+::-webkit-scrollbar {
+  width: 16px !important;
+  height: 16px !important;
+}
+
+/* 滚动条轨道 */
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 4px;
+}
+
+/* 滚动条滑块 */
+::-webkit-scrollbar-thumb {
+  background: #909399;
+  border-radius: 4px;
+  min-height: 40px;
+  border: 3px solid #f1f1f1;
+}
+
+/* 滚动条滑块悬停 */
+::-webkit-scrollbar-thumb:hover {
+  background: #606266;
+}
+
+/* 滚动条角落 */
+::-webkit-scrollbar-corner {
+  background: #f1f1f1;
+}
+
+/* Element Plus 表格组件滚动条 */
+.el-table__body-wrapper::-webkit-scrollbar {
+  width: 16px !important;
+  height: 16px !important;
+}
+
+.el-table__header-wrapper::-webkit-scrollbar {
+  width: 16px !important;
+  height: 16px !important;
+}
+
+.el-scrollbar::-webkit-scrollbar {
+  width: 16px !important;
+  height: 16px !important;
+}
+
+.el-table--scrollable-x .el-table__body-wrapper::-webkit-scrollbar {
+  height: 16px !important;
+}
+
+.el-table--scrollable-y .el-table__body-wrapper::-webkit-scrollbar {
+  width: 16px !important;
+}
+
+/* 确保滚动条可见 */
+.el-scrollbar__bar {
+  display: block !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+}
+
+.el-scrollbar__bar.is-horizontal {
+  height: 16px !important;
+  bottom: 0;
+}
+
+.el-scrollbar__bar.is-vertical {
+  width: 16px !important;
+  right: 0;
+}
+
+.el-scrollbar__thumb {
+  background: #c0c4cc !important;
+  border-radius: 4px !important;
+}
+
+.el-scrollbar__thumb:hover {
+  background: #a8abb2 !important;
+}
+
+/* 让表格内容区域为滚动条预留空间 */
+.el-table__body-wrapper {
+  padding-right: 8px !important;
+  padding-bottom: 8px !important;
+}
+
+.el-table__header-wrapper {
+  padding-right: 8px !important;
+}
+
+/* 所有滚动容器都预留空间 */
+.el-scrollbar__wrap {
+  margin-right: 8px !important;
+  margin-bottom: 8px !important;
+}

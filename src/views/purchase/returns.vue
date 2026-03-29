@@ -39,6 +39,11 @@
         <el-table-column prop="voucherNo" label="凭证号" width="150" />
         <el-table-column prop="voucherDate" label="日期" width="120" />
         <el-table-column prop="supplierName" label="供应商" min-width="120" />
+        <el-table-column prop="warehouseName" label="仓库" width="120">
+          <template #default="{ row }">
+            {{ row.warehouseName || '-' }}
+          </template>
+        </el-table-column>
         <el-table-column prop="originalVoucherNo" label="原入库单号" width="150" />
         <el-table-column prop="itemCount" label="商品行数" width="80">
           <template #default="{ row }">
@@ -170,10 +175,47 @@
 
         <el-row :gutter="20">
           <el-col :span="12">
+            <el-form-item label="仓库" prop="warehouseId">
+              <el-select
+                v-model="formData.warehouseId"
+                placeholder="请选择仓库"
+                style="width: 100%"
+                filterable
+                @change="handleWarehouseChange"
+              >
+                <el-option
+                  v-for="warehouse in warehouses"
+                  :key="warehouse.id"
+                  :label="warehouse.name"
+                  :value="warehouse.id"
+                >
+                  <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span>{{ warehouse.name }}</span>
+                    <el-switch
+                      v-if="!isViewMode"
+                      :model-value="defaultWarehouseId === warehouse.id"
+                      :active-value="true"
+                      :inactive-value="false"
+                      inline-prompt
+                      active-text="默认"
+                      inactive-text=""
+                      style="--el-switch-width: 60px; --el-switch-inactive-color: #dcdfe6;"
+                      @click.stop
+                      @change="(val: boolean) => saveDefaultWarehouse(warehouse.id)"
+                    />
+                  </div>
+                </el-option>
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
             <el-form-item label="供应商名称">
               <el-input v-model="formData.supplierName" readonly />
             </el-form-item>
           </el-col>
+        </el-row>
+
+        <el-row :gutter="20">
           <el-col :span="12">
             <el-form-item label="经办人" prop="operator">
               <el-select v-model="formData.operator" placeholder="选择经办人" filterable>
@@ -267,6 +309,7 @@
                 :precision="2"
                 :controls="false"
                 style="width: 100%"
+                @focus="handleFocus(row, 'quantity')"
                 @change="onQuantityChange(row)"
               />
             </template>
@@ -285,6 +328,7 @@
                 :step="0.01"
                 :controls="false"
                 style="width: 100%"
+                @focus="handleFocus(row, 'unitPriceEx')"
                 @change="onUnitPriceExChange(row)"
               />
             </template>
@@ -299,6 +343,7 @@
                 :step="0.01"
                 :controls="false"
                 style="width: 100%"
+                @focus="handleFocus(row, 'unitPrice')"
                 @change="onUnitPriceInclChange(row)"
               />
             </template>
@@ -324,7 +369,7 @@
           </el-table-column>
           <el-table-column label="金额" width="120">
             <template #default="{ row }">
-              <el-input-number v-model="row.totalAmount" :min="0" :precision="2" :controls="false" style="width: 100%" @change="onAmountChange(row)" />
+              <el-input-number v-model="row.totalAmount" :min="0" :precision="2" :controls="false" style="width: 100%" @focus="handleFocus(row, 'totalAmount')" @change="onAmountChange(row)" />
             </template>
           </el-table-column>
           <el-table-column label="加计扣除" width="120">
@@ -411,6 +456,7 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Printer, Download, Search } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
+import { getStockBeforeDateTime } from '@/utils/stock'
 
 // 类型定义
 interface ReturnItem {
@@ -436,6 +482,8 @@ interface ReturnRecord {
   originalVoucherNo?: string
   supplierId?: number
   supplierName: string
+  warehouseId?: number
+  warehouseName?: string
   operator: string
   returnReason?: string
   items: ReturnItem[]
@@ -460,6 +508,13 @@ interface Supplier {
   status?: number | boolean
 }
 
+interface Warehouse {
+  id: number
+  code: string
+  name: string
+  status: number
+}
+
 interface InboundRecord {
   id?: number
   voucherNo: string
@@ -482,10 +537,13 @@ const returnsList = ref<ReturnRecord[]>([])
 const inboundList = ref<InboundRecord[]>([])
 const products = ref<Product[]>([])
 const suppliers = ref<Supplier[]>([])
+const warehouses = ref<Warehouse[]>([])
 const selectedRows = ref<ReturnRecord[]>([])
 
 // 默认经办人 ID
 const defaultHandlerId = ref<number | undefined>(undefined)
+// 默认仓库 ID
+const defaultWarehouseId = ref<number | undefined>(undefined)
 
 // 表单数据
 const formRef = ref()
@@ -495,6 +553,8 @@ const formData = reactive<ReturnRecord>({
   originalVoucherNo: '',
   supplierId: undefined,
   supplierName: '',
+  warehouseId: undefined,
+  warehouseName: '',
   operator: '',
   returnReason: '',
   items: [],
@@ -505,6 +565,7 @@ const formData = reactive<ReturnRecord>({
 const rules = {
   voucherDate: [{ required: true, message: '请选择退货日期', trigger: 'change' }],
   supplierId: [{ required: true, message: '请选择供应商', trigger: 'change' }],
+  warehouseId: [{ required: true, message: '请选择仓库', trigger: 'change' }],
   operator: [{ required: true, message: '请输入经办人', trigger: 'blur' }],
   returnReason: [{ required: true, message: '请输入退货原因', trigger: 'blur' }]
 }
@@ -515,6 +576,19 @@ const loadReturnsList = async () => {
     const savedReturns = localStorage.getItem('purchaseReturns')
     if (savedReturns) {
       const allReturns = JSON.parse(savedReturns)
+      
+      // 按日期和时间戳正序排序
+      allReturns.sort((a: any, b: any) => {
+        const dateA = new Date(a.voucherDate || a.date || '1970-01-01').getTime()
+        const dateB = new Date(b.voucherDate || b.date || '1970-01-01').getTime()
+        if (dateA !== dateB) {
+          return dateA - dateB
+        }
+        const timeA = a.createdAt || a._timestamp || a.voucherDate || '1970-01-01'
+        const timeB = b.createdAt || b._timestamp || b.voucherDate || '1970-01-01'
+        return new Date(timeA).getTime() - new Date(timeB).getTime()
+      })
+      
       const start = (currentPage.value - 1) * pageSize.value
       const end = start + pageSize.value
       returnsList.value = allReturns.slice(start, end)
@@ -589,6 +663,22 @@ const loadSuppliers = async () => {
   }
 }
 
+// 加载仓库列表
+const loadWarehouses = async () => {
+  try {
+    const savedWarehouses = localStorage.getItem('warehouses')
+    if (savedWarehouses) {
+      const allWarehouses = JSON.parse(savedWarehouses)
+      warehouses.value = allWarehouses.filter((w: Warehouse) => w.status === 1)
+    } else {
+      warehouses.value = []
+    }
+  } catch (error) {
+    console.error('加载仓库列表失败:', error)
+    warehouses.value = []
+  }
+}
+
 // 加载系统用户（用于经办人下拉），兼容多种存储键与字段
 const users = ref<any[]>([])
 const normalizeUser = (u: any) => ({ id: u.id ?? u.userId ?? u.uid ?? Date.now(), name: u.name || u.realname || u.realName || u.employeeName || u.fullName || u.username || u.userName || '' })
@@ -638,6 +728,12 @@ const loadUsers = async () => {
     if (savedDefaultHandler) {
       defaultHandlerId.value = parseInt(savedDefaultHandler)
     }
+    
+    // 加载默认仓库
+    const savedDefaultWarehouse = localStorage.getItem('defaultWarehouseId')
+    if (savedDefaultWarehouse) {
+      defaultWarehouseId.value = parseInt(savedDefaultWarehouse)
+    }
   } catch (error) {
     console.error('加载系统用户失败:', error)
     users.value = []
@@ -659,6 +755,21 @@ const handleAdd = () => {
   loadInboundList() // 加载入库单列表
   dialogTitle.value = '新增退货单'
   isViewMode.value = false
+  
+  // 设置默认经办人
+  if (defaultHandlerId.value) {
+    formData.operator = users.value.find(u => u.id === defaultHandlerId.value)?.name || ''
+  }
+  
+  // 设置默认仓库
+  if (defaultWarehouseId.value) {
+    formData.warehouseId = defaultWarehouseId.value
+    const warehouse = warehouses.value.find(w => w.id === defaultWarehouseId.value)
+    if (warehouse) {
+      formData.warehouseName = warehouse.name
+    }
+  }
+  
   dialogVisible.value = true
 }
 
@@ -714,6 +825,50 @@ const handleDelete = async (row: ReturnRecord) => {
   }
 }
 
+// 检查库存是否足够
+const checkStockAvailability = (): boolean => {
+  const warehouseId = formData.warehouseId
+  const voucherDate = formData.voucherDate
+  const createdAt = formData.createdAt
+  
+  if (!warehouseId) {
+    ElMessage.warning('请先选择仓库')
+    return false
+  }
+  if (!voucherDate) {
+    ElMessage.warning('请先选择退货日期')
+    return false
+  }
+  
+  for (let i = 0; i < formData.items.length; i++) {
+    const item = formData.items[i]
+    if (!item.productId || !item.quantity) continue
+    
+    // 获取该日期和时间之前的库存（不包括该日期和时间的单据）
+    const stockBeforeDateTime = getStockBeforeDateTime(
+      item.productId, 
+      warehouseId, 
+      voucherDate, 
+      createdAt,
+      formData.id
+    )
+    
+    if (stockBeforeDateTime < item.quantity) {
+      const productName = item.productName || `第 ${i + 1} 行商品`
+      ElMessage.error(
+        `库存不足：${productName}\n` +
+        `退货日期：${voucherDate}\n` +
+        `该时间前库存：${stockBeforeDateTime}\n` +
+        `需要退货：${item.quantity}\n\n` +
+        `请修改退货日期或退货数量！`
+      )
+      return false
+    }
+  }
+  
+  return true
+}
+
 // 更新库存（退货时增加库存）
 const updateInventoryOnReturn = (returnRecord: ReturnRecord, isAdding: boolean) => {
   try {
@@ -749,6 +904,11 @@ const handleSubmit = async () => {
     // 必须添加至少一行商品
     if (!formData.items || formData.items.length === 0) {
       ElMessage.error('请至少添加一条退货商品')
+      return
+    }
+    
+    // 检查库存是否足够
+    if (!checkStockAvailability()) {
       return
     }
 
@@ -836,6 +996,23 @@ const handleSupplierChange = (supplierId: number) => {
   }
 }
 
+// 仓库选择变化
+const handleWarehouseChange = (warehouseId: number) => {
+  const warehouse = warehouses.value.find(w => w.id === warehouseId)
+  if (warehouse) {
+    formData.warehouseName = warehouse.name
+  }
+}
+
+// 保存默认仓库
+const saveDefaultWarehouse = (warehouseId: number | undefined) => {
+  if (warehouseId) {
+    localStorage.setItem('defaultWarehouseId', warehouseId.toString())
+    defaultWarehouseId.value = warehouseId
+    ElMessage.success('已设置为默认仓库')
+  }
+}
+
 // 商品选择变化
 const handleProductChange = (row: ReturnItem) => {
   const product = products.value.find(p => p.id === row.productId)
@@ -844,9 +1021,13 @@ const handleProductChange = (row: ReturnItem) => {
     // 优先使用 spec（产品表字段），其次使用 specification，最后使用 code 作为备用
     row.specification = product.spec || product.specification || product.code || ''
     row.unit = product.unit || '个'
-    row.unitPriceEx = product.costPrice || 0
+    // 如果产品有成本价则使用，否则保持为空
+    row.unitPriceEx = product.costPrice && product.costPrice > 0 ? product.costPrice : ('' as any)
     row._lastEdited = 'unitEx'
-    calculateRowTotal(row)
+    // 只有当有价格时才计算总额
+    if (row.unitPriceEx && row.unitPriceEx !== '') {
+      calculateRowTotal(row)
+    }
   }
 }
 
@@ -1030,6 +1211,14 @@ const removeItem = (index: number) => {
   calculateTotalAmount()
 }
 
+// 处理输入框聚焦事件，清空 0 值让用户直接输入
+const handleFocus = (row: any, field: string) => {
+  const value = row[field]
+  if (value === 0 || value === '0') {
+    row[field] = ''
+  }
+}
+
 // 重置表单
 const resetForm = () => {
   Object.assign(formData, {
@@ -1038,6 +1227,8 @@ const resetForm = () => {
     originalVoucherNo: '',
     supplierId: undefined,
     supplierName: '',
+    warehouseId: undefined,
+    warehouseName: '',
     operator: localStorage.getItem('currentUser') ? JSON.parse(localStorage.getItem('currentUser')!).name : '',
     returnReason: '',
     items: [],
@@ -1179,6 +1370,7 @@ onMounted(() => {
   loadInboundList()
   loadProducts()
   loadSuppliers()
+  loadWarehouses()
   loadCurrentUser()
   loadUsers()
 })

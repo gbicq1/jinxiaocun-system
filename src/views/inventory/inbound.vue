@@ -40,6 +40,11 @@
         <el-table-column prop="voucherNo" label="凭证号" width="150" />
         <el-table-column prop="voucherDate" label="日期" width="120" />
         <el-table-column prop="supplierName" label="供应商" min-width="120" />
+        <el-table-column prop="warehouseName" label="仓库" width="120">
+          <template #default="{ row }">
+            {{ row.warehouseName || '-' }}
+          </template>
+        </el-table-column>
         <el-table-column prop="itemCount" label="商品行数" width="80">
           <template #default="{ row }">
             {{ row.items?.length || 0 }}
@@ -141,6 +146,27 @@
             </el-form-item>
           </el-col>
           <el-col :span="12">
+            <el-form-item label="仓库" prop="warehouseId">
+              <el-select
+                v-model="formData.warehouseId"
+                placeholder="请选择仓库"
+                style="width: 100%"
+                filterable
+                @change="handleWarehouseChange"
+              >
+                <el-option
+                  v-for="warehouse in warehouses"
+                  :key="warehouse.id"
+                  :label="warehouse.name"
+                  :value="warehouse.id"
+                />
+              </el-select>
+            </el-form-item>
+          </el-col>
+        </el-row>
+
+        <el-row :gutter="20">
+          <el-col :span="12">
             <el-form-item label="经办人" prop="operator">
               <el-input v-model="formData.operator" placeholder="自动获取当前用户" disabled />
             </el-form-item>
@@ -197,6 +223,7 @@
                 :precision="2"
                 :controls="false"
                 style="width: 100%"
+                @focus="handleFocus(row, 'quantity')"
                 @change="calculateRowTotal(row)"
               />
             </template>
@@ -215,22 +242,29 @@
                 :step="0.01"
                 :controls="false"
                 style="width: 100%"
+                @focus="handleFocus(row, 'unitPrice')"
                 @change="calculateRowTotal(row)"
               />
             </template>
           </el-table-column>
           <el-table-column label="税率 (%)" width="80">
             <template #default="{ row }">
-              <el-input-number
+              <el-select
                 v-model="row.taxRate"
-                :min="0"
-                :max="100"
-                :precision="2"
-                :step="0.01"
-                :controls="false"
+                filterable
+                allow-create
+                placeholder="选择或输入税率"
                 style="width: 100%"
                 @change="calculateRowTotal(row)"
-              />
+              >
+                <el-option label="免税" :value="0" />
+                <el-option label="1%" :value="1" />
+                <el-option label="3%" :value="3" />
+                <el-option label="5%" :value="5" />
+                <el-option label="6%" :value="6" />
+                <el-option label="9%" :value="9" />
+                <el-option label="13%" :value="13" />
+              </el-select>
             </template>
           </el-table-column>
           <el-table-column label="税额" width="100">
@@ -325,6 +359,8 @@ interface InboundRecord {
   voucherDate: string
   supplierId?: number
   supplierName: string
+  warehouseId?: number
+  warehouseName?: string
   operator: string
   items: InboundItem[]
   totalAmount: number
@@ -345,10 +381,18 @@ interface Supplier {
   name: string
 }
 
+interface Warehouse {
+  id: number
+  code: string
+  name: string
+  status: number
+}
+
 // 响应式数据
 const inboundList = ref<InboundRecord[]>([])
 const productList = ref<Product[]>([])
 const suppliers = ref<Supplier[]>([])
+const warehouses = ref<Warehouse[]>([])
 const total = ref(0)
 const currentPage = ref(1)
 const pageSize = ref(10)
@@ -364,6 +408,8 @@ const formData = reactive<InboundRecord>({
   voucherDate: dayjs().format('YYYY-MM-DD'),
   supplierId: undefined,
   supplierName: '',
+  warehouseId: undefined,
+  warehouseName: '',
   operator: '',
   items: [],
   totalAmount: 0,
@@ -400,7 +446,18 @@ const loadInboundList = async () => {
       inboundList.value = result
     } else {
       // 前端环境 - 使用 localStorage
-      const savedData = localStorage.getItem('inbound_records')
+      // 尝试多个可能的键名
+      const possibleKeys = ['purchase_inbound_records', 'inbound_records', 'purchaseInbounds']
+      let savedData = null
+      
+      for (const key of possibleKeys) {
+        savedData = localStorage.getItem(key)
+        if (savedData) {
+          console.log(`从 ${key} 加载入库单数据`)
+          break
+        }
+      }
+      
       const allRecords = savedData ? JSON.parse(savedData) : []
       
       // 搜索过滤
@@ -466,6 +523,22 @@ const loadSuppliers = async () => {
   }
 }
 
+// 加载仓库列表
+const loadWarehouses = async () => {
+  try {
+    const savedWarehouses = localStorage.getItem('warehouses')
+    if (savedWarehouses) {
+      const allWarehouses = JSON.parse(savedWarehouses)
+      warehouses.value = allWarehouses.filter((w: Warehouse) => w.status === 1)
+    } else {
+      warehouses.value = []
+    }
+  } catch (error) {
+    console.error('加载仓库列表失败:', error)
+    warehouses.value = []
+  }
+}
+
 // 加载当前用户信息
 const loadCurrentUser = async () => {
   try {
@@ -491,6 +564,8 @@ const handleAdd = () => {
     voucherDate: dayjs().format('YYYY-MM-DD'),
     supplierId: undefined,
     supplierName: '',
+    warehouseId: undefined,
+    warehouseName: '',
     operator: localStorage.getItem('currentUser') ? JSON.parse(localStorage.getItem('currentUser')!).name : '系统用户',
     items: [],
     totalAmount: 0,
@@ -524,10 +599,23 @@ const handleDelete = async (row: InboundRecord) => {
       await window.electron.dbDelete('inbound', 'id = ?', [row.id])
     } else {
       // 前端环境 - 使用 localStorage
-      const savedData = localStorage.getItem('inbound_records')
-      const allRecords: InboundRecord[] = savedData ? JSON.parse(savedData) : []
-      const filtered = allRecords.filter((r: InboundRecord) => r.id !== row.id)
-      localStorage.setItem('inbound_records', JSON.stringify(filtered))
+      const possibleKeys = ['purchase_inbound_records', 'inbound_records', 'purchaseInbounds']
+      let savedData = null
+      let usedKey = ''
+      
+      for (const key of possibleKeys) {
+        savedData = localStorage.getItem(key)
+        if (savedData) {
+          usedKey = key
+          break
+        }
+      }
+      
+      if (savedData) {
+        const allRecords: InboundRecord[] = JSON.parse(savedData)
+        const filtered = allRecords.filter((r: InboundRecord) => r.id !== row.id)
+        localStorage.setItem(usedKey, JSON.stringify(filtered))
+      }
     }
     
     ElMessage.success('删除成功')
@@ -556,6 +644,14 @@ const addItem = () => {
 const removeItem = (index: number) => {
   formData.items.splice(index, 1)
   calculateTotalAmount()
+}
+
+// 处理输入框聚焦事件，清空 0 值让用户直接输入
+const handleFocus = (row: any, field: string) => {
+  const value = row[field]
+  if (value === 0 || value === '0') {
+    row[field] = ''
+  }
 }
 
 // 处理商品选择变化
@@ -594,6 +690,14 @@ const handleSupplierChange = (supplierId: number) => {
   }
 }
 
+// 处理仓库变化
+const handleWarehouseChange = (warehouseId: number) => {
+  const warehouse = warehouses.value.find(w => w.id === warehouseId)
+  if (warehouse) {
+    formData.warehouseName = warehouse.name
+  }
+}
+
 // 提交表单
 const handleSubmit = async () => {
   try {
@@ -622,12 +726,25 @@ const handleSubmit = async () => {
         await window.electron.dbUpdate('inbound', formData, 'id = ?', [formData.id])
       } else {
         // 前端环境 - 使用 localStorage
-        const savedData = localStorage.getItem('inbound_records')
-        const allRecords: InboundRecord[] = savedData ? JSON.parse(savedData) : []
-        const index = allRecords.findIndex((r: InboundRecord) => r.id === formData.id)
-        if (index !== -1) {
-          allRecords[index] = { ...formData }
-          localStorage.setItem('inbound_records', JSON.stringify(allRecords))
+        const possibleKeys = ['purchase_inbound_records', 'inbound_records', 'purchaseInbounds']
+        let savedData = null
+        let usedKey = ''
+        
+        for (const key of possibleKeys) {
+          savedData = localStorage.getItem(key)
+          if (savedData) {
+            usedKey = key
+            break
+          }
+        }
+        
+        if (savedData) {
+          const allRecords: InboundRecord[] = JSON.parse(savedData)
+          const index = allRecords.findIndex((r: InboundRecord) => r.id === formData.id)
+          if (index !== -1) {
+            allRecords[index] = { ...formData }
+            localStorage.setItem(usedKey, JSON.stringify(allRecords))
+          }
         }
       }
       ElMessage.success('更新成功')
@@ -638,10 +755,11 @@ const handleSubmit = async () => {
         await window.electron.dbInsert('inbound', formData)
       } else {
         // 前端环境 - 使用 localStorage
-        const savedData = localStorage.getItem('inbound_records')
+        const key = 'purchase_inbound_records'
+        const savedData = localStorage.getItem(key)
         const allRecords = savedData ? JSON.parse(savedData) : []
         allRecords.push({ ...formData })
-        localStorage.setItem('inbound_records', JSON.stringify(allRecords))
+        localStorage.setItem(key, JSON.stringify(allRecords))
       }
       ElMessage.success('新增成功')
     }
@@ -879,6 +997,7 @@ onMounted(() => {
   loadInboundList()
   loadProducts()
   loadSuppliers()
+  loadWarehouses()
   loadCurrentUser()
 })
 </script>

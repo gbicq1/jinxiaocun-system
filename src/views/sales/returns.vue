@@ -39,6 +39,11 @@
         <el-table-column prop="voucherNo" label="凭证号" width="150" />
         <el-table-column prop="voucherDate" label="日期" width="120" />
         <el-table-column prop="customerName" label="客户" min-width="120" />
+        <el-table-column prop="warehouseName" label="仓库" width="120">
+          <template #default="{ row }">
+            {{ row.warehouseName || '-' }}
+          </template>
+        </el-table-column>
         <el-table-column prop="originalOrderNo" label="原订单号" width="150" />
         <el-table-column prop="itemCount" label="商品行数" width="80">
           <template #default="{ row }">
@@ -143,11 +148,11 @@
                 <el-option
                   v-for="item in orderList"
                   :key="item.id"
-                  :label="`${item.orderNo} - ${item.orderDate}`"
-                  :value="item.orderNo"
+                  :label="`${item.voucherNo} - ${item.voucherDate}`"
+                  :value="item.voucherNo"
                 >
-                  <span>{{ item.orderNo }}</span>
-                  <span style="color: #8492a6; font-size: 13px">({{ item.orderDate }})</span>
+                  <span>{{ item.voucherNo }}</span>
+                  <span style="color: #8492a6; font-size: 13px">({{ item.voucherDate }})</span>
                 </el-option>
               </el-select>
             </el-form-item>
@@ -173,10 +178,47 @@
 
         <el-row :gutter="20">
           <el-col :span="12">
+            <el-form-item label="仓库" prop="warehouseId">
+              <el-select
+                v-model="formData.warehouseId"
+                placeholder="请选择仓库"
+                style="width: 100%"
+                filterable
+                @change="handleWarehouseChange"
+              >
+                <el-option
+                  v-for="warehouse in warehouses"
+                  :key="warehouse.id"
+                  :label="warehouse.name"
+                  :value="warehouse.id"
+                >
+                  <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span>{{ warehouse.name }}</span>
+                    <el-switch
+                      v-if="!isViewMode"
+                      :model-value="defaultWarehouseId === warehouse.id"
+                      :active-value="true"
+                      :inactive-value="false"
+                      inline-prompt
+                      active-text="默认"
+                      inactive-text=""
+                      style="--el-switch-width: 60px; --el-switch-inactive-color: #dcdfe6;"
+                      @click.stop
+                      @change="(val: boolean) => saveDefaultWarehouse(warehouse.id)"
+                    />
+                  </div>
+                </el-option>
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
             <el-form-item label="客户名称">
               <el-input v-model="formData.customerName" readonly />
             </el-form-item>
           </el-col>
+        </el-row>
+
+        <el-row :gutter="20">
           <el-col :span="12">
             <el-form-item label="经办人" prop="handlerId">
               <el-select v-model="formData.handlerId" placeholder="选择经办人" filterable @change="handleHandlerChange">
@@ -264,6 +306,7 @@
                 :precision="2"
                 controls-position="right"
                 style="width: 100%"
+                @focus="handleFocus(row, 'quantity')"
                 @change="calculateRowTotals(row)"
               />
             </template>
@@ -276,27 +319,42 @@
                 :step="0.01"
                 controls-position="right"
                 style="width: 100%"
+                @focus="handleFocus(row, 'unitPrice')"
                 @change="updateRowBy(row, 'unitPrice')"
               />
             </template>
           </el-table-column>
           <el-table-column label="单价 (含税)" width="120">
             <template #default="{ row }">
-              ¥{{ ((row.unitPrice || 0) * (1 + (row.taxRate || 0) / 100)).toFixed(2) }}
+              <el-input-number
+                v-model="row.unitPriceIncl"
+                :precision="2"
+                :step="0.01"
+                controls-position="right"
+                style="width: 100%"
+                @focus="handleFocus(row, 'unitPriceIncl')"
+                @change="updateRowBy(row, 'unitPriceIncl')"
+              />
             </template>
           </el-table-column>
           <el-table-column label="税率 (%)" width="100">
             <template #default="{ row }">
-              <el-input-number
+              <el-select
                 v-model="row.taxRate"
-                :min="0"
-                :max="100"
-                :precision="2"
-                :step="1"
-                controls-position="right"
+                filterable
+                allow-create
+                placeholder="选择或输入税率"
                 style="width: 100%"
-                @change="updateRowBy(row, 'taxRate')"
-              />
+                @change="calculateRowTotals(row)"
+              >
+                <el-option label="免税" :value="0" />
+                <el-option label="1%" :value="1" />
+                <el-option label="3%" :value="3" />
+                <el-option label="5%" :value="5" />
+                <el-option label="6%" :value="6" />
+                <el-option label="9%" :value="9" />
+                <el-option label="13%" :value="13" />
+              </el-select>
             </template>
           </el-table-column>
           <el-table-column label="税额" width="120">
@@ -307,6 +365,7 @@
                 :step="0.01"
                 controls-position="right"
                 style="width: 100%"
+                @focus="handleFocus(row, 'taxAmount')"
                 @change="updateRowBy(row, 'taxAmount')"
               />
             </template>
@@ -319,6 +378,7 @@
                 :step="0.01"
                 controls-position="right"
                 style="width: 100%"
+                @focus="handleFocus(row, 'totalInc')"
                 @change="updateRowBy(row, 'totalInc')"
               />
             </template>
@@ -409,7 +469,8 @@ interface ReturnItem {
   specification?: string
   unit?: string
   quantity: number
-  unitPrice: number
+  unitPrice: number  // 不含税单价
+  unitPriceIncl?: number  // 含税单价
   taxRate: number
   amount: number
   taxAmount: number
@@ -423,9 +484,11 @@ interface ReturnRecord {
   originalOrderNo?: string
   customerId?: number
   customerName: string
+  warehouseId?: number
+  warehouseName?: string
   handlerId?: number
   handlerName: string
-  operator?: string  // 兼容旧数据
+  operator?: string
   returnReason?: string
   items: ReturnItem[]
   totalAmount: number
@@ -450,12 +513,21 @@ interface Customer {
   status?: number | boolean
 }
 
+interface Warehouse {
+  id: number
+  code: string
+  name: string
+  status: number
+}
+
 interface OrderRecord {
   id?: number
-  orderNo: string
-  orderDate: string
+  voucherNo: string
+  voucherDate: string
   customerId?: number
   customerName: string
+  warehouseId?: number
+  warehouseName?: string
   items: any[]
 }
 
@@ -472,9 +544,11 @@ const returnsList = ref<ReturnRecord[]>([])
 const orderList = ref<OrderRecord[]>([])
 const products = ref<Product[]>([])
 const customers = ref<Customer[]>([])
+const warehouses = ref<Warehouse[]>([])
 const users = ref<any[]>([])
 const selectedRows = ref<ReturnRecord[]>([])
 const defaultHandlerId = ref<number | undefined>(undefined)
+const defaultWarehouseId = ref<number | undefined>(undefined)
 
 // 表单数据
 const formRef = ref()
@@ -484,6 +558,8 @@ const formData = reactive<ReturnRecord>({
   originalOrderNo: '',
   customerId: undefined,
   customerName: '',
+  warehouseId: undefined,
+  warehouseName: '',
   handlerId: undefined,
   handlerName: '',
   returnReason: '',
@@ -495,6 +571,7 @@ const formData = reactive<ReturnRecord>({
 const rules = {
   voucherDate: [{ required: true, message: '请选择退货日期', trigger: 'change' }],
   customerId: [{ required: true, message: '请选择客户', trigger: 'change' }],
+  warehouseId: [{ required: true, message: '请选择仓库', trigger: 'change' }],
   handlerId: [{ required: true, message: '请选择经办人', trigger: 'change' }],
   returnReason: [{ required: true, message: '请输入退货原因', trigger: 'blur' }]
 }
@@ -505,6 +582,19 @@ const loadReturnsList = async () => {
     const saved = localStorage.getItem('salesReturns')
     if (saved) {
       const all = JSON.parse(saved)
+      
+      // 按日期和时间戳正序排序
+      all.sort((a: any, b: any) => {
+        const dateA = new Date(a.voucherDate || a.date || '1970-01-01').getTime()
+        const dateB = new Date(b.voucherDate || b.date || '1970-01-01').getTime()
+        if (dateA !== dateB) {
+          return dateA - dateB
+        }
+        const timeA = a.createdAt || a._timestamp || a.voucherDate || '1970-01-01'
+        const timeB = b.createdAt || b._timestamp || b.voucherDate || '1970-01-01'
+        return new Date(timeA).getTime() - new Date(timeB).getTime()
+      })
+      
       const start = (currentPage.value - 1) * pageSize.value
       const end = start + pageSize.value
       returnsList.value = all.slice(start, end)
@@ -522,8 +612,20 @@ const loadReturnsList = async () => {
 // 加载订单列表（用于选择原订单）
 const loadOrderList = async () => {
   try {
-    const saved = localStorage.getItem('sales_orders')
-    orderList.value = saved ? JSON.parse(saved) : []
+    // 尝试多个可能的键名
+    const possibleKeys = ['sales_outbound_records', 'sales_orders', 'sales_outbounds']
+    let foundData = null
+    
+    for (const key of possibleKeys) {
+      const saved = localStorage.getItem(key)
+      if (saved) {
+        foundData = JSON.parse(saved)
+        console.log(`从 ${key} 加载出库单列表，共 ${foundData.length} 条记录`)
+        break
+      }
+    }
+    
+    orderList.value = foundData || []
   } catch (error) {
     console.error('加载订单列表失败:', error)
     orderList.value = []
@@ -563,6 +665,22 @@ const loadCustomers = async () => {
   } catch (error) {
     console.error('加载客户列表失败:', error)
     customers.value = []
+  }
+}
+
+// 加载仓库列表
+const loadWarehouses = async () => {
+  try {
+    const savedWarehouses = localStorage.getItem('warehouses')
+    if (savedWarehouses) {
+      const allWarehouses = JSON.parse(savedWarehouses)
+      warehouses.value = allWarehouses.filter((w: Warehouse) => w.status === 1)
+    } else {
+      warehouses.value = []
+    }
+  } catch (error) {
+    console.error('加载仓库列表失败:', error)
+    warehouses.value = []
   }
 }
 
@@ -620,10 +738,18 @@ const loadUsers = async () => {
     console.error('加载系统用户失败:', error)
     users.value = []
   }
+  
+  // 加载默认仓库
+  const savedDefaultWarehouse = localStorage.getItem('defaultWarehouseId')
+  if (savedDefaultWarehouse) {
+    defaultWarehouseId.value = parseInt(savedDefaultWarehouse)
+    console.log('默认仓库 ID:', defaultWarehouseId.value)
+  }
 }
 
 const handleAdd = () => {
   resetForm()
+  loadOrderList() // 加载出库单列表
   dialogTitle.value = '新增退货单'
   isViewMode.value = false
   
@@ -636,10 +762,20 @@ const handleAdd = () => {
     }
   }
   
+  // 设置默认仓库
+  if (defaultWarehouseId.value) {
+    formData.warehouseId = defaultWarehouseId.value
+    const warehouse = warehouses.value.find(w => w.id === defaultWarehouseId.value)
+    if (warehouse) {
+      formData.warehouseName = warehouse.name
+    }
+  }
+  
   dialogVisible.value = true
 }
 
 const handleEdit = (row: ReturnRecord) => {
+  loadOrderList() // 加载出库单列表
   Object.assign(formData, row)
   formData.items = JSON.parse(JSON.stringify(row.items))
   // 兼容旧数据：如果只有 operator 字段，转换为 handlerId 和 handlerName
@@ -656,6 +792,7 @@ const handleEdit = (row: ReturnRecord) => {
 }
 
 const handleView = (row: ReturnRecord) => {
+  loadOrderList() // 加载出库单列表
   Object.assign(formData, row)
   formData.items = JSON.parse(JSON.stringify(row.items))
   // 兼容旧数据：如果只有 operator 字段，转换为 handlerId 和 handlerName
@@ -776,30 +913,54 @@ const generateVoucherNo = () => {
   return `XS${date}${random}`
 }
 
-const handleOriginalOrderChange = (orderNo: string) => {
-  const order = orderList.value.find(item => item.orderNo === orderNo)
+const handleOriginalOrderChange = (voucherNo: string) => {
+  const order = orderList.value.find(item => item.voucherNo === voucherNo)
   if (order) {
     formData.customerId = order.customerId
     formData.customerName = order.customerName
+    formData.warehouseId = order.warehouseId
+    formData.warehouseName = order.warehouseName
 
-    formData.items = order.items.map((item: any) => ({
-      productId: item.productId,
-      productName: item.productName,
-      specification: item.specification,
-      unit: item.unit,
-      quantity: 0,
-      unitPrice: item.unitPrice || 0,
-      taxRate: item.taxRate || 0,
-      amount: 0,
-      taxAmount: 0
-    }))
+    formData.items = order.items.map((item: any) => {
+      // 从原订单加载商品，正确映射字段
+      // 销售出库单：unitPrice = 含税单价，unitPriceEx = 不含税单价
+      const unitPriceIncl = item.unitPrice || 0  // 出库单的 unitPrice 是含税单价
+      const unitPriceEx = item.unitPriceEx || 0  // 出库单的 unitPriceEx 是不含税单价
+      const taxRate = item.taxRate || 0
+      
+      return {
+        productId: item.productId,
+        productName: item.productName,
+        specification: item.specification,
+        unit: item.unit,
+        quantity: 0,  // 退货数量默认为 0，由用户输入
+        unitPrice: unitPriceEx,  // 退货单的不含税单价
+        unitPriceIncl: unitPriceIncl,  // 退货单的含税单价
+        taxRate: taxRate,
+        amount: 0,
+        taxAmount: 0
+      }
+    })
+    
+    // 触发计算，更新总计
+    formData.totalAmount = formData.items.reduce((s: number, it: any) => s + (it.amount || 0), 0)
   }
 }
+
+// 保留两位小数
+const round2 = (v: number) => Math.round(v * 100) / 100
 
 const handleHandlerChange = (handlerId: number) => {
   const employee = users.value.find(e => e.id === handlerId)
   if (employee) {
     formData.handlerName = employee.name
+  }
+}
+
+const handleWarehouseChange = (warehouseId: number) => {
+  const warehouse = warehouses.value.find(w => w.id === warehouseId)
+  if (warehouse) {
+    formData.warehouseName = warehouse.name
   }
 }
 
@@ -811,6 +972,14 @@ const setDefaultHandler = (employeeId: number, isActive: boolean) => {
   }
 }
 
+const saveDefaultWarehouse = (warehouseId: number | undefined) => {
+  if (warehouseId) {
+    localStorage.setItem('defaultWarehouseId', warehouseId.toString())
+    defaultWarehouseId.value = warehouseId
+    ElMessage.success('已设置为默认仓库')
+  }
+}
+
 const handleProductChange = (row: ReturnItem) => {
   const product = products.value.find(p => p.id === row.productId)
   if (product) {
@@ -818,23 +987,29 @@ const handleProductChange = (row: ReturnItem) => {
     // 优先使用 spec（产品表字段），其次使用 specification，最后使用 code 作为备用
     row.specification = product.spec || product.specification || product.code || ''
     row.unit = product.unit || '个'
-    row.unitPrice = product.costPrice || 0
+    // 如果产品有成本价则使用，否则保持为空
+    row.unitPrice = product.costPrice && product.costPrice > 0 ? product.costPrice : ('' as any)
     // initialize derived fields
     row.taxRate = row.taxRate || 0
-    row.taxAmount = Number((row.quantity * row.unitPrice * (row.taxRate / 100)).toFixed(2))
-    row.totalInc = Number((row.quantity * row.unitPrice + row.taxAmount).toFixed(2))
-    calculateRowTotals(row)
+    // 只有当有价格时才计算总额
+    if (row.unitPrice && row.unitPrice !== '') {
+      row.taxAmount = Number((row.quantity * row.unitPrice * (row.taxRate / 100)).toFixed(2))
+      row.totalInc = Number((row.quantity * row.unitPrice + row.taxAmount).toFixed(2))
+      calculateRowTotals(row)
+    }
   }
 }
 
 const calculateRowTotals = (row: ReturnItem) => {
   row.amount = Number((row.quantity * row.unitPrice).toFixed(2))
   row.taxAmount = Number((row.amount * (row.taxRate / 100)).toFixed(2))
-  // totalInc is含税金额
+  // totalInc is 含税金额
   row.totalInc = Number((row.amount + row.taxAmount).toFixed(2))
+  // 同步含税单价
+  row.unitPriceIncl = row.taxRate === 0 ? row.unitPrice : round2(row.unitPrice * (1 + row.taxRate / 100))
 }
 
-// Unified updater: when taxRate + any one of unitPrice / taxAmount / totalInc is changed,
+// Unified updater: when taxRate + any one of unitPrice / unitPriceIncl / taxAmount / totalInc is changed,
 // compute the remaining derived fields.
 const updateRowBy = (row: any, field: string) => {
   const q = row.quantity || 0
@@ -846,18 +1021,29 @@ const updateRowBy = (row: any, field: string) => {
     row.amount = Number((q * row.unitPrice).toFixed(2))
     row.taxAmount = Number((row.amount * (t / 100)).toFixed(2))
     row.totalInc = Number((row.amount + row.taxAmount).toFixed(2))
+    // 同步含税单价
+    row.unitPriceIncl = t === 0 ? row.unitPrice : round2(row.unitPrice * (1 + t / 100))
+  } else if (field === 'unitPriceIncl') {
+    // unitPriceIncl and taxRate known -> compute unitPrice and totals
+    const unitPriceIncl = Number(row.unitPriceIncl || 0)
+    row.unitPrice = t === 0 ? unitPriceIncl : round2(unitPriceIncl / (1 + t / 100))
+    row.amount = Number((q * row.unitPrice).toFixed(2))
+    row.taxAmount = Number((row.amount * (t / 100)).toFixed(2))
+    row.totalInc = Number((row.amount + row.taxAmount).toFixed(2))
   } else if (field === 'taxAmount') {
     // taxAmount and taxRate known -> compute amount and totals
     if (t === 0) return
     row.amount = Number((row.taxAmount / (t / 100) / q).toFixed(2))
     row.unitPrice = Number((row.amount / q).toFixed(2))
     row.totalInc = Number((row.amount + row.taxAmount).toFixed(2))
+    row.unitPriceIncl = round2(row.unitPrice * (1 + t / 100))
   } else if (field === 'totalInc') {
     // totalInc and taxRate known -> compute amount and unitPrice, taxAmount
     const totalInc = Number(row.totalInc || 0)
     row.amount = Number((totalInc / (1 + t / 100)).toFixed(2))
     row.unitPrice = Number((row.amount / q).toFixed(2))
     row.taxAmount = Number((totalInc - row.amount).toFixed(2))
+    row.unitPriceIncl = round2(totalInc / q)
   }
   // ensure rounding
   row.amount = Number((row.amount || 0).toFixed(2))
@@ -875,7 +1061,7 @@ const addItem = () => {
     unit: '个',
     quantity: 0,
     unitPrice: 0,
-    taxRate: 0,
+    taxRate: 13,
     amount: 0,
     taxAmount: 0
   })
@@ -885,6 +1071,14 @@ const removeItem = (index: number) => {
   formData.items.splice(index, 1)
 }
 
+// 处理输入框聚焦事件，清空 0 值让用户直接输入
+const handleFocus = (row: any, field: string) => {
+  const value = row[field]
+  if (value === 0 || value === '0') {
+    row[field] = ''
+  }
+}
+
 const resetForm = () => {
   Object.assign(formData, {
     voucherNo: '',
@@ -892,6 +1086,8 @@ const resetForm = () => {
     originalOrderNo: '',
     customerId: undefined,
     customerName: '',
+    warehouseId: undefined,
+    warehouseName: '',
     handlerId: undefined,
     handlerName: '',
     returnReason: '',
@@ -1020,6 +1216,7 @@ onMounted(() => {
   loadOrderList()
   loadProducts()
   loadCustomers()
+  loadWarehouses()
   loadUsers()
 })
 </script>

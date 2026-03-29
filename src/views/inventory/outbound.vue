@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="outbound-page">
     <el-card>
       <div class="toolbar">
@@ -39,6 +39,11 @@
         <el-table-column prop="voucherNo" label="凭证号" width="150" />
         <el-table-column prop="voucherDate" label="出库日期" width="120" />
         <el-table-column prop="customerName" label="客户" min-width="120" />
+        <el-table-column prop="warehouseName" label="仓库" width="120">
+          <template #default="{ row }">
+            {{ row.warehouseName || '-' }}
+          </template>
+        </el-table-column>
         <el-table-column prop="itemCount" label="商品行数" width="80">
           <template #default="{ row }">
             {{ row.items?.length || 0 }}
@@ -122,6 +127,27 @@
             </el-form-item>
           </el-col>
           <el-col :span="12">
+            <el-form-item label="仓库" prop="warehouseId">
+              <el-select
+                v-model="formData.warehouseId"
+                placeholder="请选择仓库"
+                style="width: 100%"
+                filterable
+                @change="handleWarehouseChange"
+              >
+                <el-option
+                  v-for="warehouse in warehouses"
+                  :key="warehouse.id"
+                  :label="warehouse.name"
+                  :value="warehouse.id"
+                />
+              </el-select>
+            </el-form-item>
+          </el-col>
+        </el-row>
+
+        <el-row :gutter="20">
+          <el-col :span="12">
             <el-form-item label="操作员" prop="operator">
               <el-input v-model="formData.operator" placeholder="自动获取当前用户" disabled />
             </el-form-item>
@@ -173,6 +199,7 @@
                 :precision="2"
                 :controls="false"
                 style="width: 100%"
+                @focus="handleFocus(row, 'quantity')"
                 @change="onQuantityChange(row)"
               />
             </template>
@@ -191,6 +218,7 @@
                 :step="0.01"
                 :controls="false"
                 style="width: 100%"
+                @focus="handleFocus(row, 'unitPriceEx')"
                 @change="onUnitPriceExChange(row)"
               />
             </template>
@@ -204,6 +232,7 @@
                 :step="0.01"
                 :controls="false"
                 style="width: 100%"
+                @focus="handleFocus(row, 'unitPrice')"
                 @change="onUnitPriceInclChange(row)"
               />
             </template>
@@ -252,6 +281,7 @@
                 :precision="2"
                 :controls="false"
                 style="width: 100%"
+                @focus="handleFocus(row, 'totalAmount')"
                 @change="onAmountChange(row)"
               />
             </template>
@@ -318,6 +348,7 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import dayjs from 'dayjs'
 import exportToCsv from '../../utils/exportCsv'
+import { getRealTimeStock, getStockBeforeDateTime } from '@/utils/stock'
 
 interface OutboundItem {
   productId?: number
@@ -341,10 +372,13 @@ interface OutboundRecord {
   voucherDate: string
   customerId?: number
   customerName: string
+  warehouseId?: number
+  warehouseName?: string
   operator: string
   items: OutboundItem[]
   totalAmount: number
   remark?: string
+  createdAt?: string
 }
 
 interface Product {
@@ -361,9 +395,17 @@ interface Customer {
   name: string
 }
 
+interface Warehouse {
+  id: number
+  code: string
+  name: string
+  status: number
+}
+
 const outboundList = ref<OutboundRecord[]>([])
 const productList = ref<Product[]>([])
 const customers = ref<Customer[]>([])
+const warehouses = ref<Warehouse[]>([])
 const total = ref(0)
 const currentPage = ref(1)
 const pageSize = ref(10)
@@ -379,6 +421,8 @@ const formData = reactive<OutboundRecord>({
   voucherDate: dayjs().format('YYYY-MM-DD'),
   customerId: undefined,
   customerName: '',
+  warehouseId: undefined,
+  warehouseName: '',
   operator: '',
   items: [],
   totalAmount: 0,
@@ -418,7 +462,18 @@ const loadOutboundList = async () => {
       const result = await window.electron.dbQuery('outbound', 'SELECT * FROM outbound ORDER BY created_at DESC')
       outboundList.value = result
     } else {
-      const savedData = localStorage.getItem('outbound_records')
+      // 尝试多个可能的键名
+      const possibleKeys = ['sales_outbound_records', 'outbound_records', 'salesOutbounds']
+      let savedData = null
+      
+      for (const key of possibleKeys) {
+        savedData = localStorage.getItem(key)
+        if (savedData) {
+          console.log(`从 ${key} 加载出库单数据`)
+          break
+        }
+      }
+      
       const allRecords = savedData ? JSON.parse(savedData) : []
       let filtered = allRecords
       if (searchQuery.value) {
@@ -479,6 +534,21 @@ const loadCustomers = async () => {
   }
 }
 
+const loadWarehouses = async () => {
+  try {
+    const savedWarehouses = localStorage.getItem('warehouses')
+    if (savedWarehouses) {
+      const allWarehouses = JSON.parse(savedWarehouses)
+      warehouses.value = allWarehouses.filter((w: Warehouse) => w.status === 1)
+    } else {
+      warehouses.value = []
+    }
+  } catch (error) {
+    console.error('加载仓库列表失败:', error)
+    warehouses.value = []
+  }
+}
+
 const loadCurrentUser = async () => {
   try {
     const currentUser = localStorage.getItem('currentUser')
@@ -502,6 +572,8 @@ const handleAdd = () => {
     voucherDate: dayjs().format('YYYY-MM-DD'),
     customerId: undefined,
     customerName: '',
+    warehouseId: undefined,
+    warehouseName: '',
     operator: user ? JSON.parse(user).name : '系统用户',
     items: [],
     totalAmount: 0,
@@ -526,10 +598,23 @@ const handleDelete = async (row: OutboundRecord) => {
     if (window.electron && window.electron.dbDelete) {
       await window.electron.dbDelete('outbound', 'id = ?', [row.id])
     } else {
-      const savedData = localStorage.getItem('outbound_records')
-      const allRecords = savedData ? JSON.parse(savedData) : []
-      const filtered = allRecords.filter((r: OutboundRecord) => r.id !== row.id)
-      localStorage.setItem('outbound_records', JSON.stringify(filtered))
+      const possibleKeys = ['sales_outbound_records', 'outbound_records', 'salesOutbounds']
+      let savedData = null
+      let usedKey = ''
+      
+      for (const key of possibleKeys) {
+        savedData = localStorage.getItem(key)
+        if (savedData) {
+          usedKey = key
+          break
+        }
+      }
+      
+      if (savedData) {
+        const allRecords = JSON.parse(savedData)
+        const filtered = allRecords.filter((r: OutboundRecord) => r.id !== row.id)
+        localStorage.setItem(usedKey, JSON.stringify(filtered))
+      }
     }
     ElMessage.success('删除成功')
     loadOutboundList()
@@ -560,6 +645,14 @@ const removeItem = (index: number) => {
   calculateTotalAmount()
 }
 
+// 处理输入框聚焦事件，清空 0 值让用户直接输入
+const handleFocus = (row: any, field: string) => {
+  const value = row[field]
+  if (value === 0 || value === '0') {
+    row[field] = ''
+  }
+}
+
 const handleProductChange = (index: number, productId: number) => {
   const product = productList.value.find(p => p.id === productId)
   if (product) {
@@ -568,9 +661,13 @@ const handleProductChange = (index: number, productId: number) => {
     // 优先使用 spec（产品表字段），其次使用 specification，最后使用 code 作为备用
     item.specification = product.spec || product.specification || product.code || ''
     item.unit = product.unit || ''
-    item.unitPriceEx = product.salePrice || 0
+    // 如果产品有售价则使用，否则保持为空
+    item.unitPriceEx = product.salePrice && product.salePrice > 0 ? product.salePrice : ('' as any)
     item._lastEdited = 'unitEx'
-    calculateRowTotal(item)
+    // 只有当有价格时才计算总额
+    if (item.unitPriceEx && item.unitPriceEx !== '') {
+      calculateRowTotal(item)
+    }
   }
 }
 
@@ -734,6 +831,57 @@ const handleCustomerChange = (customerId: number) => {
   }
 }
 
+const handleWarehouseChange = (warehouseId: number) => {
+  const warehouse = warehouses.value.find(w => w.id === warehouseId)
+  if (warehouse) {
+    formData.warehouseName = warehouse.name
+  }
+}
+
+// 检查库存是否足够
+const checkStockAvailability = (): boolean => {
+  const warehouseId = formData.warehouseId
+  const voucherDate = formData.voucherDate
+  const createdAt = formData.createdAt
+  
+  if (!warehouseId) {
+    ElMessage.warning('请先选择仓库')
+    return false
+  }
+  if (!voucherDate) {
+    ElMessage.warning('请先选择出库日期')
+    return false
+  }
+  
+  for (let i = 0; i < formData.items.length; i++) {
+    const item = formData.items[i]
+    if (!item.productId || !item.quantity) continue
+    
+    // 获取该日期和时间之前的库存（不包括该日期和时间的单据）
+    const stockBeforeDateTime = getStockBeforeDateTime(
+      item.productId, 
+      warehouseId, 
+      voucherDate, 
+      createdAt,
+      formData.id
+    )
+    
+    if (stockBeforeDateTime < item.quantity) {
+      const productName = item.productName || `第 ${i + 1} 行商品`
+      ElMessage.error(
+        `库存不足：${productName}\n` +
+        `出库日期：${voucherDate}\n` +
+        `该时间前库存：${stockBeforeDateTime}\n` +
+        `需要出库：${item.quantity}\n\n` +
+        `请修改出库日期或出库数量！`
+      )
+      return false
+    }
+  }
+  
+  return true
+}
+
 const handleSubmit = async () => {
   try {
     // 先执行表单规则校验
@@ -750,6 +898,10 @@ const handleSubmit = async () => {
     }
     if (!formData.customerId) {
       ElMessage.warning('客户不能为空')
+      return
+    }
+    if (!formData.warehouseId) {
+      ElMessage.warning('仓库不能为空')
       return
     }
 
@@ -784,18 +936,36 @@ const handleSubmit = async () => {
       }
     }
 
+    // 检查库存是否足够
+    if (!checkStockAvailability()) {
+      return
+    }
+
     calculateTotalAmount()
 
     if (formData.id) {
       if (window.electron && window.electron.dbUpdate) {
         await window.electron.dbUpdate('outbound', formData, 'id = ?', [formData.id])
       } else {
-        const savedData = localStorage.getItem('outbound_records')
-        const allRecords = savedData ? JSON.parse(savedData) : []
-        const index = allRecords.findIndex((r: OutboundRecord) => r.id === formData.id)
-        if (index !== -1) {
-          allRecords[index] = { ...formData }
-          localStorage.setItem('outbound_records', JSON.stringify(allRecords))
+        const possibleKeys = ['sales_outbound_records', 'outbound_records', 'salesOutbounds']
+        let savedData = null
+        let usedKey = ''
+        
+        for (const key of possibleKeys) {
+          savedData = localStorage.getItem(key)
+          if (savedData) {
+            usedKey = key
+            break
+          }
+        }
+        
+        if (savedData) {
+          const allRecords = JSON.parse(savedData)
+          const index = allRecords.findIndex((r: OutboundRecord) => r.id === formData.id)
+          if (index !== -1) {
+            allRecords[index] = { ...formData }
+            localStorage.setItem(usedKey, JSON.stringify(allRecords))
+          }
         }
       }
       ElMessage.success('更新成功')
@@ -805,10 +975,11 @@ const handleSubmit = async () => {
       if (window.electron && window.electron.dbInsert) {
         await window.electron.dbInsert('outbound', formData)
       } else {
-        const savedData = localStorage.getItem('outbound_records')
+        const key = 'sales_outbound_records'
+        const savedData = localStorage.getItem(key)
         const allRecords = savedData ? JSON.parse(savedData) : []
         allRecords.push({ ...formData })
-        localStorage.setItem('outbound_records', JSON.stringify(allRecords))
+        localStorage.setItem(key, JSON.stringify(allRecords))
       }
       ElMessage.success('新增成功')
     }
@@ -1048,6 +1219,7 @@ onMounted(() => {
   loadOutboundList()
   loadProducts()
   loadCustomers()
+  loadWarehouses()
   loadCurrentUser()
 })
 </script>

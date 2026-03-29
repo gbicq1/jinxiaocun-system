@@ -2,18 +2,40 @@
   <div class="inventory-stock-page">
     <el-card>
       <div class="toolbar">
-        <el-input
+        <el-autocomplete
           v-model="searchQuery"
+          :fetch-suggestions="querySearch"
           placeholder="搜索产品编码/名称"
-          style="width: 300px"
           clearable
+          style="width: 300px"
+          @select="handleSelect"
+          @clear="handleClear"
         >
-          <template #append>
-            <el-button @click="handleSearch">
-              <el-icon><Search /></el-icon>
-            </el-button>
+          <template #prefix>
+            <el-icon><Search /></el-icon>
           </template>
-        </el-input>
+          <template #default="{ item }">
+            <div class="product-option">
+              <span class="product-code">{{ item.value }}</span>
+              <span class="product-name">{{ item.name }}</span>
+            </div>
+          </template>
+        </el-autocomplete>
+        <el-select
+          v-model="selectedWarehouse"
+          placeholder="仓库（全部）"
+          clearable
+          filterable
+          style="width: 200px; margin-left: 10px;"
+          @change="handleWarehouseFilter"
+        >
+          <el-option
+            v-for="warehouse in warehouses"
+            :key="warehouse.id"
+            :label="warehouse.name"
+            :value="warehouse.name"
+          />
+        </el-select>
         <el-button type="primary" @click="handleExport" style="margin-left: 10px;">
           <el-icon><Download /></el-icon>
           导出库存
@@ -154,8 +176,12 @@
 import { ref, onMounted, watch } from 'vue'
 import { Search, Download, Close } from '@element-plus/icons-vue'
 import exportToCsv from '../../utils/exportCsv'
+import { getRealTimeStock } from '@/utils/stock'
 
 const searchQuery = ref('')
+const selectedWarehouse = ref('')
+const warehouses = ref<any[]>([])
+const products = ref<any[]>([])  // 产品列表用于搜索建议
 const stockList = ref<any[]>([])
 const allStock = ref<any[]>([])
 const dialogVisible = ref(false)
@@ -168,15 +194,121 @@ const ledgerEntries = ref<any[]>([])
 
 const handleSearch = () => {
   const q = (searchQuery.value || '').toLowerCase()
-  if (!q) {
+  const warehouse = selectedWarehouse.value
+  
+  if (!q && !warehouse) {
     stockList.value = allStock.value.slice()
     return
   }
+  
   stockList.value = allStock.value.filter(item => {
-    return (item.productCode || '').toLowerCase().includes(q)
+    const matchText = !q || 
+      (item.productCode || '').toLowerCase().includes(q)
       || (item.productName || '').toLowerCase().includes(q)
       || (String(item.specification || '').toLowerCase().includes(q))
+    
+    const matchWarehouse = !warehouse || item.warehouseName === warehouse
+    
+    return matchText && matchWarehouse
   })
+}
+
+const handleWarehouseFilter = () => {
+  handleSearch()
+}
+
+// 加载仓库列表
+const loadWarehouses = () => {
+  try {
+    const saved = localStorage.getItem('warehouses')
+    if (saved) {
+      warehouses.value = JSON.parse(saved)
+      console.log('加载仓库列表成功，共', warehouses.value.length, '个仓库')
+    } else {
+      // 如果没有仓库数据，使用默认值
+      warehouses.value = [{ id: 1, name: '默认仓库' }]
+    }
+  } catch (error) {
+    console.error('加载仓库列表失败:', error)
+    warehouses.value = [{ id: 1, name: '默认仓库' }]
+  }
+}
+
+// 从 localStorage 加载仓库列表（用于库存计算）
+const loadWarehousesFromStorage = () => {
+  try {
+    const saved = localStorage.getItem('warehouses')
+    if (saved) {
+      return JSON.parse(saved)
+    } else {
+      return [{ id: 1, name: '默认仓库' }]
+    }
+  } catch (error) {
+    console.error('加载仓库列表失败:', error)
+    return [{ id: 1, name: '默认仓库' }]
+  }
+}
+
+// 加载产品列表（用于搜索建议）
+const loadProducts = () => {
+  try {
+    const savedProducts = localStorage.getItem('products')
+    if (savedProducts) {
+      const allProducts = JSON.parse(savedProducts)
+      products.value = allProducts
+        .filter((p: any) => (p.status as any) === 1 || (p.status as any) === true)
+        .map((p: any) => ({
+          value: p.code || p.productCode || '',
+          label: `${p.code || p.productCode || ''} - ${p.name || p.productName || ''}`,
+          code: p.code || p.productCode || '',
+          name: p.name || p.productName || '',
+          id: p.id
+        }))
+      console.log('加载产品列表成功，共', products.value.length, '个产品')
+    } else {
+      products.value = []
+    }
+  } catch (error) {
+    console.error('加载产品列表失败:', error)
+    products.value = []
+  }
+}
+
+// 搜索建议
+const querySearch = (queryString: string, cb: (suggestions: any[]) => void) => {
+  const results = queryString
+    ? products.value.filter(createFilter(queryString))
+    : products.value
+  
+  cb(results.map(p => ({
+    value: p.code,
+    label: p.label,
+    code: p.code,
+    name: p.name
+  })))
+}
+
+// 搜索过滤器
+const createFilter = (queryString: string) => {
+  return (restaurant: any) => {
+    return (
+      restaurant.value.toLowerCase().indexOf(queryString.toLowerCase()) === 0 ||
+      restaurant.name.toLowerCase().includes(queryString.toLowerCase())
+    )
+  }
+}
+
+// 选择产品
+const handleSelect = (item: any) => {
+  console.log('选择的产品:', item)
+  handleSearch()
+}
+
+// 清空搜索
+const handleClear = () => {
+  console.log('清空搜索')
+  searchQuery.value = ''
+  handleSearch()
 }
 
 const handleExport = () => {
@@ -375,14 +507,20 @@ const loadLedger = (row: any) => {
     }
   }
   
-  // 按创建时间精确排序（包括时分秒）
-  // 正序排列：先创建的在上，后创建的在下
+  // 按日期和时间戳正序排序
   tempEntries.sort((a, b) => {
-    // 获取时间戳（转换为毫秒时间戳）
+    // 先按日期排序
+    const dateA = new Date(a._sortDate || a.date || '1970-01-01').getTime()
+    const dateB = new Date(b._sortDate || b.date || '1970-01-01').getTime()
+    
+    if (dateA !== dateB) {
+      return dateA - dateB
+    }
+    
+    // 日期相同的话，按时间戳排序
     const timeA = a._timestamp ? new Date(a._timestamp).getTime() : 0
     const timeB = b._timestamp ? new Date(b._timestamp).getTime() : 0
     
-    // 如果时间戳有效，按时间排序
     if (timeA > 0 && timeB > 0) {
       return timeA - timeB
     }
@@ -451,24 +589,31 @@ const getStockType = (stock: number, warning: number) => {
 const calculateStockFromTransactions = (productList: any[]) => {
   const stockMap = new Map<string, any>()
   
-  // 初始化库存映射
+  // 获取所有仓库
+  const warehousesList = loadWarehousesFromStorage()
+  
+  // 为每个产品的每个仓库生成库存记录
   productList.forEach(p => {
-    const key = `${p.productCode}_${p.warehouseName || '默认仓库'}`
-    stockMap.set(key, {
-      ...p,
-      stockQuantity: 0,
-      costPrice: 0,
-      totalValue: 0,
-      _totalCost: 0, // 总成本
-      _totalQty: 0   // 总数量
+    warehousesList.forEach(wh => {
+      const key = `${p.productCode}_${wh.name}`
+      stockMap.set(key, {
+        ...p,
+        warehouseName: wh.name,
+        warehouseId: wh.id,
+        stockQuantity: 0,
+        costPrice: 0,
+        totalValue: 0,
+        _totalCost: 0, // 总成本
+        _totalQty: 0   // 总数量
+      })
     })
   })
   
   // 遍历 localStorage 中所有可能的出入库记录
-  const inboundKeys = ['purchaseInbounds', 'inbound_records', 'inbounds', 'purchase_inbounds']
-  const outboundKeys = ['outbound_records', 'outbounds', 'sales_outbounds', 'salesOutbounds', 'delivery_records']
-  const purchaseReturnsKeys = ['purchaseReturns', 'purchase_returns']
-  const salesReturnsKeys = ['salesReturns', 'sales_returns']
+  const inboundKeys = ['purchase_inbound_records', 'purchaseInbounds', 'inbound_records', 'inbounds', 'purchase_inbounds']
+  const outboundKeys = ['sales_outbound_records', 'outbound_records', 'outbounds', 'sales_outbounds', 'salesOutbounds', 'delivery_records']
+  const purchaseReturnsKeys = ['purchaseReturns', 'purchase_returns', 'purchase_return_records']
+  const salesReturnsKeys = ['salesReturns', 'sales_returns', 'sales_return_records']
   
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i)
@@ -480,13 +625,13 @@ const calculateStockFromTransactions = (productList: any[]) => {
     let isPurchaseReturn = false  // 采购退货 = 负数入库
     let isSalesReturn = false     // 销售退货 = 负数出库
     
-    if (inboundKeys.includes(key) || (key.toLowerCase().includes('inbound') && !key.toLowerCase().includes('return'))) {
+    if (inboundKeys.some(k => key.includes(k))) {
       isInbound = true
-    } else if (outboundKeys.includes(key) || (key.toLowerCase().includes('outbound') && !key.toLowerCase().includes('return')) || key.toLowerCase().includes('delivery')) {
+    } else if (outboundKeys.some(k => key.includes(k))) {
       isOutbound = true
-    } else if (purchaseReturnsKeys.includes(key) || (key.toLowerCase().includes('return') && key.toLowerCase().includes('purchase'))) {
+    } else if (purchaseReturnsKeys.some(k => key.includes(k))) {
       isPurchaseReturn = true
-    } else if (salesReturnsKeys.includes(key) || (key.toLowerCase().includes('return') && key.toLowerCase().includes('sales'))) {
+    } else if (salesReturnsKeys.some(k => key.includes(k))) {
       isSalesReturn = true
     } else {
       continue
@@ -503,13 +648,24 @@ const calculateStockFromTransactions = (productList: any[]) => {
         const items = rec.items || rec.products || rec.details || rec.lines || rec.itemsList
         if (!Array.isArray(items)) continue
         
+        // 获取单据的仓库 ID
+        const recWarehouseId = rec.warehouseId
+        const recWarehouseName = rec.warehouseName
+        
         for (const it of items) {
           const itCode = String(it.productCode || it.code || it.sku || '').trim()
           const itName = String(it.productName || it.name || '').trim()
           const itId = it.productId || it.id || null
     
-          // 匹配产品
-          for (const [key, stock] of stockMap.entries()) {
+          // 匹配产品和仓库
+          for (const [mapKey, stock] of stockMap.entries()) {
+            // 检查仓库是否匹配
+            const warehouseMatch = (recWarehouseId && stock.warehouseId === recWarehouseId) || 
+                                  (recWarehouseName && stock.warehouseName === recWarehouseName)
+            
+            if (!warehouseMatch) continue
+            
+            // 匹配产品
             const match = (itId && stock.productId && itId === stock.productId) || 
                          (itCode && stock.productCode && itCode === stock.productCode) || 
                          (itName && stock.productName && itName === stock.productName)
@@ -591,7 +747,11 @@ const loadStock = () => {
   stockList.value = allStock.value.slice()
 }
 
-onMounted(() => loadStock())
+onMounted(() => {
+  loadWarehouses()
+  loadProducts()
+  loadStock()
+})
 </script>
 
 <style scoped>
@@ -601,6 +761,24 @@ onMounted(() => loadStock())
 
 .toolbar { 
   margin-bottom: 20px; 
+}
+
+/* 产品搜索下拉选项样式 */
+.product-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.product-code {
+  font-weight: 600;
+  color: #409eff;
+  min-width: 60px;
+}
+
+.product-name {
+  color: #606266;
+  flex: 1;
 }
 
 /* ==================== 遮罩层 ==================== */
@@ -615,18 +793,16 @@ onMounted(() => loadStock())
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 20px;
 }
 
 /* ==================== 弹窗主体 ==================== */
 .stock-detail-dialog {
-  position: fixed;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: 85vw;
-  min-width: 1400px;
-  height: 90vh;
-  min-height: 800px;
+  position: relative;
+  width: 90%;
+  max-width: 1600px;
+  height: 85vh;
+  min-height: 600px;
   background: #fff;
   border-radius: 4px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);

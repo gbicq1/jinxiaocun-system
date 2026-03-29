@@ -61,9 +61,8 @@
           </template>
           <el-menu-item index="/finance/reconciliation">供应商/客户对账</el-menu-item>
           <el-menu-item index="/finance/cost-settlement">成本结算</el-menu-item>
-          <el-menu-item index="/finance/accounts">应收应付账款</el-menu-item>
-          <el-menu-item index="/finance/payments">收付款管理</el-menu-item>
-          <el-menu-item index="/finance/invoices">开票申请</el-menu-item>
+          <el-menu-item index="/finance/receipt">收款单</el-menu-item>
+          <el-menu-item index="/finance/payment">付款单</el-menu-item>
         </el-sub-menu>
 
         <el-sub-menu index="system">

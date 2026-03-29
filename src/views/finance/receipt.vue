@@ -13,26 +13,31 @@
         <el-table-column prop="receiptDate" label="收款日期" width="120" />
         <el-table-column prop="amount" label="金额" width="120">
           <template #default="{ row }">
-            ¥{{ row.amount.toLocaleString() }}
+            ¥{{ (row.amount || 0).toLocaleString() }}
           </template>
         </el-table-column>
-        <el-table-column prop="paymentMethod" label="支付方式" width="120" />
+        <el-table-column prop="paymentMethod" label="支付方式" width="120">
+          <template #default="{ row }">
+            {{ getPaymentMethodLabel(row.paymentMethod) }}
+          </template>
+        </el-table-column>
         <el-table-column prop="status" label="状态" width="100">
           <template #default="{ row }">
             <el-tag :type="row.status === 'completed' ? 'success' : 'warning'">
-              {{ row.status }}
+              {{ getStatusLabel(row.status) }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="150" fixed="right">
+        <el-table-column label="操作" width="200" fixed="right">
           <template #default="{ row }">
             <el-button type="primary" size="small" @click="handleView(row)">查看</el-button>
+            <el-button type="success" size="small" @click="handleEdit(row)">编辑</el-button>
+            <el-button type="danger" size="small" @click="handleDelete(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
     </el-card>
 
-    <!-- 新增收款单对话框 -->
     <el-dialog
       v-model="dialogVisible"
       :title="dialogTitle"
@@ -58,6 +63,7 @@
             v-model="formData.customerId"
             placeholder="请选择客户"
             style="width: 100%"
+            clearable
           >
             <el-option
               v-for="customer in customers"
@@ -87,7 +93,7 @@
           />
         </el-form-item>
         <el-form-item label="支付方式" prop="paymentMethod">
-          <el-select v-model="formData.paymentMethod" style="width: 100%">
+          <el-select v-model="formData.paymentMethod" style="width: 100%" clearable>
             <el-option label="现金" value="cash" />
             <el-option label="银行转账" value="bank_transfer" />
             <el-option label="支票" value="check" />
@@ -101,11 +107,39 @@
             <el-option label="已完成" value="completed" />
           </el-select>
         </el-form-item>
+        <el-form-item label="备注" prop="remark">
+          <el-input
+            v-model="formData.remark"
+            type="textarea"
+            :rows="3"
+            placeholder="请输入备注"
+          />
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
         <el-button type="primary" @click="handleSubmit">确定</el-button>
       </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="viewDialogVisible"
+      title="查看收款单"
+      width="600px"
+    >
+      <el-descriptions :column="1" border>
+        <el-descriptions-item label="收款单号">{{ viewData.receiptNo }}</el-descriptions-item>
+        <el-descriptions-item label="客户">{{ viewData.customerName }}</el-descriptions-item>
+        <el-descriptions-item label="收款日期">{{ viewData.receiptDate }}</el-descriptions-item>
+        <el-descriptions-item label="金额">¥{{ (viewData.amount || 0).toLocaleString() }}</el-descriptions-item>
+        <el-descriptions-item label="支付方式">{{ getPaymentMethodLabel(viewData.paymentMethod) }}</el-descriptions-item>
+        <el-descriptions-item label="状态">
+          <el-tag :type="viewData.status === 'completed' ? 'success' : 'warning'">
+            {{ getStatusLabel(viewData.status) }}
+          </el-tag>
+        </el-descriptions-item>
+        <el-descriptions-item label="备注">{{ viewData.remark || '-' }}</el-descriptions-item>
+      </el-descriptions>
     </el-dialog>
   </div>
 </template>
@@ -113,6 +147,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Plus } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 
 interface ReceiptRecord {
@@ -124,16 +159,16 @@ interface ReceiptRecord {
   amount: number
   paymentMethod: string
   status: 'pending' | 'completed'
+  remark?: string
 }
 
 const receiptList = ref<ReceiptRecord[]>([])
-const total = ref(0)
-const currentPage = ref(1)
-const pageSize = ref(10)
+const customers = ref<any[]>([])
 const dialogVisible = ref(false)
+const viewDialogVisible = ref(false)
 const dialogTitle = ref('新增收款单')
 const formRef = ref()
-const selectedRow = ref<ReceiptRecord | null>(null)
+const viewData = ref<ReceiptRecord>({} as ReceiptRecord)
 
 const formData = reactive<ReceiptRecord>({
   receiptNo: '',
@@ -142,110 +177,141 @@ const formData = reactive<ReceiptRecord>({
   receiptDate: dayjs().format('YYYY-MM-DD'),
   amount: 0,
   paymentMethod: '',
-  status: 'pending'
+  status: 'pending',
+  remark: ''
 })
 
-const customers = ref([
-  { id: 1, name: '客户 A' },
-  { id: 2, name: '客户 B' }
-])
+const paymentMethodMap: Record<string, string> = {
+  cash: '现金',
+  bank_transfer: '银行转账',
+  check: '支票',
+  alipay: '支付宝',
+  wechat: '微信'
+}
 
-// 生成收款单号
+const statusMap: Record<string, string> = {
+  pending: '待处理',
+  completed: '已完成'
+}
+
+const getPaymentMethodLabel = (method: string) => {
+  return paymentMethodMap[method] || method
+}
+
+const getStatusLabel = (status: string) => {
+  return statusMap[status] || status
+}
+
 const generateReceiptNo = () => {
   const date = dayjs().format('YYYYMMDD')
   const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0')
   return `SK${date}${random}`
 }
 
-// 加载收款单列表
+const loadCustomers = () => {
+  try {
+    const saved = localStorage.getItem('customers')
+    customers.value = saved ? JSON.parse(saved) : []
+  } catch (error) {
+    console.error('加载客户数据失败:', error)
+    customers.value = []
+  }
+}
+
 const loadReceiptList = async () => {
   try {
-    if (window.electron && window.electron.dbQuery) {
-      const result = await window.electron.dbQuery('finance_receipt', 'SELECT * FROM finance_receipt ORDER BY created_at DESC')
-      receiptList.value = result
-    } else {
-      const savedData = localStorage.getItem('finance_receipt')
-      receiptList.value = savedData ? JSON.parse(savedData) : []
-    }
-    total.value = receiptList.value.length
+    const savedData = localStorage.getItem('finance_receipt')
+    receiptList.value = savedData ? JSON.parse(savedData) : []
   } catch (error) {
     ElMessage.error('加载收款单列表失败')
     console.error(error)
   }
 }
 
-// 新增收款单
 const handleAdd = () => {
   dialogTitle.value = '新增收款单'
   Object.assign(formData, {
+    id: undefined,
     receiptNo: generateReceiptNo(),
     customerId: undefined,
     customerName: '',
     receiptDate: dayjs().format('YYYY-MM-DD'),
     amount: 0,
     paymentMethod: '',
-    status: 'pending'
+    status: 'pending',
+    remark: ''
   })
   dialogVisible.value = true
 }
 
-// 查看收款单
 const handleView = (row: ReceiptRecord) => {
-  ElMessage.info(`查看收款单：${row.receiptNo}`)
+  viewData.value = { ...row }
+  viewDialogVisible.value = true
 }
 
-// 提交表单
+const handleEdit = (row: ReceiptRecord) => {
+  dialogTitle.value = '编辑收款单'
+  Object.assign(formData, { ...row })
+  dialogVisible.value = true
+}
+
+const handleDelete = (row: ReceiptRecord) => {
+  ElMessageBox.confirm('确定要删除这条收款单吗？', '提示', {
+    confirmButtonText: '确定',
+    cancelButtonText: '取消',
+    type: 'warning'
+  }).then(() => {
+    try {
+      const savedData = localStorage.getItem('finance_receipt')
+      const allRecords = savedData ? JSON.parse(savedData) : []
+      const filtered = allRecords.filter((r: ReceiptRecord) => r.id !== row.id)
+      localStorage.setItem('finance_receipt', JSON.stringify(filtered))
+      receiptList.value = filtered
+      ElMessage.success('删除成功')
+    } catch (error) {
+      ElMessage.error('删除失败')
+      console.error(error)
+    }
+  }).catch(() => {})
+}
+
 const handleSubmit = async () => {
   try {
     await formRef.value.validate()
     
-    // 获取客户名称
     const customer = customers.value.find(c => c.id === formData.customerId)
     if (customer) {
       formData.customerName = customer.name
     }
     
+    const savedData = localStorage.getItem('finance_receipt')
+    const allRecords = savedData ? JSON.parse(savedData) : []
+    
     if (formData.id) {
-      // 更新
-      if (window.electron && window.electron.dbUpdate) {
-        await window.electron.dbUpdate('finance_receipt', formData, 'id = ?', [formData.id])
-      } else {
-        const savedData = localStorage.getItem('finance_receipt')
-        const allRecords = savedData ? JSON.parse(savedData) : []
-        const index = allRecords.findIndex(r => r.id === formData.id)
-        if (index !== -1) {
-          allRecords[index] = { ...formData }
-          localStorage.setItem('finance_receipt', JSON.stringify(allRecords))
-        }
+      const index = allRecords.findIndex((r: ReceiptRecord) => r.id === formData.id)
+      if (index !== -1) {
+        allRecords[index] = { ...formData }
+        ElMessage.success('更新成功')
       }
-      ElMessage.success('更新成功')
     } else {
-      // 新增
       const newRecord = {
         ...formData,
         id: Date.now()
       }
-      
-      if (window.electron && window.electron.dbInsert) {
-        await window.electron.dbInsert('finance_receipt', newRecord)
-      } else {
-        const savedData = localStorage.getItem('finance_receipt')
-        const allRecords = savedData ? JSON.parse(savedData) : []
-        allRecords.push(newRecord)
-        localStorage.setItem('finance_receipt', JSON.stringify(allRecords))
-      }
-      
+      allRecords.push(newRecord)
       ElMessage.success('新增成功')
     }
     
+    localStorage.setItem('finance_receipt', JSON.stringify(allRecords))
+    receiptList.value = allRecords
     dialogVisible.value = false
-    loadReceiptList()
   } catch (error) {
     console.error('表单验证失败:', error)
   }
 }
 
 onMounted(() => {
+  loadCustomers()
   loadReceiptList()
 })
 </script>

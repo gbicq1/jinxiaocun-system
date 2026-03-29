@@ -74,6 +74,7 @@
         border
       >
         <el-table-column type="index" label="序号" width="60" align="center" />
+        <el-table-column prop="warehouseName" label="仓库" width="120" />
         <el-table-column prop="productCode" label="商品编码" width="120" />
         <el-table-column prop="productName" label="商品名称" width="200" />
         <el-table-column prop="specification" label="规格型号" width="150" />
@@ -234,7 +235,7 @@
                 <el-table-column prop="runningQty" label="库存数量" width="120" class-name="stock-col">
                   <template #default="{ row }">
                     <span v-if="row.rowType === 'carryover'" style="font-weight: bold">{{ row.runningQty }}</span>
-                    <span v-else-if="row.runningQty \u003c 0" style="color: #f56c6c; font-weight: bold;">{{ row.runningQty }} ⚠️</span>
+                    <span v-else-if="row.runningQty < 0" style="color: #f56c6c; font-weight: bold;">{{ row.runningQty }} ⚠️</span>
                     <span v-else>{{ row.runningQty }}</span>
                   </template>
                 </el-table-column>
@@ -281,7 +282,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, watch } from 'vue'
+import { ref, reactive, computed, watch, onMounted } from 'vue'
 import { Search, RefreshLeft, Check, Back, Download, Printer, Close } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import exportToCsv from '../../utils/exportCsv'
@@ -294,11 +295,19 @@ const queryForm = reactive({
 })
 
 // 仓库列表
-const warehouses = ref([
-  { id: 1, name: '主仓库' },
-  { id: 2, name: '备用仓库' },
-  { id: 3, name: '临时仓库' }
-])
+const warehouses = ref<any[]>([])
+
+// 加载仓库列表
+const loadWarehouses = () => {
+  try {
+    const saved = localStorage.getItem('warehouses')
+    if (saved) {
+      warehouses.value = JSON.parse(saved).filter((w: any) => w.status === 1)
+    }
+  } catch (error) {
+    console.error('加载仓库列表失败:', error)
+  }
+}
 
 // 结算数据列表
 const settlementList = ref<any[]>([])
@@ -353,6 +362,7 @@ const handleReset = () => {
 
 // 开始计算
 const handleCalculate = () => {
+  console.log('========== 开始计算成本结算 ==========')
   if (!queryForm.periodRange || queryForm.periodRange.length !== 2) {
     ElMessage.warning('请选择会计期间（开始日期至结束日期）')
     return
@@ -486,15 +496,23 @@ const loadSettlementData = () => {
   })
   console.log('上期结算数据数量:', previousSettlements.length)
   
-// 参照实时库存查询的明细功能，遍历所有 localStorage 键来查找出入库记录
-const periodInboundRecords: any[] = []  // 本期入库记录
-const periodOutboundRecords: any[] = [] // 本期出库记录
+  // 参照实时库存查询的明细功能，遍历所有 localStorage 键来查找出入库记录
+  const periodInboundRecords: any[] = []  // 本期入库记录
+  const periodOutboundRecords: any[] = [] // 本期出库记录
 
-console.log('=== 开始扫描 localStorage 中的出入库记录 ===')
-console.log('会计期间:', startDate + ' 至 ' + endDate)
+  console.log('=== 开始扫描 localStorage 中的出入库记录 ===')
+  console.log('会计期间:', startDate + ' 至 ' + endDate)
+  
+  // 获取 localStorage 所有键
+  const allKeys = []
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i)
+    if (k) allKeys.push(k)
+  }
+  console.log('localStorage 所有键:', allKeys)
 
-// 遍历 localStorage 中所有可能的数组
-for (let i = 0; i < localStorage.length; i++) {
+  // 遍历 localStorage 中所有可能的数组
+  for (let i = 0; i < localStorage.length; i++) {
   const key = localStorage.key(i)
   if (!key) continue
   
@@ -503,24 +521,37 @@ for (let i = 0; i < localStorage.length; i++) {
   
   try {
     const arr = JSON.parse(raw)
-    if (!Array.isArray(arr)) continue
+    if (!Array.isArray(arr)) {
+      console.log(`跳过非数组键：${key}`)
+      continue
+    }
     
-    // 判断是入库还是出库 - 明确指定键名
-    const inboundKeys = ['inbound_records', 'purchaseInbounds', 'inbounds', 'purchase_inbounds']
-    const outboundKeys = ['sales_outbound_records', 'outbound_records', 'outbounds', 'sales_outbounds', 'salesOutbounds', 'delivery_records']
-    const returnsKeys = ['purchaseReturns', 'salesReturns', 'purchase_returns', 'sales_returns']
+    console.log(`检查键：${key}, 数据量：${arr.length}`)
+    
+    // 判断是入库还是出库 - 使用 includes 进行模糊匹配
+    const isKeyMatch = (key: string, patterns: string[]) => {
+      return patterns.some(pattern => key.includes(pattern))
+    }
+    
+    const inboundPatterns = ['inbound_records', 'purchaseInbounds', 'inbounds', 'purchase_inbounds']
+    const outboundPatterns = ['sales_outbound_records', 'outbound_records', 'outbounds', 'sales_outbounds', 'salesOutbounds', 'delivery_records']
+    const returnsPatterns = ['purchaseReturns', 'salesReturns', 'purchase_returns', 'sales_returns', 'return']
     
     let isInbound = false
     let isOutbound = false
     
-    // 精确匹配键名
-    if (inboundKeys.includes(key)) {
+    // 使用 includes 进行模糊匹配
+    if (isKeyMatch(key, inboundPatterns)) {
       isInbound = true
       console.log(`✓ 找到入库单数据：${key} (${arr.length} 条记录)`)
-    } else if (outboundKeys.includes(key)) {
+      // 打印第一条记录用于调试
+      if (arr.length > 0) {
+        console.log('入库单示例数据:', JSON.stringify(arr[0], null, 2))
+      }
+    } else if (isKeyMatch(key, outboundPatterns)) {
       isOutbound = true
       console.log(`✓ 找到出库单数据：${key} (${arr.length} 条记录)`)
-    } else if (returnsKeys.includes(key) || key.toLowerCase().includes('return')) {
+    } else if (isKeyMatch(key, returnsPatterns)) {
       isOutbound = true // 退货也作为出库处理
       console.log(`✓ 找到退货数据：${key} (${arr.length} 条记录)`)
     } else {
@@ -549,8 +580,80 @@ for (let i = 0; i < localStorage.length; i++) {
         const productName = String(it.productName || it.name || '').trim()
         const productId = it.productId || it.id || null
         const qty = Number(it.quantity || it.qty || it.count || it.num || 0)
-        const unitPriceInc = Number(it.unitPriceInc || it.unitPriceTaxIncluded || it.priceWithTax || it.unitPrice || it.price || 0)
-        const entryAmount = Number((qty * unitPriceInc).toFixed(2))
+        
+        // ========== 成本价提取规则 ==========
+        // 以下两种情况使用不含税价：
+        // 1. 发票已开具 + 发票类型为专票
+        // 2. 发票已开具 + 发票类型为普票 + 税率为免税 + 加计扣除为开启
+        // 其他所有情况，使用含税价
+        
+        const invoiceIssued = rec.invoiceIssued
+        const invoiceType = rec.invoiceType
+        const taxRate = it.taxRate
+        const allowDeduction = it.allowDeduction
+        
+        const unitPriceEx = Number(it.unitPriceEx || it.unitPriceWithoutTax || 0)
+        const unitPriceInc = Number(it.unitPriceInc || it.unitPrice || it.unitPriceTaxIncluded || 0)
+        
+        let costPrice = 0
+        
+        // 调试：打印原始值
+        console.log('原始值检查:', {
+          invoiceIssued,
+          typeof_invoiceIssued: typeof invoiceIssued,
+          invoiceType,
+          taxRate,
+          allowDeduction,
+          typeof_allowDeduction: typeof allowDeduction,
+          unitPriceEx,
+          unitPriceInc
+        })
+        
+        // 直接使用 === 判断
+        const isInvoiceIssued = invoiceIssued === true
+        const isSpecialInvoice = invoiceType === '专票'
+        const isGeneralInvoice = invoiceType === '普票'
+        const isTaxFree = taxRate === '免税'
+        const isDeductionEnabled = allowDeduction === true
+        
+        const condition1 = isInvoiceIssued && isSpecialInvoice
+        const condition2 = isInvoiceIssued && isGeneralInvoice && isTaxFree && isDeductionEnabled
+        
+        console.log('判断结果:', {
+          isInvoiceIssued,
+          isSpecialInvoice,
+          isGeneralInvoice,
+          isTaxFree,
+          isDeductionEnabled,
+          condition1: condition1 ? '✓ 专票条件满足' : '✗ 专票条件不满足',
+          condition2: condition2 ? '✓ 普票加计扣除条件满足' : '✗ 普票加计扣除条件不满足',
+          shouldUseUnitPriceEx: condition1 || condition2
+        })
+        
+        if (condition1 || condition2) {
+          // 满足专票条件 或 普票加计扣除条件：使用不含税价
+          costPrice = unitPriceEx > 0 ? unitPriceEx : unitPriceInc
+          console.log('✓ 使用不含税价:', costPrice, condition1 ? '(专票)' : '(普票加计扣除)')
+        } else {
+          // 其他所有情况：使用含税价
+          costPrice = unitPriceInc > 0 ? unitPriceInc : unitPriceEx
+          console.log('✗ 使用含税价:', costPrice)
+        }
+        
+        // 调试日志
+        console.log('=== 入库单成本价计算详情 ===')
+        console.log('单号:', rec.voucherNo || rec.orderNo)
+        console.log('产品:', productName, productCode)
+        console.log('发票状态:', {
+          invoiceIssued,
+          invoiceType,
+          taxRate,
+          allowDeduction
+        })
+        console.log('价格:', { unitPriceEx, unitPriceInc })
+        console.log('成本价:', costPrice)
+        
+        const entryAmount = Number((qty * costPrice).toFixed(2))
         
         const record = {
           productCode,
@@ -560,10 +663,18 @@ for (let i = 0; i < localStorage.length; i++) {
           voucherDate: recDateStr,
           quantity: qty,
           unitPriceInc,
+          unitPriceEx,
+          costPrice,
           amount: entryAmount,
+          invoiceIssued,
+          invoiceType,
+          taxRate,
+          allowDeduction,
           supplierName: rec.supplierName || rec.supplier || '',
           customerName: rec.customerName || rec.customer || '',
-          remark: rec.remark || rec.note || ''
+          remark: rec.remark || rec.note || '',
+          isReturn: rec.isReturn || rec.type === 'return' || false,
+          warehouseId: rec.warehouseId || rec.fromWarehouseId || rec.toWarehouseId || null
         }
         
         if (isInbound) {
@@ -601,24 +712,34 @@ if (periodOutboundRecords.length > 0) {
   console.log('=== 出库记录示例 ===')
   console.log(JSON.stringify(periodOutboundRecords[0], null, 2))
 }
-  
-  // 为每个产品计算成本结算
-  const settlements: any[] = []
+
+// 为每个产品和每个仓库计算成本结算
+const settlements: any[] = []
+
+// 遍历所有仓库
+warehouses.value.forEach((warehouse: any) => {
+  const warehouseId = warehouse.id
   
   products.forEach((product: any) => {
     // ========== 1. 期初数据（来自上期期末）==========
-    const previousRecord = previousSettlements.find((s: any) => s.productCode === product.code)
+    const previousRecord = previousSettlements.find((s: any) => 
+      s.productCode === product.code && s.warehouseId === warehouseId
+    )
     const openingQty = previousRecord ? Number(previousRecord.closingQty || 0) : 0
     const openingCost = previousRecord ? Number(previousRecord.closingCost || 0) : 0
     
-    // ========== 2. 本期入库数据（当前会计期间）==========
+    // ========== 2. 本期入库数据（当前会计期间，指定仓库）==========
     const inboundRecords = periodInboundRecords.filter((rec: any) => {
-      return rec.productCode === product.code || rec.productId === product.id
+      const matchProduct = rec.productCode === product.code || rec.productId === product.id
+      const matchWarehouse = rec.warehouseId === warehouseId
+      return matchProduct && matchWarehouse
     })
     
-    // ========== 3. 本期出库数据（当前会计期间）==========
+    // ========== 3. 本期出库数据（当前会计期间，指定仓库）==========
     const outboundRecords = periodOutboundRecords.filter((rec: any) => {
-      return rec.productCode === product.code || rec.productId === product.id
+      const matchProduct = rec.productCode === product.code || rec.productId === product.id
+      const matchWarehouse = rec.warehouseId === warehouseId
+      return matchProduct && matchWarehouse
     })
     
     // ========== 4. 计算本期入库数量和成本==========
@@ -627,12 +748,18 @@ if (periodOutboundRecords.length > 0) {
     
     inboundRecords.forEach((rec: any) => {
       const quantity = Number(rec.quantity || 0)
-      const unitPrice = Number(rec.unitPriceInc || 0)
-      const totalAmount = quantity * unitPrice
+      // 使用成本价字段（已根据发票类型和税率正确计算）
+      const costPrice = Number(rec.costPrice || rec.unitPriceEx || rec.unitPriceInc || 0)
+      const totalAmount = quantity * costPrice
       
       inboundQty += quantity
       inboundCost += totalAmount
     })
+    
+    // 如果期初、入库、出库都没有数据，跳过
+    if (openingQty === 0 && inboundQty === 0 && outboundRecords.length === 0) {
+      return
+    }
     
     // ========== 5. 计算加权平均单价==========
     // 加权平均单价 = (期初成本 + 本期入库成本) / (期初数量 + 本期入库数量)
@@ -662,7 +789,8 @@ if (periodOutboundRecords.length > 0) {
       productName: product.name,
       specification: product.specification || '',
       unit: product.unit || '',
-      warehouseId: product.warehouseId || 1,
+      warehouseId: warehouseId,
+      warehouseName: warehouse.name,
       periodRange: [startDate, endDate],
       // 期初数据
       openingQty,
@@ -680,6 +808,7 @@ if (periodOutboundRecords.length > 0) {
       closingCost
     })
   })
+})
   
   // 保存到 localStorage
   const existingSettlements = JSON.parse(localStorage.getItem('cost_settlements') || '[]')
@@ -709,6 +838,7 @@ const loadDetailData = (row: any) => {
   
   const productCode = String(row.productCode || '').trim()
   const productId = row.productId || null
+  const warehouseId = row.warehouseId || null
   
   // 获取期初数据（上个月月末结存）
   const openingQty = Number(row.openingQty || 0)
@@ -763,6 +893,11 @@ const loadDetailData = (row: any) => {
         
         if (!inRange) continue
         
+        // 筛选仓库
+        const recWarehouseId = rec.warehouseId || rec.fromWarehouseId || rec.toWarehouseId || null
+        const warehouseMatch = recWarehouseId === warehouseId
+        if (!warehouseMatch) continue
+        
         const items = rec.items || rec.products || rec.details || rec.lines || rec.itemsList
         if (!Array.isArray(items)) continue
         
@@ -774,25 +909,80 @@ const loadDetailData = (row: any) => {
           const match = (itId && productId && itId === productId) || (itCode && productCode && itCode === productCode)
           if (!match) continue
           
+          // 调试日志：显示匹配到的产品原始数据
+          console.log('===== 匹配到的入库单产品数据 =====')
+          console.log('单号:', rec.voucherNo || rec.orderNo)
+          console.log('产品:', it.productName || it.name, itCode)
+          console.log('原始数据:', JSON.stringify(it, null, 2))
+          console.log('入库单原始数据:', JSON.stringify({
+            invoiceIssued: rec.invoiceIssued,
+            invoice_status: rec.invoice_status,
+            invoiceStatus: rec.invoiceStatus,
+            invoiceType: rec.invoiceType,
+            invoice_type: rec.invoice_type,
+            invoiceTypeName: rec.invoiceTypeName
+          }, null, 2))
+          
           const quantity = Number(it.quantity || it.qty || it.count || it.num || 0)
           const unitPriceInc = Number(it.unitPriceInc || it.unitPriceTaxIncluded || it.priceWithTax || it.unitPrice || it.price || 0)
-          const unitPriceExc = Number(it.unitPriceExc || it.unitPriceTaxExcluded || it.priceWithoutTax || 0)
+          const unitPriceEx = Number(it.unitPriceEx || it.unitPriceWithoutTax || it.priceWithoutTax || 0)
           
-          // 获取发票类型和加计扣除状态
-          const invoiceType = rec.invoiceType || rec.invoice_type || 'none' // 'special', 'general', 'none'
-          const isAgricultural = rec.isAgricultural || rec.is_agricultural || false
-          const isDeduction = rec.isDeduction || rec.is_deduction || it.isDeduction || it.is_deduction || false
+          // ========== 成本价提取规则 ==========
+          // 以下两种情况使用不含税价：
+          // 1. 发票已开具 + 发票类型为专票
+          // 2. 发票已开具 + 发票类型为普票 + 税率为免税 + 加计扣除为开启
+          // 其他所有情况，使用含税价
           
-          // 入库成本价提取规则
+          const invoiceIssued = rec.invoiceIssued
+          const invoiceType = rec.invoiceType
+          const taxRate = it.taxRate
+          const allowDeduction = it.allowDeduction
+          
           let inboundCostPrice = 0
-          if (isInbound) {
-            // 规则：专票或加计扣除打开 → 单价（不含税），否则 → 单价（含税）
-            if (invoiceType === 'special' || (isAgricultural && isDeduction)) {
-              inboundCostPrice = unitPriceExc > 0 ? unitPriceExc : unitPriceInc / 1.09
-            } else {
-              inboundCostPrice = unitPriceInc
-            }
+          
+          // 调试：打印原始值
+          console.log('库存结余 - 原始值检查:', {
+            invoiceIssued,
+            typeof_invoiceIssued: typeof invoiceIssued,
+            invoiceType,
+            taxRate,
+            allowDeduction,
+            typeof_allowDeduction: typeof allowDeduction,
+            unitPriceEx,
+            unitPriceInc
+          })
+          
+          // 直接使用 === 判断
+          const isInvoiceIssued = invoiceIssued === true
+          const isSpecialInvoice = invoiceType === '专票'
+          const isGeneralInvoice = invoiceType === '普票'
+          const isTaxFree = taxRate === '免税'
+          const isDeductionEnabled = allowDeduction === true
+          
+          const condition1 = isInvoiceIssued && isSpecialInvoice
+          const condition2 = isInvoiceIssued && isGeneralInvoice && isTaxFree && isDeductionEnabled
+          
+          console.log('库存结余 - 判断结果:', {
+            isInvoiceIssued,
+            isSpecialInvoice,
+            isGeneralInvoice,
+            isTaxFree,
+            isDeductionEnabled,
+            condition1: condition1 ? '✓ 专票条件满足' : '✗ 专票条件不满足',
+            condition2: condition2 ? '✓ 普票加计扣除条件满足' : '✗ 普票加计扣除条件不满足',
+            shouldUseUnitPriceEx: condition1 || condition2
+          })
+          
+          if (condition1 || condition2) {
+            // 满足专票条件 或 普票加计扣除条件：使用不含税价
+            inboundCostPrice = unitPriceEx > 0 ? unitPriceEx : unitPriceInc
+            console.log('库存结余 - ✓ 使用不含税价:', inboundCostPrice, condition1 ? '(专票)' : '(普票加计扣除)')
+          } else {
+            // 其他所有情况：使用含税价
+            inboundCostPrice = unitPriceInc > 0 ? unitPriceInc : unitPriceEx
+            console.log('库存结余 - ✗ 使用含税价:', inboundCostPrice)
           }
+          console.log('========================')
           
           const counter = rec.counterName || rec.supplierName || rec.customerName || rec.companyName || ''
           const docNo = rec.voucherNo || rec.orderNo || rec.number || rec.no || ''
@@ -830,17 +1020,14 @@ const loadDetailData = (row: any) => {
             counter,
             remark: rec.remark || '',
             monthKey,
-            invoiceType,
-            isAgricultural,
-            isDeduction,
             unitPriceInc,
-            unitPriceExc
+            unitPriceEx
           }
           
           if (isInbound) {
             entry.inboundQty = quantity
             entry.inboundUnitPrice = inboundCostPrice
-            entry.inboundAmount = quantity * inboundCostPrice
+            entry.inboundAmount = Number((quantity * inboundCostPrice).toFixed(2))
           } else if (isOutbound) {
             entry.outboundQty = quantity
             // 出库成本价将在后续处理时从上一行库存结余获取
@@ -892,7 +1079,7 @@ const loadDetailData = (row: any) => {
   }
   
   // 逐月处理
-  sortedMonths.forEach((monthKey, monthIndex) => {
+  sortedMonths.forEach((monthKey) => {
     const entries = monthlyData.get(monthKey)!
     
     // 按日期排序，入库在前，出库在后
@@ -999,6 +1186,16 @@ const loadDetailData = (row: any) => {
   
   console.log('明细数据加载完成，共', ledgerEntries.value.length, '条记录')
 }
+
+// 页面加载时自动加载数据
+onMounted(() => {
+  console.log('成本结算模块已加载')
+  loadWarehouses()
+  // 如果有会计期间，自动加载数据
+  if (queryForm.periodRange && queryForm.periodRange.length === 2) {
+    loadSettlementData()
+  }
+})
 </script>
 
 <style scoped>

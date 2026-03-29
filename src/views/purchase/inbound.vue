@@ -40,6 +40,11 @@
         <el-table-column prop="voucherNo" label="凭证号" width="150" />
         <el-table-column prop="voucherDate" label="日期" width="120" />
         <el-table-column prop="supplierName" label="供应商" min-width="120" />
+        <el-table-column prop="warehouseName" label="仓库" width="120">
+          <template #default="{ row }">
+            {{ row.warehouseName || '-' }}
+          </template>
+        </el-table-column>
         <el-table-column prop="itemCount" label="商品行数" width="80">
           <template #default="{ row }">
             {{ row.items?.length || 0 }}
@@ -139,6 +144,43 @@
             </el-form-item>
           </el-col>
           <el-col :span="12">
+            <el-form-item label="仓库" prop="warehouseId">
+              <el-select
+                v-model="formData.warehouseId"
+                placeholder="请选择仓库"
+                style="width: 100%"
+                filterable
+                @change="handleWarehouseChange"
+              >
+                <el-option
+                  v-for="warehouse in warehouses"
+                  :key="warehouse.id"
+                  :label="warehouse.name"
+                  :value="warehouse.id"
+                >
+                  <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span>{{ warehouse.name }}</span>
+                    <el-switch
+                      v-if="!isViewMode"
+                      :model-value="defaultWarehouseId === warehouse.id"
+                      :active-value="true"
+                      :inactive-value="false"
+                      inline-prompt
+                      active-text="默认"
+                      inactive-text=""
+                      style="--el-switch-width: 60px; --el-switch-inactive-color: #dcdfe6;"
+                      @click.stop
+                      @change="(val: boolean) => saveDefaultWarehouse(warehouse.id)"
+                    />
+                  </div>
+                </el-option>
+              </el-select>
+            </el-form-item>
+          </el-col>
+        </el-row>
+
+        <el-row :gutter="20">
+          <el-col :span="12">
             <el-form-item label="经办人" prop="handlerId">
               <el-select
                 v-model="formData.handlerId"
@@ -163,7 +205,9 @@
                       active-text="默认"
                       inactive-text=""
                       style="--el-switch-width: 60px; --el-switch-inactive-color: #dcdfe6;"
-                      :disabled="dialogType === 'view'"
+                      :disabled="isViewMode"
+                      @click.stop
+                      @change="(val: boolean) => saveDefaultHandler(employee.id)"
                     />
                   </div>
                 </el-option>
@@ -230,6 +274,7 @@
                 :precision="2"
                 :controls="false"
                 style="width: 100%"
+                @focus="handleFocus(row, 'quantity')"
                 @change="onQuantityChange(row)"
               />
             </template>
@@ -248,6 +293,7 @@
                 :step="0.01"
                 :controls="false"
                 style="width: 100%"
+                @focus="handleFocus(row, 'unitPriceEx')"
                 @change="onUnitPriceExChange(row)"
               />
             </template>
@@ -262,6 +308,7 @@
                 :step="0.01"
                 :controls="false"
                 style="width: 100%"
+                @focus="handleFocus(row, 'unitPrice')"
                 @change="onUnitPriceInclChange(row)"
               />
             </template>
@@ -293,6 +340,7 @@
                 :precision="2"
                 :controls="false"
                 style="width: 100%"
+                @focus="handleFocus(row, 'totalAmountEx')"
                 @change="onAmountExChange(row)"
               />
             </template>
@@ -305,6 +353,7 @@
                 :precision="2"
                 :controls="false"
                 style="width: 100%"
+                @focus="handleFocus(row, 'totalAmount')"
                 @change="onAmountInclChange(row)"
               />
             </template>
@@ -349,7 +398,7 @@
         <el-row :gutter="20" style="margin-bottom: 10px">
           <el-col :span="12">
             <div style="font-size: 14px">已付款：
-              <el-input-number v-model="formData.paidAmount" :min="0" :precision="2" :controls="false" style="width:160px" /> 元
+              <el-input-number v-model="formData.paidAmount" :min="0" :precision="2" :controls="false" style="width:160px" @focus="handlePaidAmountFocus" /> 元
             </div>
           </el-col>
           <el-col :span="12" style="text-align: right">
@@ -424,6 +473,8 @@ interface InboundRecord {
   voucherDate: string
   supplierId?: number
   supplierName: string
+  warehouseId?: number
+  warehouseName?: string
   handlerId?: number
   handlerName?: string
   operator: string
@@ -458,11 +509,19 @@ interface Employee {
   status?: number
 }
 
+interface Warehouse {
+  id: number
+  code: string
+  name: string
+  status?: number
+}
+
 // 响应式数据
 const inboundList = ref<InboundRecord[]>([])
 const productList = ref<Product[]>([])
 const suppliers = ref<Supplier[]>([])
 const employees = ref<Employee[]>([])
+const warehouses = ref<Warehouse[]>([])
 const total = ref(0)
 const currentPage = ref(1)
 const pageSize = ref(10)
@@ -476,6 +535,8 @@ const isViewMode = ref(false)
 
 // 默认经办人 ID
 const defaultHandlerId = ref<number | undefined>(undefined)
+// 默认仓库 ID
+const defaultWarehouseId = ref<number | undefined>(undefined)
 
 // 表单数据
 const formData = reactive<InboundRecord>({
@@ -483,6 +544,8 @@ const formData = reactive<InboundRecord>({
   voucherDate: dayjs().format('YYYY-MM-DD'),
   supplierId: undefined,
   supplierName: '',
+  warehouseId: undefined,
+  warehouseName: '',
   handlerId: undefined,
   handlerName: '',
   operator: '',
@@ -499,6 +562,7 @@ const rules = {
   voucherNo: [{ required: true, message: '请输入凭证号', trigger: 'blur' }],
   voucherDate: [{ required: true, message: '请选择入库日期', trigger: 'change' }],
   supplierId: [{ required: true, message: '请选择供应商', trigger: 'change' }],
+  warehouseId: [{ required: true, message: '请选择仓库', trigger: 'change' }],
   items: [{ required: true, message: '请至少添加一行商品', trigger: 'blur' }]
 }
 
@@ -536,6 +600,18 @@ const loadInboundList = async () => {
           r.supplierName?.toLowerCase().includes(query)
         )
       }
+      
+      // 按日期和时间戳正序排序
+      filtered.sort((a: any, b: any) => {
+        const dateA = new Date(a.voucherDate || a.date || '1970-01-01').getTime()
+        const dateB = new Date(b.voucherDate || b.date || '1970-01-01').getTime()
+        if (dateA !== dateB) {
+          return dateA - dateB
+        }
+        const timeA = a.createdAt || a._timestamp || a.voucherDate || '1970-01-01'
+        const timeB = b.createdAt || b._timestamp || b.voucherDate || '1970-01-01'
+        return new Date(timeA).getTime() - new Date(timeB).getTime()
+      })
       
       inboundList.value = filtered
     }
@@ -601,6 +677,22 @@ const loadSuppliers = async () => {
   }
 }
 
+// 加载仓库列表
+const loadWarehouses = async () => {
+  try {
+    const savedWarehouses = localStorage.getItem('warehouses')
+    if (savedWarehouses) {
+      const allWarehouses = JSON.parse(savedWarehouses)
+      warehouses.value = allWarehouses.filter((w: Warehouse) => w.status === 1)
+    } else {
+      warehouses.value = []
+    }
+  } catch (error) {
+    console.error('加载仓库列表失败:', error)
+    warehouses.value = []
+  }
+}
+
 // 加载员工列表
 const loadEmployees = () => {
   try {
@@ -622,9 +714,23 @@ const loadEmployees = () => {
     if (savedDefaultHandler) {
       defaultHandlerId.value = parseInt(savedDefaultHandler)
     }
+    
+    // 加载默认仓库
+    const savedDefaultWarehouse = localStorage.getItem('defaultWarehouseId')
+    if (savedDefaultWarehouse) {
+      defaultWarehouseId.value = parseInt(savedDefaultWarehouse)
+    }
   } catch (error) {
     console.error('加载员工列表失败:', error)
     employees.value = []
+  }
+}
+
+// 仓库选择变化
+const handleWarehouseChange = (warehouseId: number) => {
+  const warehouse = warehouses.value.find(w => w.id === warehouseId)
+  if (warehouse) {
+    formData.warehouseName = warehouse.name
   }
 }
 
@@ -653,7 +759,9 @@ const handleAdd = () => {
     voucherDate: dayjs().format('YYYY-MM-DD'),
     supplierId: undefined,
     supplierName: '',
-    handlerId: defaultHandlerId.value, // 使用默认经办人
+    warehouseId: defaultWarehouseId.value,
+    warehouseName: '',
+    handlerId: defaultHandlerId.value,
     handlerName: '',
     operator: localStorage.getItem('currentUser') ? JSON.parse(localStorage.getItem('currentUser')!).name : '系统用户',
     items: [],
@@ -663,11 +771,17 @@ const handleAdd = () => {
     invoiceIssued: false
   })
   
-  // 如果有默认经办人，自动加载经办人名称
   if (defaultHandlerId.value) {
     const employee = employees.value.find(e => e.id === defaultHandlerId.value)
     if (employee) {
       formData.handlerName = employee.name
+    }
+  }
+  
+  if (defaultWarehouseId.value) {
+    const warehouse = warehouses.value.find(w => w.id === defaultWarehouseId.value)
+    if (warehouse) {
+      formData.warehouseName = warehouse.name
     }
   }
   
@@ -772,6 +886,21 @@ const removeItem = (index: number) => {
   calculateTotalAmount()
 }
 
+// 处理输入框聚焦事件，清空 0 值让用户直接输入
+const handleFocus = (row: InboundItem, field: string) => {
+  const value = row[field as keyof InboundItem]
+  if (value === 0 || value === '0') {
+    row[field as keyof InboundItem] = '' as any
+  }
+}
+
+// 处理已付款聚焦事件
+const handlePaidAmountFocus = () => {
+  if (formData.paidAmount === 0 || formData.paidAmount === '0') {
+    formData.paidAmount = '' as any
+  }
+}
+
 // 处理商品选择变化
 const handleProductChange = (index: number, productId: number) => {
   const product = productList.value.find(p => p.id === productId)
@@ -781,9 +910,13 @@ const handleProductChange = (index: number, productId: number) => {
     // 优先使用 spec（产品表字段），其次使用 specification，最后使用 code 作为备用
     item.specification = product.spec || product.specification || product.code || ''
     item.unit = product.unit || ''
-    item.unitPriceEx = product.costPrice || 0
+    // 如果产品有成本价则使用，否则保持为空
+    item.unitPriceEx = product.costPrice && product.costPrice > 0 ? product.costPrice : ('' as any)
     item._lastEdited = 'unitEx'
-    calculateRowTotal(item)
+    // 只有当有价格时才计算总额
+    if (item.unitPriceEx && item.unitPriceEx !== '') {
+      calculateRowTotal(item)
+    }
   }
 }
 
@@ -1115,6 +1248,14 @@ const saveDefaultHandler = (handlerId: number | undefined) => {
   }
 }
 
+// 保存默认仓库
+const saveDefaultWarehouse = (warehouseId: number | undefined) => {
+  if (warehouseId) {
+    localStorage.setItem('defaultWarehouseId', warehouseId.toString())
+    defaultWarehouseId.value = warehouseId
+  }
+}
+
 // 提交表单
 const handleSubmit = async () => {
   try {
@@ -1375,6 +1516,7 @@ onMounted(() => {
   loadInboundList()
   loadProducts()
   loadSuppliers()
+  loadWarehouses()
   loadEmployees()
   loadCurrentUser()
 })
