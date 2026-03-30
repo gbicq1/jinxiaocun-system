@@ -131,8 +131,8 @@ export const getRealTimeStock = (productId: number | undefined, warehouseId: num
           const recWarehouseId = rec.warehouseId
           const recWarehouseName = rec.warehouseName
           
-          // 检查仓库是否匹配
-          const warehouseMatch = (recWarehouseId && recWarehouseId === warehouseId) || 
+          // 检查仓库是否匹配 - 使用 Number() 转换确保类型一致
+          const warehouseMatch = (recWarehouseId != null && Number(recWarehouseId) === Number(warehouseId)) || 
                                 (recWarehouseName && recWarehouseName === String(warehouseId))
           
           if (!warehouseMatch) continue
@@ -315,8 +315,8 @@ export const getStockBeforeDateTime = (
           const recWarehouseId = rec.warehouseId
           const recWarehouseName = rec.warehouseName
           
-          // 检查仓库是否匹配
-          const warehouseMatch = (recWarehouseId && recWarehouseId === warehouseId) || 
+          // 检查仓库是否匹配 - 使用 Number() 转换确保类型一致
+          const warehouseMatch = (recWarehouseId != null && Number(recWarehouseId) === Number(warehouseId)) || 
                                 (recWarehouseName && recWarehouseName === String(warehouseId))
           
           if (!warehouseMatch) continue
@@ -447,8 +447,8 @@ export const getStockDetails = (productId: number | undefined, warehouseId: numb
         const recWarehouseId = rec.warehouseId
         const recWarehouseName = rec.warehouseName
         
-        // 检查仓库是否匹配
-        const warehouseMatch = (recWarehouseId && recWarehouseId === warehouseId) || 
+        // 检查仓库是否匹配 - 使用 Number() 转换确保类型一致
+        const warehouseMatch = (recWarehouseId != null && Number(recWarehouseId) === Number(warehouseId)) || 
                               (recWarehouseName && recWarehouseName === String(warehouseId))
         
         if (!warehouseMatch) continue

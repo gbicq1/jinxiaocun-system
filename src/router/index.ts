@@ -82,6 +82,12 @@ const routes: any[] = [
         name: 'SalesReturns',
         component: () => import('@/views/sales/returns.vue'),
         meta: { title: '销售订单退换货', icon: 'RefreshLeft' }
+      },
+      {
+        path: 'invoice-management',
+        name: 'SalesInvoiceManagement',
+        component: () => import('@/views/sales/invoice-management.vue'),
+        meta: { title: '销售开票管理', icon: 'Document' }
       }
     ]
   },
@@ -114,6 +120,12 @@ const routes: any[] = [
         name: 'PurchaseReturns',
         component: () => import('@/views/purchase/returns.vue'),
         meta: { title: '采购订单退换货', icon: 'RefreshRight' }
+      },
+      {
+        path: 'invoice-management',
+        name: 'PurchaseInvoiceManagement',
+        component: () => import('@/views/purchase/invoice-management.vue'),
+        meta: { title: '采购开票管理', icon: 'Document' }
       }
     ]
   },

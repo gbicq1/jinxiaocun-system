@@ -31,6 +31,7 @@
           </template>
           <el-menu-item index="/sales/outbound">销售出库</el-menu-item>
           <el-menu-item index="/sales/returns">销售订单退换货</el-menu-item>
+          <el-menu-item index="/sales/invoice-management">销售开票管理</el-menu-item>
         </el-sub-menu>
 
         <el-sub-menu index="purchase">
@@ -40,6 +41,7 @@
           </template>
           <el-menu-item index="/purchase/inbound">采购入库</el-menu-item>
           <el-menu-item index="/purchase/returns">采购订单退换货</el-menu-item>
+          <el-menu-item index="/purchase/invoice-management">采购开票管理</el-menu-item>
         </el-sub-menu>
 
         <el-sub-menu index="inventory">

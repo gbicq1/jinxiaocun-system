@@ -340,6 +340,40 @@ const handleEdit = (row: any) => {
     items: row.items || []
   })
   dialogVisible.value = true
+  
+  // 编辑时，重新获取每个产品的最新成本价并检查库存
+  setTimeout(() => {
+    formData.items.forEach((item: any, index: number) => {
+      if (item.productId) {
+        // 自动从成本结算模块获取最新成本价
+        const costPrice = getCostFromSettlement(item.productId, formData.fromWarehouseId, formData.transferDate)
+        if (costPrice > 0) {
+          item.unitPriceEx = costPrice
+          // 根据数量和单价计算金额
+          if (item.quantity > 0) {
+            item.totalAmountEx = Number((item.unitPriceEx * item.quantity).toFixed(2))
+          }
+        }
+        
+        // 检查库存是否足够
+        if (item.quantity && formData.fromWarehouseId) {
+          const stockBeforeDateTime = getStockBeforeDateTime(
+            item.productId, 
+            formData.fromWarehouseId, 
+            formData.transferDate, 
+            formData.createdAt,
+            formData.id
+          )
+          if (item.quantity > stockBeforeDateTime) {
+            ElMessage.warning({
+              message: `库存不足：${item.productName || '该商品'}，${formData.transferDate}前库存 ${stockBeforeDateTime}，调拨数量 ${item.quantity}`,
+              duration: 5000
+            })
+          }
+        }
+      }
+    })
+  }, 100)
 }
 
 // 添加产品
@@ -648,12 +682,13 @@ const handleSubmit = () => {
       // 更新
       const index = list.findIndex((item: any) => item.id === formData.id)
       if (index !== -1) {
-        list[index] = { ...formData }
+        list[index] = { ...formData, status: 'completed' }
       }
       ElMessage.success('更新成功')
     } else {
       // 新增
       formData.id = Date.now()
+      formData.status = 'completed'
       list.push({ ...formData })
       ElMessage.success('新增成功')
     }

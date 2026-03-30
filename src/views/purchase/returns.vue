@@ -283,7 +283,7 @@
                 @change="handleProductChange(row)"
               >
                 <el-option
-                  v-for="product in products"
+                  v-for="product in availableProducts"
                   :key="product.id"
                   :label="`${product.code} - ${product.name}`"
                   :value="product.id"
@@ -403,6 +403,36 @@
           添加商品
         </el-button>
 
+        <!-- 发票状态 -->
+        <el-row :gutter="20" style="background: #f5f7fa; padding: 15px; border-radius: 4px; margin-bottom: 20px">
+          <el-col :span="12">
+            <div style="display: flex; align-items: center">
+              <span style="font-weight: 500; margin-right: 10px">发票状态：</span>
+              <el-switch
+                v-model="formData.invoiceIssued"
+                @change="handleInvoiceIssuedChange"
+                active-text="已开票"
+                inactive-text="未开票"
+                active-color="#13ce66"
+                inactive-color="#ff4949"
+              />
+              <span v-if="formData.invoiceIssued" style="margin-left: 20px">
+                发票类型：
+                <el-select
+                  v-model="formData.invoiceType"
+                  placeholder="选择发票类型"
+                  size="small"
+                  style="width: 120px"
+                  @change="handleInvoiceTypeChange"
+                >
+                  <el-option label="普票" value="普票" />
+                  <el-option label="专票" value="专票" />
+                </el-select>
+              </span>
+            </div>
+          </el-col>
+        </el-row>
+
         <!-- 合计信息 -->
         <el-descriptions
           :column="2"
@@ -452,7 +482,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Printer, Download, Search } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
@@ -490,6 +520,8 @@ interface ReturnRecord {
   totalAmount: number
   remark?: string
   createdAt?: string
+  invoiceIssued?: boolean
+  invoiceType?: string
 }
 
 interface Product {
@@ -545,6 +577,24 @@ const defaultHandlerId = ref<number | undefined>(undefined)
 // 默认仓库 ID
 const defaultWarehouseId = ref<number | undefined>(undefined)
 
+// 计算属性：可选择的商品列表（如果选择了原入库单，只显示原入库单中的商品）
+const availableProducts = computed(() => {
+  if (!formData.originalVoucherNo) {
+    return products.value
+  }
+  
+  // 找到原入库单
+  const originalOrder = inboundList.value.find(ib => ib.voucherNo === formData.originalVoucherNo)
+  if (!originalOrder || !originalOrder.items) {
+    return products.value
+  }
+  
+  // 只返回原入库单中存在的商品
+  return products.value.filter(p => 
+    originalOrder.items.some((item: any) => item.productId === p.id)
+  )
+})
+
 // 表单数据
 const formRef = ref()
 const formData = reactive<ReturnRecord>({
@@ -559,7 +609,9 @@ const formData = reactive<ReturnRecord>({
   returnReason: '',
   items: [],
   totalAmount: 0,
-  remark: ''
+  remark: '',
+  invoiceIssued: false,
+  invoiceType: '普票'
 })
 
 const rules = {
@@ -840,6 +892,12 @@ const checkStockAvailability = (): boolean => {
     return false
   }
   
+  // 如果选择了原入库单，不检查实时库存，因为已经在validateReturnItems中检查过原入库单数量了
+  if (formData.originalVoucherNo) {
+    return true
+  }
+  
+  // 没有选择原入库单时，才检查实时库存
   for (let i = 0; i < formData.items.length; i++) {
     const item = formData.items[i]
     if (!item.productId || !item.quantity) continue
@@ -862,6 +920,49 @@ const checkStockAvailability = (): boolean => {
         `需要退货：${item.quantity}\n\n` +
         `请修改退货日期或退货数量！`
       )
+      return false
+    }
+  }
+  
+  return true
+}
+
+// 校验退货商品（验证是否在原入库单中，且数量不超过原入库单数量）
+const validateReturnItems = (): boolean => {
+  // 如果没有选择原入库单，不需要这个验证
+  if (!formData.originalVoucherNo) {
+    return true
+  }
+  
+  // 找到原入库单
+  const originalOrder = inboundList.value.find(ib => ib.voucherNo === formData.originalVoucherNo)
+  if (!originalOrder) {
+    ElMessage.error('找不到原入库单')
+    return false
+  }
+  
+  // 校验每一个退货商品
+  for (let i = 0; i < formData.items.length; i++) {
+    const retItem = formData.items[i]
+    
+    // 查找原订单中是否有这个商品
+    const origItem = originalOrder.items.find((item: any) => item.productId === retItem.productId)
+    
+    if (!origItem) {
+      ElMessage.error(`商品"${retItem.productName}"不在原入库单中，无法退货`)
+      return false
+    }
+    
+    // 校验退货数量不能超过原订单数量（取绝对值比较）
+    const retQty = Math.abs(retItem.quantity)
+    if (retQty > origItem.quantity) {
+      ElMessage.error(`商品"${retItem.productName}"的退货数量(${retQty})不能超过原入库单数量(${origItem.quantity})`)
+      return false
+    }
+    
+    // 校验退货数量必须大于0
+    if (retQty <= 0) {
+      ElMessage.error(`商品"${retItem.productName}"的退货数量必须大于0`)
       return false
     }
   }
@@ -907,7 +1008,12 @@ const handleSubmit = async () => {
       return
     }
     
-    // 检查库存是否足够
+    // 先验证退货商品是否在原入库单中，且数量不超过原入库单数量
+    if (!validateReturnItems()) {
+      return
+    }
+    
+    // 再检查库存是否足够
     if (!checkStockAvailability()) {
       return
     }
@@ -969,6 +1075,21 @@ const handleOriginalVoucherChange = (voucherNo: string) => {
     formData.supplierId = inbound.supplierId
     formData.supplierName = inbound.supplierName
     
+    // 同步更新仓库信息
+    if (inbound.warehouseId) {
+      formData.warehouseId = inbound.warehouseId
+      formData.warehouseName = inbound.warehouseName || ''
+    }
+    
+    // 同步更新经办人
+    if (inbound.operator) {
+      formData.operator = inbound.operator
+    }
+    
+    // 自动提取原入库单的发票状态
+    formData.invoiceIssued = inbound.invoiceIssued || false
+    formData.invoiceType = inbound.invoiceType || '普票'
+    
     // 加载原入库单的商品，同步所有字段包括税率和加计扣除
     formData.items = inbound.items.map((item: any) => ({
       productId: item.productId,
@@ -1001,6 +1122,32 @@ const handleWarehouseChange = (warehouseId: number) => {
   const warehouse = warehouses.value.find(w => w.id === warehouseId)
   if (warehouse) {
     formData.warehouseName = warehouse.name
+  }
+}
+
+// 处理发票状态变化
+const handleInvoiceIssuedChange = (val: boolean) => {
+  if (!val) {
+    // 如果改为未开票，重置加计扣除开关
+    formData.items.forEach(item => {
+      if (item.allowDeduction) {
+        item.allowDeduction = false
+      }
+    })
+    ElMessage.info('未开票状态下无法使用加计扣除')
+  }
+}
+
+// 处理发票类型变化
+const handleInvoiceTypeChange = (val: string) => {
+  if (val !== '普票') {
+    // 如果改为专票，重置加计扣除开关
+    formData.items.forEach(item => {
+      if (item.allowDeduction) {
+        item.allowDeduction = false
+      }
+    })
+    ElMessage.info('只有普票才允许加计扣除')
   }
 }
 
@@ -1160,8 +1307,14 @@ const onAmountChange = (item: ReturnItem) => {
 
 // 处理加计扣除开关变化
 const onDeductionSwitchChange = (item: ReturnItem) => {
-  // 如果税率不是免税，自动关闭开关
-  if (item.taxRate !== '免税') {
+  // 如果不满足条件，自动关闭开关
+  if (!formData.invoiceIssued) {
+    item.allowDeduction = false
+    ElMessage.warning('请先标记为已开票')
+  } else if (formData.invoiceType !== '普票') {
+    item.allowDeduction = false
+    ElMessage.warning('只有普票才允许加计扣除')
+  } else if (item.taxRate !== '免税') {
     item.allowDeduction = false
     ElMessage.warning('只有免税商品才允许加计扣除')
   }
@@ -1177,8 +1330,87 @@ const onTaxRateChange = (item: ReturnItem) => {
   calculateRowTotal(item)
 }
 
+// 校验单个退货商品（验证是否在原入库单中，且数量不超过原入库单数量）
+const validateSingleReturnItem = (item: ReturnItem): boolean => {
+  // 如果没有选择原入库单，不需要这个验证
+  if (!formData.originalVoucherNo) {
+    return true
+  }
+  
+  // 找到原入库单
+  const originalOrder = inboundList.value.find(ib => ib.voucherNo === formData.originalVoucherNo)
+  if (!originalOrder) {
+    return true
+  }
+  
+  // 查找原订单中是否有这个商品
+  const origItem = originalOrder.items.find((oItem: any) => oItem.productId === item.productId)
+  if (!origItem) {
+    ElMessage.error(`商品"${item.productName}"不在原入库单中，无法退货`)
+    return false
+  }
+  
+  // 校验退货数量不能超过原订单数量（取绝对值比较）
+  const retQty = Math.abs(item.quantity)
+  if (retQty > origItem.quantity) {
+    ElMessage.error(`商品"${item.productName}"的退货数量(${retQty})不能超过原入库单数量(${origItem.quantity})`)
+    return false
+  }
+  
+  return true
+}
+
+// 检查单个商品库存是否足够
+const checkSingleStockAvailability = (item: ReturnItem): boolean => {
+  const warehouseId = formData.warehouseId
+  const voucherDate = formData.voucherDate
+  const createdAt = formData.createdAt
+  
+  if (!warehouseId || !voucherDate) {
+    return true
+  }
+  
+  // 如果选择了原入库单，不检查实时库存
+  if (formData.originalVoucherNo) {
+    return true
+  }
+  
+  if (!item.productId || !item.quantity) return true
+  
+  // 获取该日期和时间之前的库存
+  const stockBeforeDateTime = getStockBeforeDateTime(
+    item.productId, 
+    warehouseId, 
+    voucherDate, 
+    createdAt,
+    formData.id
+  )
+  
+  if (stockBeforeDateTime < item.quantity) {
+    const productName = item.productName || '该商品'
+    ElMessage.error(
+      `库存不足：${productName}\n` +
+      `退货日期：${voucherDate}\n` +
+      `该时间前库存：${stockBeforeDateTime}\n` +
+      `需要退货：${item.quantity}`
+    )
+    return false
+  }
+  
+  return true
+}
+
+// 数量变化时处理
 const onQuantityChange = (item: ReturnItem) => {
   calculateRowTotal(item)
+  
+  // 实时检测：先验证原入库单数量
+  if (!validateSingleReturnItem(item)) {
+    return
+  }
+  
+  // 实时检测：再检查库存
+  checkSingleStockAvailability(item)
 }
 
 // 计算单据总额
@@ -1188,6 +1420,12 @@ const calculateTotalAmount = () => {
 
 // 添加商品
 const addItem = () => {
+  // 如果选择了原入库单，不允许添加新商品，只能从原入库单的商品中选择
+  if (formData.originalVoucherNo) {
+    ElMessage.warning('已选择原入库单，商品已从原入库单自动加载，如需退货请直接修改对应商品的数量')
+    return
+  }
+  
   formData.items.push({
     productId: undefined,
     productName: '',

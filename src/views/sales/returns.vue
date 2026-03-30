@@ -50,9 +50,14 @@
             {{ row.items?.length || 0 }}
           </template>
         </el-table-column>
-        <el-table-column prop="totalAmount" label="退货金额" width="120">
+        <el-table-column prop="totalAmount" label="退货金额（不含税）" width="150">
           <template #default="{ row }">
             -¥{{ Math.abs(row.totalAmount).toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
+          </template>
+        </el-table-column>
+        <el-table-column label="退货金额（含税）" width="150">
+          <template #default="{ row }">
+            -¥{{ Math.abs(row.totalInc || row.totalAmount || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
           </template>
         </el-table-column>
         <el-table-column prop="operator" label="经办人" width="100">
@@ -287,7 +292,7 @@
                 @change="handleProductChange(row)"
               >
                 <el-option
-                  v-for="product in products"
+                  v-for="product in selectableProducts"
                   :key="product.id"
                   :label="`${product.code} - ${product.name}`"
                   :value="product.id"
@@ -414,8 +419,11 @@
           border
           style="margin-top: 20px"
         >
-          <el-descriptions-item label="退货总金额">
+          <el-descriptions-item label="退货总金额（不含税）">
             -¥{{ Math.abs(formData.totalAmount).toFixed(2) }}
+          </el-descriptions-item>
+          <el-descriptions-item label="退货总金额（含税）">
+            -¥{{ Math.abs(formData.totalInc || 0).toFixed(2) }}
           </el-descriptions-item>
           <el-descriptions-item label="商品行数">
             {{ formData.items.length }}
@@ -457,7 +465,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Printer, Download, Search } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
@@ -492,6 +500,7 @@ interface ReturnRecord {
   returnReason?: string
   items: ReturnItem[]
   totalAmount: number
+  totalInc?: number
   remark?: string
   createdAt?: string
 }
@@ -549,6 +558,7 @@ const users = ref<any[]>([])
 const selectedRows = ref<ReturnRecord[]>([])
 const defaultHandlerId = ref<number | undefined>(undefined)
 const defaultWarehouseId = ref<number | undefined>(undefined)
+const originalOrderProductIds = ref<Set<number>>(new Set())
 
 // 表单数据
 const formRef = ref()
@@ -576,12 +586,35 @@ const rules = {
   returnReason: [{ required: true, message: '请输入退货原因', trigger: 'blur' }]
 }
 
+// 计算属性：可选择的商品列表（如果有原订单，只显示原订单中的商品）
+const selectableProducts = computed(() => {
+  if (originalOrderProductIds.value.size > 0) {
+    return products.value.filter(p => originalOrderProductIds.value.has(p.id))
+  }
+  return products.value
+})
+
 // 加载退货单列表
 const loadReturnsList = async () => {
   try {
     const saved = localStorage.getItem('salesReturns')
     if (saved) {
-      const all = JSON.parse(saved)
+      let all = JSON.parse(saved)
+      let needsUpdate = false
+      
+      // 检查并更新旧数据（计算含税总金额）
+      for (let i = 0; i < all.length; i++) {
+        const ret = all[i]
+        if (ret.totalInc == null && ret.items && ret.items.length > 0) {
+          ret.totalInc = ret.items.reduce((sum: number, item: any) => sum + (item.totalInc || 0), 0)
+          needsUpdate = true
+        }
+      }
+      
+      // 如果有更新，保存回 localStorage
+      if (needsUpdate) {
+        localStorage.setItem('salesReturns', JSON.stringify(all))
+      }
       
       // 按日期和时间戳正序排序
       all.sort((a: any, b: any) => {
@@ -786,6 +819,17 @@ const handleEdit = (row: ReturnRecord) => {
       formData.handlerId = employee.id
     }
   }
+  // 设置原订单商品ID
+  if (row.originalOrderNo) {
+    const originalOrder = orderList.value.find(item => item.voucherNo === row.originalOrderNo)
+    if (originalOrder) {
+      originalOrderProductIds.value = new Set(originalOrder.items.map((item: any) => item.productId))
+    } else {
+      originalOrderProductIds.value = new Set()
+    }
+  } else {
+    originalOrderProductIds.value = new Set()
+  }
   dialogTitle.value = '编辑退货单'
   isViewMode.value = false
   dialogVisible.value = true
@@ -802,6 +846,17 @@ const handleView = (row: ReturnRecord) => {
     if (employee) {
       formData.handlerId = employee.id
     }
+  }
+  // 设置原订单商品ID
+  if (row.originalOrderNo) {
+    const originalOrder = orderList.value.find(item => item.voucherNo === row.originalOrderNo)
+    if (originalOrder) {
+      originalOrderProductIds.value = new Set(originalOrder.items.map((item: any) => item.productId))
+    } else {
+      originalOrderProductIds.value = new Set()
+    }
+  } else {
+    originalOrderProductIds.value = new Set()
   }
   dialogTitle.value = '查看退货单'
   isViewMode.value = true
@@ -868,8 +923,41 @@ const handleSubmit = async () => {
       return
     }
 
+    // 如果选择了原订单，校验退货商品
+    if (formData.originalOrderNo) {
+      const originalOrder = orderList.value.find(item => item.voucherNo === formData.originalOrderNo)
+      if (originalOrder) {
+        // 校验每一个退货商品
+        for (let i = 0; i < formData.items.length; i++) {
+          const retItem = formData.items[i]
+          
+          // 查找原订单中是否有这个商品
+          const origItem = originalOrder.items.find((item: any) => item.productId === retItem.productId)
+          
+          if (!origItem) {
+            ElMessage.error(`商品"${retItem.productName}"不在原出库单中，无法退货`)
+            return
+          }
+          
+          // 校验退货数量不能超过原订单数量（取绝对值比较）
+          const retQty = Math.abs(retItem.quantity)
+          if (retQty > origItem.quantity) {
+            ElMessage.error(`商品"${retItem.productName}"的退货数量(${retQty})不能超过原出库单数量(${origItem.quantity})`)
+            return
+          }
+          
+          // 校验退货数量必须大于0
+          if (retQty <= 0) {
+            ElMessage.error(`商品"${retItem.productName}"的退货数量必须大于0`)
+            return
+          }
+        }
+      }
+    }
+
     // 计算总金额
     formData.totalAmount = formData.items.reduce((sum, item) => sum + item.amount, 0)
+    formData.totalInc = formData.items.reduce((sum, item) => sum + (item.totalInc || 0), 0)
 
     // 生成凭证号（如果是新增）
     if (!formData.id) {
@@ -920,6 +1008,15 @@ const handleOriginalOrderChange = (voucherNo: string) => {
     formData.customerName = order.customerName
     formData.warehouseId = order.warehouseId
     formData.warehouseName = order.warehouseName
+    
+    // 同步更新经办人
+    if (order.operator || order.handlerName) {
+      formData.operator = order.operator || order.handlerName || ''
+      formData.handlerName = order.handlerName || order.operator || ''
+    }
+
+    // 保存原订单商品ID
+    originalOrderProductIds.value = new Set(order.items.map((item: any) => item.productId))
 
     formData.items = order.items.map((item: any) => {
       // 从原订单加载商品，正确映射字段
@@ -944,6 +1041,9 @@ const handleOriginalOrderChange = (voucherNo: string) => {
     
     // 触发计算，更新总计
     formData.totalAmount = formData.items.reduce((s: number, it: any) => s + (it.amount || 0), 0)
+  } else {
+    // 清空原订单商品ID
+    originalOrderProductIds.value = new Set()
   }
 }
 
@@ -1007,6 +1107,39 @@ const calculateRowTotals = (row: ReturnItem) => {
   row.totalInc = Number((row.amount + row.taxAmount).toFixed(2))
   // 同步含税单价
   row.unitPriceIncl = row.taxRate === 0 ? row.unitPrice : round2(row.unitPrice * (1 + row.taxRate / 100))
+  
+  // 实时检测
+  validateSingleReturnItem(row)
+}
+
+// 校验单个退货商品（验证是否在原订单中，且数量不超过原订单数量）
+const validateSingleReturnItem = (item: ReturnItem): boolean => {
+  // 如果没有选择原订单，不需要这个验证
+  if (!formData.originalOrderNo) {
+    return true
+  }
+  
+  // 找到原订单
+  const originalOrder = orderList.value.find(ib => ib.voucherNo === formData.originalOrderNo)
+  if (!originalOrder) {
+    return true
+  }
+  
+  // 查找原订单中是否有这个商品
+  const origItem = originalOrder.items.find((oItem: any) => oItem.productId === item.productId)
+  if (!origItem) {
+    ElMessage.error(`商品"${item.productName}"不在原出库单中，无法退货`)
+    return false
+  }
+  
+  // 校验退货数量不能超过原订单数量（取绝对值比较）
+  const retQty = Math.abs(item.quantity)
+  if (retQty > origItem.quantity) {
+    ElMessage.error(`商品"${item.productName}"的退货数量(${retQty})不能超过原出库单数量(${origItem.quantity})`)
+    return false
+  }
+  
+  return true
 }
 
 // Unified updater: when taxRate + any one of unitPrice / unitPriceIncl / taxAmount / totalInc is changed,
@@ -1095,6 +1228,7 @@ const resetForm = () => {
     totalAmount: 0,
     remark: ''
   })
+  originalOrderProductIds.value = new Set()
   formRef.value?.clearValidate()
 }
 
