@@ -160,18 +160,6 @@ const routes: any[] = [
         meta: { title: '库存调拨', icon: 'SwitchButton' }
       },
       {
-        path: 'count',
-        name: 'InventoryCount',
-        component: () => import('@/views/inventory/count.vue'),
-        meta: { title: '库存盘点', icon: 'Selection' }
-      },
-      {
-        path: 'other',
-        name: 'InventoryOther',
-        component: () => import('@/views/inventory/other.vue'),
-        meta: { title: '其他出入库', icon: 'Plus' }
-      },
-      {
         path: 'period',
         name: 'InventoryPeriod',
         component: () => import('@/views/inventory/period.vue'),
