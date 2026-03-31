@@ -836,16 +836,13 @@ export const initializeCostCalculation = (): any[] => {
             const itId = it.productId || it.id || null
             if (!itId) return
             
-            // 获取数量
-            let quantity = Number(it.quantity || 0)
+            // 获取数量（保持原始值，包括负数）
+            const quantity = Number(it.quantity || 0)
             if (quantity === 0) return
-            
-            // 如果数量是负数，取绝对值（退货单通常记录为负数）
-            const absQuantity = Math.abs(quantity)
             
             // 优先使用不含税单价
             const costPrice = Number(it.unitPriceEx || it.costPrice || it.unitPrice || it.price || 0)
-            const absAmount = Math.abs(quantity * costPrice)
+            const amount = Number(it.totalAmountEx || it.totalAmount || it.amount || (quantity * costPrice))
             
             // 判断单据类型并添加记录
             const isPurchaseReturn = key.includes('return') && (key.includes('purchase') || key.includes('inbound'))
@@ -865,9 +862,9 @@ export const initializeCostCalculation = (): any[] => {
                 isInbound: false,
                 isOutbound: true,
                 isTransfer: true,
-                quantity: absQuantity,  // 使用正数
+                quantity: Math.abs(quantity),  // 使用正数
                 costPrice,
-                amount: absAmount,  // 使用正数
+                amount: Math.abs(amount),  // 使用正数
                 _timestamp: rec.createdAt || rec.createdTime || rec.createTime || rec.timestamp
               })
               
@@ -881,14 +878,13 @@ export const initializeCostCalculation = (): any[] => {
                 isInbound: true,
                 isOutbound: false,
                 isTransfer: true,
-                quantity: absQuantity,  // 使用正数
+                quantity: Math.abs(quantity),  // 使用正数
                 costPrice,
-                amount: absAmount,  // 使用正数
+                amount: Math.abs(amount),  // 使用正数
                 _timestamp: rec.createdAt || rec.createdTime || rec.createTime || rec.timestamp
               })
-            } else if (isInboundKey || isSalesReturn) {
-              // 入库单或销售退货（销售退货当作入库处理）
-              // 使用正数数量，表示增加库存
+            } else if (isInboundKey || isPurchaseReturn) {
+              // 入库单或采购退货（采购退货当作入库处理，但数量为负数）
               const recWarehouseId = rec.warehouseId
               if (!recWarehouseId) return
               
@@ -901,14 +897,13 @@ export const initializeCostCalculation = (): any[] => {
                 isInbound: true,
                 isOutbound: false,
                 isTransfer: false,
-                quantity: absQuantity,  // 始终使用正数
+                quantity,  // 保持原始数量（可能是负数）
                 costPrice,
-                amount: absAmount,  // 始终使用正数
+                amount,  // 保持原始金额（可能是负数）
                 _timestamp: rec.createdAt || rec.createdTime || rec.createTime || rec.timestamp
               })
-            } else if (isOutboundKey || isPurchaseReturn) {
-              // 出库单或采购退货（采购退货当作出库处理）
-              // 使用正数数量，表示减少库存
+            } else if (isOutboundKey || isSalesReturn) {
+              // 出库单或销售退货（销售退货当作出库处理，但数量为负数）
               const recWarehouseId = rec.warehouseId
               if (!recWarehouseId) return
               
@@ -921,9 +916,9 @@ export const initializeCostCalculation = (): any[] => {
                 isInbound: false,
                 isOutbound: true,
                 isTransfer: false,
-                quantity: absQuantity,  // 始终使用正数
+                quantity,  // 保持原始数量（可能是负数）
                 costPrice,
-                amount: absAmount,  // 始终使用正数
+                amount,  // 保持原始金额（可能是负数）
                 _timestamp: rec.createdAt || rec.createdTime || rec.createTime || rec.timestamp
               })
             }
