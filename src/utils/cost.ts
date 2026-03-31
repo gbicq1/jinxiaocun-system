@@ -227,111 +227,289 @@ export const getInventoryCostInfo = (productId: number | undefined, warehouseId:
 }
 
 /**
- * 从成本结算模块获取指定日期的最终成本价（直接提取本月合计行的成本价）
+ * 从成本结算模块获取指定日期的最终成本价
+ * 逻辑：动态计算调拨日期所在期间的最后一笔业务的库存结余成本价
  * @param productId 产品 ID
  * @param warehouseId 仓库 ID
  * @param transferDate 调拨日期 (YYYY-MM-DD)
- * @returns 最终成本价（本月合计的加权平均单价）
+ * @returns 最终成本价（最后一笔业务的库存结余成本价）
  */
 export const getCostFromSettlement = (productId: number | undefined, warehouseId: number | undefined, transferDate: string): number => {
   if (!productId || !warehouseId || !transferDate) return 0
   
   try {
+    // 计算调拨日期所在月份
+    const targetDate = new Date(transferDate)
+    const year = targetDate.getFullYear()
+    const month = targetDate.getMonth() + 1
+    
     console.log('========== getCostFromSettlement 调试 ==========')
-    console.log('输入参数:', { productId, warehouseId, transferDate, productIdType: typeof productId, warehouseIdType: typeof warehouseId })
+    console.log('调拨日期:', transferDate, '所属月份:', `${year}-${month}`)
     
-    // 先找到匹配的成本结算汇总数据
-    const settlementsRaw = localStorage.getItem('cost_settlements')
-    const settlements = settlementsRaw ? JSON.parse(settlementsRaw) : []
+    // 1. 先获取上月结转的库存结余作为期初数据
+    const openingData = getOpeningInventory(year, month, productId, warehouseId)
     
-    console.log('所有结算数据数量:', settlements.length)
+    console.log('期初数据:', openingData)
     
-    let matchingSettlement = null
+    // 2. 获取当月所有库存单据
+    const monthRecords = getAllInventoryRecordsForMonth(year, month, productId, warehouseId)
     
-    if (settlements.length > 0) {
-      // 找到所有匹配的产品和仓库的结算
-      const validSettlements = settlements
-        .filter((s: any) => {
-          if (!s.periodRange || s.periodRange.length !== 2) return false
-          
-          // 检查调拨日期是否在结算期间内
-          const periodStart = new Date(s.periodRange[0])
-          const periodEnd = new Date(s.periodRange[1])
-          const transferDateObj = new Date(transferDate)
-          
-          const inPeriod = transferDateObj >= periodStart && transferDateObj <= periodEnd
-          
-          if (!inPeriod) {
-            console.log('日期不在结算期间内:', { periodStart: s.periodRange[0], periodEnd: s.periodRange[1], transferDate })
-            return false
-          }
-          
-          // 产品ID匹配（同时支持字符串和数字）
-          const productMatch = 
-            (s.productId != null && (Number(s.productId) === Number(productId) || String(s.productId) === String(productId))) || 
-            (s.productCode != null && (String(s.productCode) === String(productId) || Number(s.productCode) === Number(productId)))
-          
-          if (!productMatch) {
-            console.log('产品不匹配:', { sProductId: s.productId, sProductCode: s.productCode, targetProductId: productId })
-            return false
-          }
-          
-          // 仓库ID匹配（同时支持字符串和数字）
-          const warehouseMatch = 
-            s.warehouseId != null && (Number(s.warehouseId) === Number(warehouseId) || String(s.warehouseId) === String(warehouseId))
-          
-          if (!warehouseMatch) {
-            console.log('仓库不匹配:', { sWarehouseId: s.warehouseId, targetWarehouseId: warehouseId })
-            return false
-          }
-          
-          console.log('✅ 找到匹配的结算数据:', s)
-          return true
-        })
-        .sort((a: any, b: any) => {
-          const dateA = new Date(a.periodRange[1])
-          const dateB = new Date(b.periodRange[1])
-          return dateB.getTime() - dateA.getTime()
-        })
-      
-      console.log('有效结算数据数量:', validSettlements.length)
-      
-      if (validSettlements.length > 0) {
-        matchingSettlement = validSettlements[0]
-        console.log('最新结算数据:', matchingSettlement)
+    console.log('当月业务记录数量:', monthRecords.length)
+    
+    // 3. 如果没有期初也没有当月业务，尝试获取上月数据
+    if (openingData.qty === 0 && openingData.amount === 0 && monthRecords.length === 0) {
+      console.log('⚠️ 当月没有业务且无期初，尝试获取上月数据')
+      const lastMonthEnd = new Date(year, month - 1, 0)
+      return getCostFromSettlement(productId, warehouseId, lastMonthEnd.toISOString().slice(0, 10))
+    }
+    
+    // 4. 从期初数据开始，逐笔计算当月业务
+    let runningQty = openingData.qty
+    let runningAmount = openingData.amount
+    
+    // 按日期排序当月业务
+    monthRecords.sort((a, b) => {
+      const dateA = new Date(a.date).getTime()
+      const dateB = new Date(b.date).getTime()
+      return dateA - dateB
+    })
+    
+    // 5. 逐笔计算
+    for (const rec of monthRecords) {
+      if (rec.type === 'inbound') {
+        // 入库：增加数量和金额
+        runningQty += rec.qty
+        runningAmount += rec.amount
+      } else if (rec.type === 'outbound') {
+        // 出库：减少数量，按当前成本价减少金额
+        const currentCostPrice = runningQty > 0 ? runningAmount / runningQty : 0
+        runningQty -= rec.qty
+        runningAmount -= rec.qty * currentCostPrice
       }
     }
     
-    // 如果找到了成本结算数据
-    if (matchingSettlement) {
-      const periodEnd = new Date(matchingSettlement.periodRange[1])
-      const transferDateObj = new Date(transferDate)
-      
-      // 如果调拨日期在期间结束日期之前（不是同一天），使用本月合计的加权平均单价
-      // 如果调拨日期就是期间结束日期，需要计算当天的实时成本价
-      if (transferDateObj.getTime() < periodEnd.getTime()) {
-        // 调拨日期在期间中间，使用本月合计的加权平均单价
-        if (matchingSettlement.avgPrice != null) {
-          const result = Number(matchingSettlement.avgPrice.toFixed(2))
-          console.log('✅ 调拨日期在期间中间，使用本月合计成本价:', result)
-          return result
-        }
-      } else {
-        // 调拨日期是期间结束日期，需要计算当天的实时成本价
-        console.log('调拨日期是期间结束日期，需要计算实时成本价')
-        // 继续执行下面的动态计算逻辑
-      }
+    // 6. 返回最后一笔业务后的成本价
+    const finalCostPrice = runningQty > 0 ? runningAmount / runningQty : 0
+    
+    if (finalCostPrice > 0) {
+      const result = Number(finalCostPrice.toFixed(2))
+      console.log('✅ 最后一笔业务后的库存结余成本价:', result, '产品:', productId, '仓库:', warehouseId)
+      console.log('期末库存:', runningQty, '期末成本:', runningAmount)
+      return result
     }
     
-    console.log('未找到已结算数据或需要计算实时成本价，动态计算调拨日期前的成本价')
+    console.log('⚠️ 期末库存为 0')
+    return 0
     
-    // 如果没有找到已结算数据，或者调拨日期是期间结束日期，动态计算调拨日期前的成本价
-    return calculateCostBeforeDate(productId, warehouseId, transferDate)
   } catch (error) {
     console.error('从成本结算获取成本价失败:', error)
-    // 回退到动态计算
-    return calculateMonthlyCost(productId, warehouseId, transferDate)
+    return 0
   }
+}
+
+/**
+ * 获取期初库存数据（上月结转）
+ */
+const getOpeningInventory = (
+  year: number, 
+  month: number, 
+  productId: number | undefined, 
+  warehouseId: number | undefined
+): { qty: number; amount: number } => {
+  // 上月最后一天
+  const lastMonthEnd = new Date(year, month - 1, 0)
+  const lastMonthEndStr = lastMonthEnd.toISOString().slice(0, 10)
+  const lastMonthYear = lastMonthEnd.getFullYear()
+  const lastMonth = lastMonthEnd.getMonth() + 1
+  
+  console.log('上月最后一天:', lastMonthEndStr, '所属期间:', `${lastMonthYear}-${lastMonth}`)
+  
+  // 尝试从成本结算数据中获取上月期末数据
+  const settlementsRaw = localStorage.getItem('cost_settlements')
+  if (settlementsRaw) {
+    const settlements = JSON.parse(settlementsRaw)
+    
+    console.log('总结算数据数量:', settlements.length)
+    
+    // 查找上月的结算数据
+    const lastMonthSettlement = settlements.find((s: any) => {
+      if (!s.periodRange || s.periodRange.length !== 2) return false
+      
+      const periodEnd = new Date(s.periodRange[1])
+      const settlementYear = periodEnd.getFullYear()
+      const settlementMonth = periodEnd.getMonth() + 1
+      
+      // 匹配上一年度和月份
+      const sameYear = settlementYear === lastMonthYear
+      const sameMonth = settlementMonth === lastMonth
+      
+      const productMatch = 
+        (s.productId != null && Number(s.productId) === Number(productId)) || 
+        (s.productCode != null && String(s.productCode) === String(productId))
+      
+      const warehouseMatch = s.warehouseId != null && Number(s.warehouseId) === Number(warehouseId)
+      
+      return sameYear && sameMonth && productMatch && warehouseMatch
+    })
+    
+    if (lastMonthSettlement) {
+      const closingQty = Number(lastMonthSettlement.closingQty || 0)
+      const closingCost = Number(lastMonthSettlement.closingCost || 0)
+      
+      console.log('✅ 从上月结算数据获取期初:', { 
+        qty: closingQty, 
+        amount: closingCost, 
+        unitCost: closingQty > 0 ? (closingCost / closingQty).toFixed(2) : 0,
+        periodRange: lastMonthSettlement.periodRange,
+        productCode: lastMonthSettlement.productCode,
+        productId: lastMonthSettlement.productId,
+        warehouseId: lastMonthSettlement.warehouseId
+      })
+      return { qty: closingQty, amount: closingCost }
+    } else {
+      console.log('⚠️ 未找到上月结算数据，期间:', `${lastMonthYear}-${lastMonth}`)
+      console.log('查找条件:', { 
+        targetYear: lastMonthYear, 
+        targetMonth: lastMonth, 
+        productId, 
+        warehouseId 
+      })
+      
+      // 输出所有 2 月份的结算数据用于调试
+      const febSettlements = settlements.filter((s: any) => {
+        if (!s.periodRange || s.periodRange.length !== 2) return false
+        const periodEnd = new Date(s.periodRange[1])
+        return periodEnd.getFullYear() === lastMonthYear && periodEnd.getMonth() + 1 === lastMonth
+      })
+      console.log('找到的所有上月结算数据（不匹配产品和仓库）:', febSettlements.map((s: any) => ({
+        productCode: s.productCode,
+        productId: s.productId,
+        warehouseId: s.warehouseId,
+        closingQty: s.closingQty,
+        closingCost: s.closingCost,
+        periodRange: s.periodRange
+      })))
+    }
+  } else {
+    console.log('⚠️ cost_settlements 为空')
+  }
+  
+  // 如果没有上月结算数据，尝试动态计算上月最后一天的库存
+  console.log('⚠️ 未找到上月结算数据，尝试动态计算上月所有业务')
+  
+  // 递归获取上月（上上月期末作为期初）
+  const openingOfLastMonth = getOpeningInventory(lastMonthYear, lastMonth, productId, warehouseId)
+  
+  console.log('上月期初数据:', openingOfLastMonth)
+  
+  // 获取上月所有业务记录
+  const lastMonthRecords = getAllInventoryRecordsForMonth(lastMonthYear, lastMonth, productId, warehouseId)
+  
+  console.log('上月业务记录数量:', lastMonthRecords.length)
+  
+  if (lastMonthRecords.length === 0) {
+    console.log('上月没有业务记录，返回上月期初')
+    return openingOfLastMonth
+  }
+  
+  // 从上月期初开始，计算上月所有业务后的期末库存
+  let runningQty = openingOfLastMonth.qty
+  let runningAmount = openingOfLastMonth.amount
+  
+  lastMonthRecords.sort((a, b) => {
+    const dateA = new Date(a.date).getTime()
+    const dateB = new Date(b.date).getTime()
+    return dateA - dateB
+  })
+  
+  for (const rec of lastMonthRecords) {
+    if (rec.type === 'inbound') {
+      runningQty += rec.qty
+      runningAmount += rec.amount
+    } else if (rec.type === 'outbound') {
+      const currentCostPrice = runningQty > 0 ? runningAmount / runningQty : 0
+      runningQty -= rec.qty
+      runningAmount -= rec.qty * currentCostPrice
+    }
+  }
+  
+  console.log('✅ 动态计算上月期末:', { qty: runningQty, amount: runningAmount, unitCost: runningQty > 0 ? (runningAmount / runningQty).toFixed(2) : 0 })
+  return { qty: runningQty, amount: runningAmount }
+}
+
+/**
+ * 获取指定月份的所有库存记录
+ */
+const getAllInventoryRecordsForMonth = (
+  year: number, 
+  month: number, 
+  productId: number | undefined, 
+  warehouseId: number | undefined
+): Array<{ date: string; type: 'inbound' | 'outbound'; qty: number; amount: number }> => {
+  const records: Array<{ date: string; type: 'inbound' | 'outbound'; qty: number; amount: number }> = []
+  const monthStart = new Date(year, month - 1, 1)
+  const monthEnd = new Date(year, month, 0, 23, 59, 59, 999)
+  
+  // 采购入库
+  const inboundKeys = ['purchase_inbound_records', 'purchaseInbounds', 'inbound_records', 'inbounds']
+  for (const key of inboundKeys) {
+    const raw = localStorage.getItem(key)
+    if (!raw) continue
+    const arr = JSON.parse(raw)
+    if (!Array.isArray(arr)) continue
+    
+    for (const rec of arr) {
+      const recDate = new Date(rec.voucherDate || rec.date || rec.createdAt)
+      if (recDate < monthStart || recDate > monthEnd) continue
+      if (Number(rec.warehouseId) !== Number(warehouseId)) continue
+      
+      const items = rec.items || rec.products || rec.details
+      if (!Array.isArray(items)) continue
+      
+      for (const it of items) {
+        if (Number(it.productId) !== Number(productId)) continue
+        const qty = Number(it.quantity || 0)
+        const amount = Number(it.totalAmountEx || it.totalAmount || it.amount)
+        records.push({
+          date: rec.voucherDate || rec.date || rec.createdAt,
+          type: 'inbound',
+          qty,
+          amount
+        })
+      }
+    }
+  }
+  
+  // 销售出库
+  const outboundKeys = ['sales_outbound_records', 'outbound_records', 'outbounds', 'delivery_records']
+  for (const key of outboundKeys) {
+    const raw = localStorage.getItem(key)
+    if (!raw) continue
+    const arr = JSON.parse(raw)
+    if (!Array.isArray(arr)) continue
+    
+    for (const rec of arr) {
+      const recDate = new Date(rec.voucherDate || rec.date || rec.createdAt)
+      if (recDate < monthStart || recDate > monthEnd) continue
+      if (Number(rec.warehouseId) !== Number(warehouseId)) continue
+      
+      const items = rec.items || rec.products || rec.details
+      if (!Array.isArray(items)) continue
+      
+      for (const it of items) {
+        if (Number(it.productId) !== Number(productId)) continue
+        const qty = Number(it.quantity || 0)
+        records.push({
+          date: rec.voucherDate || rec.date || rec.createdAt,
+          type: 'outbound',
+          qty,
+          amount: 0  // 出库金额在计算时确定
+        })
+      }
+    }
+  }
+  
+  return records
 }
 
 /**
@@ -792,6 +970,9 @@ export const initializeCostCalculation = (): any[] => {
     // 收集所有出入库记录
     const allRecords: any[] = []
     
+    console.log('=== 开始收集出入库记录 ===')
+    console.log('localStorage 键总数:', localStorage.length)
+    
     // 扫描所有 localStorage 键
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i)
@@ -803,6 +984,14 @@ export const initializeCostCalculation = (): any[] => {
         
         const arr = JSON.parse(raw)
         if (!Array.isArray(arr)) continue
+        
+        // 打印包含 return 的 key
+        if (key.includes('return')) {
+          console.log('发现退货单 key:', key, '记录数:', arr.length)
+          if (arr.length > 0) {
+            console.log('退货单示例数据:', JSON.stringify(arr[0], null, 2))
+          }
+        }
         
         // 判断单据类型
         const isPurchaseReturn = key.includes('return') && (key.includes('purchase') || key.includes('inbound'))
@@ -845,10 +1034,11 @@ export const initializeCostCalculation = (): any[] => {
             const amount = Number(it.totalAmountEx || it.totalAmount || it.amount || (quantity * costPrice))
             
             // 判断单据类型并添加记录
-            const isPurchaseReturn = key.includes('return') && (key.includes('purchase') || key.includes('inbound'))
-            const isSalesReturn = key.includes('return') && (key.includes('sales') || key.includes('outbound'))
-            const isInboundKey = key.includes('inbound') || (key.includes('purchase') && !key.includes('return'))
-            const isOutboundKey = key.includes('outbound') || (key.includes('sales') && !key.includes('return'))
+            const keyLower = key.toLowerCase()
+            const isPurchaseReturn = keyLower.includes('return') && (key.includes('purchase') || key.includes('inbound'))
+            const isSalesReturn = keyLower.includes('return') && (key.includes('sales') || key.includes('outbound'))
+            const isInboundKey = key.includes('inbound') || (key.includes('purchase') && !keyLower.includes('return'))
+            const isOutboundKey = key.includes('outbound') || (key.includes('sales') && !keyLower.includes('return'))
             
             if (isTransferKey && fromWarehouseId && toWarehouseId) {
               // 调拨单：生成两条记录（调出和调入）

@@ -1,36 +1,29 @@
-import Database from 'better-sqlite3'
-import { resolve } from 'path'
-import { CostSettlementDatabase } from './database-cost'
-
-export class InventoryDatabase {
-  private db: Database.Database
-  private dbPath: string
-  public costDb: CostSettlementDatabase
-
-  constructor(dbPath: string) {
-    this.dbPath = dbPath
-    this.db = null
-  }
-
-  initialize(): boolean {
-    try {
-      this.db = new Database(this.dbPath)
-      this.createTables()
-      
-      // 初始化成本结算数据库
-      this.costDb = new CostSettlementDatabase(this.db)
-      this.costDb.initialize()
-      
-      return true
-    } catch (error) {
-      console.error('数据库初始化失败:', error)
-      return false
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.InventoryDatabase = void 0;
+const better_sqlite3_1 = __importDefault(require("better-sqlite3"));
+class InventoryDatabase {
+    constructor(dbPath) {
+        this.db = null;
+        this.dbPath = dbPath;
     }
-  }
-
-  private createTables() {
-    // 产品表
-    this.db.exec(`
+    initialize() {
+        try {
+            this.db = new better_sqlite3_1.default(this.dbPath);
+            this.createTables();
+            return true;
+        }
+        catch (error) {
+            console.error('数据库初始化失败:', error);
+            return false;
+        }
+    }
+    createTables() {
+        // 产品表
+        this.db.exec(`
       CREATE TABLE IF NOT EXISTS products (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         code VARCHAR(50) UNIQUE NOT NULL,
@@ -48,10 +41,9 @@ export class InventoryDatabase {
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
-    `)
-
-    // 仓库表
-    this.db.exec(`
+    `);
+        // 仓库表
+        this.db.exec(`
       CREATE TABLE IF NOT EXISTS warehouses (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         code VARCHAR(50) UNIQUE NOT NULL,
@@ -63,10 +55,9 @@ export class InventoryDatabase {
         remark TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
-    `)
-
-    // 供应商表
-    this.db.exec(`
+    `);
+        // 供应商表
+        this.db.exec(`
       CREATE TABLE IF NOT EXISTS suppliers (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         code VARCHAR(50) UNIQUE NOT NULL,
@@ -81,10 +72,9 @@ export class InventoryDatabase {
         remark TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
-    `)
-
-    // 客户表
-    this.db.exec(`
+    `);
+        // 客户表
+        this.db.exec(`
       CREATE TABLE IF NOT EXISTS customers (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         code VARCHAR(50) UNIQUE NOT NULL,
@@ -98,10 +88,9 @@ export class InventoryDatabase {
         remark TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
-    `)
-
-    // 销售报价单表
-    this.db.exec(`
+    `);
+        // 销售报价单表
+        this.db.exec(`
       CREATE TABLE IF NOT EXISTS sales_quotes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         quote_no VARCHAR(50) UNIQUE NOT NULL,
@@ -117,10 +106,9 @@ export class InventoryDatabase {
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (customer_id) REFERENCES customers(id)
       )
-    `)
-
-    // 销售报价单明细表
-    this.db.exec(`
+    `);
+        // 销售报价单明细表
+        this.db.exec(`
       CREATE TABLE IF NOT EXISTS sales_quote_items (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         quote_id INTEGER,
@@ -132,10 +120,9 @@ export class InventoryDatabase {
         FOREIGN KEY (quote_id) REFERENCES sales_quotes(id),
         FOREIGN KEY (product_id) REFERENCES products(id)
       )
-    `)
-
-    // 销售订单表
-    this.db.exec(`
+    `);
+        // 销售订单表
+        this.db.exec(`
       CREATE TABLE IF NOT EXISTS sales_orders (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         order_no VARCHAR(50) UNIQUE NOT NULL,
@@ -156,10 +143,9 @@ export class InventoryDatabase {
         FOREIGN KEY (quote_id) REFERENCES sales_quotes(id),
         FOREIGN KEY (customer_id) REFERENCES customers(id)
       )
-    `)
-
-    // 销售订单明细表
-    this.db.exec(`
+    `);
+        // 销售订单明细表
+        this.db.exec(`
       CREATE TABLE IF NOT EXISTS sales_order_items (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         order_id INTEGER,
@@ -172,10 +158,9 @@ export class InventoryDatabase {
         FOREIGN KEY (order_id) REFERENCES sales_orders(id),
         FOREIGN KEY (product_id) REFERENCES products(id)
       )
-    `)
-
-    // 销售出库表
-    this.db.exec(`
+    `);
+        // 销售出库表
+        this.db.exec(`
       CREATE TABLE IF NOT EXISTS sales_outbound (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         outbound_no VARCHAR(50) UNIQUE NOT NULL,
@@ -190,10 +175,9 @@ export class InventoryDatabase {
         FOREIGN KEY (order_id) REFERENCES sales_orders(id),
         FOREIGN KEY (warehouse_id) REFERENCES warehouses(id)
       )
-    `)
-
-    // 销售出库明细表
-    this.db.exec(`
+    `);
+        // 销售出库明细表
+        this.db.exec(`
       CREATE TABLE IF NOT EXISTS sales_outbound_items (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         outbound_id INTEGER,
@@ -204,10 +188,9 @@ export class InventoryDatabase {
         FOREIGN KEY (outbound_id) REFERENCES sales_outbound(id),
         FOREIGN KEY (product_id) REFERENCES products(id)
       )
-    `)
-
-    // 采购申请单表
-    this.db.exec(`
+    `);
+        // 采购申请单表
+        this.db.exec(`
       CREATE TABLE IF NOT EXISTS purchase_requests (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         request_no VARCHAR(50) UNIQUE NOT NULL,
@@ -223,10 +206,9 @@ export class InventoryDatabase {
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (supplier_id) REFERENCES suppliers(id)
       )
-    `)
-
-    // 采购申请单明细表
-    this.db.exec(`
+    `);
+        // 采购申请单明细表
+        this.db.exec(`
       CREATE TABLE IF NOT EXISTS purchase_request_items (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         request_id INTEGER,
@@ -238,10 +220,9 @@ export class InventoryDatabase {
         FOREIGN KEY (request_id) REFERENCES purchase_requests(id),
         FOREIGN KEY (product_id) REFERENCES products(id)
       )
-    `)
-
-    // 采购订单表
-    this.db.exec(`
+    `);
+        // 采购订单表
+        this.db.exec(`
       CREATE TABLE IF NOT EXISTS purchase_orders (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         order_no VARCHAR(50) UNIQUE NOT NULL,
@@ -261,10 +242,9 @@ export class InventoryDatabase {
         FOREIGN KEY (request_id) REFERENCES purchase_requests(id),
         FOREIGN KEY (supplier_id) REFERENCES suppliers(id)
       )
-    `)
-
-    // 采购订单明细表
-    this.db.exec(`
+    `);
+        // 采购订单明细表
+        this.db.exec(`
       CREATE TABLE IF NOT EXISTS purchase_order_items (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         order_id INTEGER,
@@ -277,10 +257,9 @@ export class InventoryDatabase {
         FOREIGN KEY (order_id) REFERENCES purchase_orders(id),
         FOREIGN KEY (product_id) REFERENCES products(id)
       )
-    `)
-
-    // 采购入库表
-    this.db.exec(`
+    `);
+        // 采购入库表
+        this.db.exec(`
       CREATE TABLE IF NOT EXISTS purchase_inbound (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         inbound_no VARCHAR(50) UNIQUE NOT NULL,
@@ -295,10 +274,9 @@ export class InventoryDatabase {
         FOREIGN KEY (order_id) REFERENCES purchase_orders(id),
         FOREIGN KEY (warehouse_id) REFERENCES warehouses(id)
       )
-    `)
-
-    // 采购入库明细表
-    this.db.exec(`
+    `);
+        // 采购入库明细表
+        this.db.exec(`
       CREATE TABLE IF NOT EXISTS purchase_inbound_items (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         inbound_id INTEGER,
@@ -309,10 +287,9 @@ export class InventoryDatabase {
         FOREIGN KEY (inbound_id) REFERENCES purchase_inbound(id),
         FOREIGN KEY (product_id) REFERENCES products(id)
       )
-    `)
-
-    // 库存调拨表
-    this.db.exec(`
+    `);
+        // 库存调拨表
+        this.db.exec(`
       CREATE TABLE IF NOT EXISTS stock_transfer (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         transfer_no VARCHAR(50) UNIQUE NOT NULL,
@@ -326,10 +303,9 @@ export class InventoryDatabase {
         FOREIGN KEY (from_warehouse_id) REFERENCES warehouses(id),
         FOREIGN KEY (to_warehouse_id) REFERENCES warehouses(id)
       )
-    `)
-
-    // 库存调拨明细表
-    this.db.exec(`
+    `);
+        // 库存调拨明细表
+        this.db.exec(`
       CREATE TABLE IF NOT EXISTS stock_transfer_items (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         transfer_id INTEGER,
@@ -339,10 +315,9 @@ export class InventoryDatabase {
         FOREIGN KEY (transfer_id) REFERENCES stock_transfer(id),
         FOREIGN KEY (product_id) REFERENCES products(id)
       )
-    `)
-
-    // 库存盘点表
-    this.db.exec(`
+    `);
+        // 库存盘点表
+        this.db.exec(`
       CREATE TABLE IF NOT EXISTS stock_count (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         count_no VARCHAR(50) UNIQUE NOT NULL,
@@ -354,10 +329,9 @@ export class InventoryDatabase {
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (warehouse_id) REFERENCES warehouses(id)
       )
-    `)
-
-    // 库存盘点明细表
-    this.db.exec(`
+    `);
+        // 库存盘点明细表
+        this.db.exec(`
       CREATE TABLE IF NOT EXISTS stock_count_items (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         count_id INTEGER,
@@ -372,10 +346,9 @@ export class InventoryDatabase {
         FOREIGN KEY (product_id) REFERENCES products(id),
         FOREIGN KEY (warehouse_id) REFERENCES warehouses(id)
       )
-    `)
-
-    // 应收应付账款表
-    this.db.exec(`
+    `);
+        // 应收应付账款表
+        this.db.exec(`
       CREATE TABLE IF NOT EXISTS accounts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         account_no VARCHAR(50) UNIQUE NOT NULL,
@@ -392,10 +365,9 @@ export class InventoryDatabase {
         remark TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
-    `)
-
-    // 收付款记录表
-    this.db.exec(`
+    `);
+        // 收付款记录表
+        this.db.exec(`
       CREATE TABLE IF NOT EXISTS payments (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         payment_no VARCHAR(50) UNIQUE NOT NULL,
@@ -409,81 +381,68 @@ export class InventoryDatabase {
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (account_id) REFERENCES accounts(id)
       )
-    `)
-
-    console.log('数据库表创建完成')
-  }
-
-  query(sql: string, params: any[] = []): any[] {
-    return this.db.prepare(sql).all(...params)
-  }
-
-  insert(table: string, data: any): number {
-    const keys = Object.keys(data)
-    const values = Object.values(data)
-    const placeholders = keys.map(() => '?').join(',')
-    
-    const sql = `INSERT INTO ${table} (${keys.join(',')}) VALUES (${placeholders})`
-    const stmt = this.db.prepare(sql)
-    const result = stmt.run(...values)
-    return result.lastInsertRowid
-  }
-
-  update(table: string, data: any, where: string, whereParams: any[] = []): number {
-    const keys = Object.keys(data)
-    const setClause = keys.map(key => `${key} = ?`).join(', ')
-    const values = Object.values(data)
-    
-    const sql = `UPDATE ${table} SET ${setClause} WHERE ${where}`
-    const stmt = this.db.prepare(sql)
-    const result = stmt.run(...values, ...whereParams)
-    return result.changes
-  }
-
-  delete(table: string, where: string, whereParams: any[] = []): number {
-    const sql = `DELETE FROM ${table} WHERE ${where}`
-    const stmt = this.db.prepare(sql)
-    const result = stmt.run(...whereParams)
-    return result.changes
-  }
-
-  // 产品相关方法
-  getProductList(page: number = 1, pageSize: number = 10): any {
-    const offset = (page - 1) * pageSize
-    const total = this.db.prepare('SELECT COUNT(*) as count FROM products').get()
-    const products = this.db.prepare(`
+    `);
+        console.log('数据库表创建完成');
+    }
+    query(sql, params = []) {
+        return this.db.prepare(sql).all(...params);
+    }
+    insert(table, data) {
+        const keys = Object.keys(data);
+        const values = Object.values(data);
+        const placeholders = keys.map(() => '?').join(',');
+        const sql = `INSERT INTO ${table} (${keys.join(',')}) VALUES (${placeholders})`;
+        const stmt = this.db.prepare(sql);
+        const result = stmt.run(...values);
+        return Number(result.lastInsertRowid);
+    }
+    update(table, data, where, whereParams = []) {
+        const keys = Object.keys(data);
+        const setClause = keys.map(key => `${key} = ?`).join(', ');
+        const values = Object.values(data);
+        const sql = `UPDATE ${table} SET ${setClause} WHERE ${where}`;
+        const stmt = this.db.prepare(sql);
+        const result = stmt.run(...values, ...whereParams);
+        return result.changes;
+    }
+    delete(table, where, whereParams = []) {
+        const sql = `DELETE FROM ${table} WHERE ${where}`;
+        const stmt = this.db.prepare(sql);
+        const result = stmt.run(...whereParams);
+        return result.changes;
+    }
+    // 产品相关方法
+    getProductList(page = 1, pageSize = 10) {
+        const offset = (page - 1) * pageSize;
+        const total = this.db.prepare('SELECT COUNT(*) as count FROM products').get();
+        const products = this.db.prepare(`
       SELECT * FROM products 
       ORDER BY created_at DESC 
       LIMIT ? OFFSET ?
-    `).all(pageSize, offset)
-    
-    return {
-      total: total.count,
-      page,
-      pageSize,
-      data: products
+    `).all(pageSize, offset);
+        return {
+            total: total.count,
+            page,
+            pageSize,
+            data: products
+        };
     }
-  }
-
-  addProduct(product: any): number {
-    return this.insert('products', product)
-  }
-
-  updateProduct(product: any): number {
-    const id = product.id
-    delete product.id
-    return this.update('products', product, 'id = ?', [id])
-  }
-
-  deleteProduct(id: number): number {
-    return this.delete('products', 'id = ?', [id])
-  }
-
-  close() {
-    if (this.db) {
-      this.db.close()
+    addProduct(product) {
+        return this.insert('products', product);
     }
-  }
+    updateProduct(product) {
+        const id = product.id;
+        delete product.id;
+        return this.update('products', product, 'id = ?', [id]);
+    }
+    deleteProduct(id) {
+        return this.delete('products', 'id = ?', [id]);
+    }
+    close() {
+        if (this.db) {
+            this.db.close();
+        }
+    }
 }
-
-export default InventoryDatabase
+exports.InventoryDatabase = InventoryDatabase;
+exports.default = InventoryDatabase;

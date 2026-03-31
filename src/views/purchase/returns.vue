@@ -1104,7 +1104,7 @@ const handleOriginalVoucherChange = (voucherNo: string) => {
       totalAmount: 0,
       deductionAmount: item.deductionAmount || 0,
       allowDeduction: item.allowDeduction || false,
-      _lastEdited: 'unitEx'
+      _lastEdited: 'unitIncl' // 使用含税价作为基准，保持与原入库单一致
     }))
   }
 }
@@ -1168,13 +1168,18 @@ const handleProductChange = (row: ReturnItem) => {
     // 优先使用 spec（产品表字段），其次使用 specification，最后使用 code 作为备用
     row.specification = product.spec || product.specification || product.code || ''
     row.unit = product.unit || '个'
-    // 如果产品有成本价则使用，否则保持为空
-    row.unitPriceEx = product.costPrice && product.costPrice > 0 ? product.costPrice : ('' as any)
-    row._lastEdited = 'unitEx'
-    // 只有当有价格时才计算总额
-    if (row.unitPriceEx && row.unitPriceEx !== '') {
-      calculateRowTotal(row)
+    
+    // 如果选择了原入库单，保持原入库单的价格和计算基准
+    if (!formData.originalVoucherNo) {
+      // 没有选择原入库单时，使用产品的成本价
+      row.unitPriceEx = product.costPrice && product.costPrice > 0 ? product.costPrice : ('' as any)
+      row._lastEdited = 'unitEx'
+      // 只有当有价格时才计算总额
+      if (row.unitPriceEx && row.unitPriceEx !== '') {
+        calculateRowTotal(row)
+      }
     }
+    // 如果选择了原入库单，保持原入库单的价格和_lastEdited设置
   }
 }
 

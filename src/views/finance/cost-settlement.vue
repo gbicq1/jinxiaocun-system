@@ -47,9 +47,13 @@
         
         <!-- 右侧功能按钮 -->
         <div class="action-buttons">
-          <el-button type="primary" @click="handleInitialize">
+          <el-button type="warning" @click="handleInitialize">
             <el-icon><Refresh /></el-icon>
             初始化成本数据
+          </el-button>
+          <el-button type="info" @click="showDebugInfo = !showDebugInfo">
+            <el-icon><InfoFilled /></el-icon>
+            调试信息
           </el-button>
           <el-button type="success" @click="handleCalculate">
             <el-icon><Check /></el-icon>
@@ -122,6 +126,44 @@
           </template>
         </el-table-column>
       </el-table>
+
+      <!-- 调试信息显示区域 -->
+      <div v-if="showDebugInfo" class="debug-info-box">
+        <h4>调试信息</h4>
+        <div class="debug-item">
+          <strong>所有相关数据：</strong>
+          <div v-if="debugInfo.allDataInfo && debugInfo.allDataInfo.length > 0">
+            <div v-for="(item, index) in debugInfo.allDataInfo" :key="index" class="bill-item">
+              <div><strong>Key:</strong> {{ item.key }}</div>
+              <div><strong>单据类型:</strong> {{ item.billType || '无' }}</div>
+              <div><strong>记录数:</strong> {{ item.count }}</div>
+              <div><strong>字段检查:</strong> type={{ item.hasTypeField }}, billType={{ item.hasBillTypeField }}, documentType={{ item.hasDocumentTypeField }}</div>
+              <div><strong>示例数据:</strong> <pre style="white-space: pre-wrap; word-break: break-word; margin: 4px 0;">{{ JSON.stringify(item.sample, null, 2) }}</pre></div>
+            </div>
+          </div>
+          <div v-else>没有找到相关数据</div>
+        </div>
+        <div class="debug-item">
+          <strong>退货单数据：</strong>
+          <div v-if="debugInfo.returnBills.length > 0">
+            <div v-for="(bill, index) in debugInfo.returnBills" :key="index" class="bill-item">
+              <div><strong>Key:</strong> {{ bill.key }}</div>
+              <div><strong>类型:</strong> {{ bill.type }}</div>
+              <div><strong>记录数:</strong> {{ bill.count }}</div>
+              <div><strong>示例数据:</strong> {{ JSON.stringify(bill.sample, null, 2) }}</div>
+            </div>
+          </div>
+          <div v-else>没有找到退货单</div>
+        </div>
+        <div class="debug-item">
+          <strong>出入库记录统计：</strong>
+          <div>入库单：{{ debugInfo.inboundCount }} 条</div>
+          <div>出库单：{{ debugInfo.outboundCount }} 条</div>
+          <div>采购退货：{{ debugInfo.purchaseReturnCount }} 条</div>
+          <div>销售退货：{{ debugInfo.salesReturnCount }} 条</div>
+          <div>调拨单：{{ debugInfo.transferCount }} 条</div>
+        </div>
+      </div>
 
       <!-- 底部统计区域 -->
       <div class="summary-bar">
@@ -290,10 +332,22 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, watch, onMounted } from 'vue'
-import { Search, RefreshLeft, Check, Back, Download, Printer, Close, Refresh } from '@element-plus/icons-vue'
+import { Search, RefreshLeft, Check, Back, Download, Printer, Close, Refresh, InfoFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import exportToCsv from '../../utils/exportCsv'
 import { initializeCostCalculation } from '../../utils/cost'
+
+// 调试信息
+const showDebugInfo = ref(false)
+const debugInfo = reactive({
+  allDataInfo: [] as any[],
+  returnBills: [] as any[],
+  inboundCount: 0,
+  outboundCount: 0,
+  purchaseReturnCount: 0,
+  salesReturnCount: 0,
+  transferCount: 0
+})
 
 // 查询表单
 const queryForm = reactive({
@@ -383,6 +437,95 @@ const handleInitialize = async () => {
   try {
     ElMessage.info('正在初始化成本数据，请稍候...')
     
+    // 清空调试信息
+      debugInfo.allDataInfo = []
+      debugInfo.returnBills = []
+      debugInfo.inboundCount = 0
+      debugInfo.outboundCount = 0
+      debugInfo.purchaseReturnCount = 0
+      debugInfo.salesReturnCount = 0
+      debugInfo.transferCount = 0
+    
+    // 收集调试信息
+    const allKeys = []
+    const allDataInfo = [] as any[]  // 存储所有数据的信息
+    
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i)
+      if (!key) continue
+      allKeys.push(key)
+      
+      try {
+        const arr = JSON.parse(localStorage.getItem(key) || '[]')
+        if (!Array.isArray(arr) || arr.length === 0) continue
+        
+        // 检查第一笔数据的单据类型
+        const firstItem = arr[0]
+        const billType = firstItem.type || firstItem.billType || firstItem.documentType || ''
+        
+        // 收集所有包含"退"、"return"、"Returns"、"inbound"、"outbound"等关键词的数据
+        if (key.includes('退') || key.toLowerCase().includes('return') || key.includes('inbound') || 
+            key.includes('outbound') || key.includes('purchase') || key.includes('sales') ||
+            billType.includes('退') || billType.toLowerCase().includes('return')) {
+          allDataInfo.push({
+            key: key,
+            billType: billType,
+            count: arr.length,
+            sample: firstItem,
+            hasTypeField: !!firstItem.type,
+            hasBillTypeField: !!firstItem.billType,
+            hasDocumentTypeField: !!firstItem.documentType
+          })
+        }
+        
+        // 统计退货单（通过单据类型字段判断，不区分大小写）
+        if (key.toLowerCase().includes('return') || billType.includes('退货') || billType.toLowerCase().includes('return')) {
+          const isPurchaseReturn = key.includes('purchase') || key.includes('inbound') || 
+                                   billType.includes('采购') || billType.includes('采购退货') || billType.includes('购退')
+          const isSalesReturn = key.includes('sales') || key.includes('outbound') || 
+                                billType.includes('销售') || billType.includes('销售退货') || billType.includes('销退')
+          
+          debugInfo.returnBills.push({
+            key: key,
+            type: isPurchaseReturn ? '采购退货' : (isSalesReturn ? '销售退货' : (billType || '未知')),
+            count: arr.length,
+            sample: firstItem
+          })
+          
+          if (isPurchaseReturn) {
+            debugInfo.purchaseReturnCount += arr.length
+          } else if (isSalesReturn) {
+            debugInfo.salesReturnCount += arr.length
+          }
+        }
+        
+        // 统计其他单据
+        if (key.includes('inbound') || key.includes('purchase')) {
+          debugInfo.inboundCount += arr.length
+        }
+        if (key.includes('outbound') || key.includes('sales')) {
+          debugInfo.outboundCount += arr.length
+        }
+        if (key.includes('transfer')) {
+          debugInfo.transferCount += arr.length
+        }
+      } catch (e) {
+        // 忽略解析错误
+      }
+    }
+    
+    console.log('=== 所有相关数据 ===')
+    console.log('所有 key:', allKeys)
+    console.log('相关数据信息:', allDataInfo)
+    
+    // 保存到 debugInfo
+    debugInfo.allDataInfo = allDataInfo
+    
+    console.log('=== 调试信息 ===')
+    console.log('所有 key:', allKeys)
+    console.log('退货单统计:', debugInfo.returnBills)
+    console.log('单据统计:', debugInfo)
+    
     // 调用初始化函数
     const settlements = initializeCostCalculation()
     
@@ -405,6 +548,7 @@ const handleInitialize = async () => {
     console.log('总结算数据:', allSettlements.length)
     
     ElMessage.success(`初始化完成！共为 ${settlements.length} 个产品仓库组合计算了库存结余`)
+    showDebugInfo.value = true  // 自动显示调试信息
     
     // 自动刷新列表
     if (queryForm.periodRange && queryForm.periodRange.length === 2) {
@@ -412,7 +556,7 @@ const handleInitialize = async () => {
     }
   } catch (error) {
     console.error('初始化成本数据失败:', error)
-    ElMessage.error('初始化失败，请查看控制台日志')
+    ElMessage.error('初始化失败，请查看调试信息')
   }
 }
 
@@ -602,13 +746,33 @@ const loadSettlementData = () => {
   if (previousSettlements.length > 0) {
     console.log('最新的上期结算数据:', previousSettlements[0])
   } else {
-    console.log('⚠️ 未找到上期结算数据！期初将为 0')
-    console.log('所有结算数据:', allSettlements.map((s: any) => ({
-      productCode: s.productCode,
-      periodRange: s.periodRange,
-      closingQty: s.closingQty,
-      closingCost: s.closingCost
-    })))
+    console.log('⚠️ 未找到上期结算数据！尝试从初始化数据中获取...')
+    
+    // 从初始化数据中获取当前期间之前的最后一个月的数据作为期初
+    const initializedSettlements = allSettlements.filter((s: any) => s._initialized === true)
+    if (initializedSettlements.length > 0) {
+      console.log('找到初始化数据:', initializedSettlements.length, '条')
+      // 筛选出当前期间之前的初始化数据
+      const previousInitialized = initializedSettlements.filter((s: any) => {
+        if (!s.periodRange || s.periodRange.length !== 2) return false
+        const periodEnd = s.periodRange[1]
+        // 查找当前期间之前（不包括当前期间）的数据
+        return periodEnd < periodStart.toISOString().slice(0, 10)
+      })
+      
+      if (previousInitialized.length > 0) {
+        // 按结束日期倒序排序，取最新的一个月
+        previousInitialized.sort((a: any, b: any) => 
+          new Date(b.periodRange[1]).getTime() - new Date(a.periodRange[1]).getTime()
+        )
+        console.log('✓ 使用初始化数据中', previousInitialized[0].periodRange, '的数据作为期初')
+        previousSettlements.push(...previousInitialized)
+      } else {
+        console.log('⚠️ 初始化数据中也没有当前期间之前的数据，期初将为 0')
+      }
+    } else {
+      console.log('⚠️ 也未找到初始化数据，期初将为 0')
+    }
   }
   
   // 参照实时库存查询的明细功能，遍历所有 localStorage 键来查找出入库记录
@@ -992,13 +1156,23 @@ warehousesToProcess.forEach((warehouse: any) => {
     // 使用最新的上期结算数据（已经按结束日期倒序排序）
     const previousRecord = previousSettlements.length > 0 ? 
       previousSettlements.find((s: any) => 
-        s.productCode === product.code && s.warehouseId === warehouseId
+        (s.productCode === product.code || s.productId === product.id) && 
+        (s.warehouseId === warehouseId || s.warehouse === warehouseId)
       ) : null
     const openingQty = previousRecord ? Number(previousRecord.closingQty || 0) : 0
     const openingCost = previousRecord ? Number(previousRecord.closingCost || 0) : 0
     
     if (previousRecord) {
       console.log(`产品 ${product.code} ${product.name} 期初数据来自 ${previousRecord.periodRange[1]}: 数量=${openingQty}, 成本=${openingCost}`)
+    } else {
+      console.log(`⚠️ 产品 ${product.code} ${product.name} 在仓库 ${warehouse.name} 未找到期初数据，期初将为 0`)
+      console.log('所有 previousSettlements:', previousSettlements.map(s => ({
+        productCode: s.productCode,
+        productId: s.productId,
+        warehouseId: s.warehouseId,
+        warehouse: s.warehouse,
+        closingQty: s.closingQty
+      })))
     }
     
     // ========== 2. 本期入库数据（当前会计期间，指定仓库）==========
@@ -1499,6 +1673,7 @@ const loadDetailData = (row: any) => {
   
   // 第一步：收集所有出库单成本价（先完整处理一遍，建立映射）
   const outboundCostPriceMap = new Map() // key: 出库单号, value: 成本价
+  const inboundCostPriceMap = new Map() // key: 入库单号, value: 成本价 (用于采购退货)
   
   // 先临时处理一遍，建立出库单号到成本价的映射
   let tempRunningQty = openingQty
@@ -1544,12 +1719,20 @@ const loadDetailData = (row: any) => {
     })
     
     entries.forEach(entry => {
-      if (entry.inboundQty > 0) {
+      if (entry.inboundQty !== 0) {
         tempRunningQty += entry.inboundQty
         tempRunningCost += entry.inboundAmount
+        
+        // 为入库单建立成本价映射（用于采购退货）
+        const docNo = String(entry.docNo || '')
+        if (docNo) {
+          const inboundCostPrice = entry.inboundUnitPrice || (entry.inboundAmount / entry.inboundQty) || 0
+          inboundCostPriceMap.set(docNo, inboundCostPrice)
+          console.log(`入库单 ${docNo} 成本价映射:`, inboundCostPrice)
+        }
       }
       
-      if (entry.outboundQty > 0) {
+      if (entry.outboundQty !== 0) {
         const previousCostPrice = tempRunningQty > 0 ? tempRunningCost / tempRunningQty : 0
         const docNo = String(entry.docNo || '')
         if (docNo) {
@@ -1562,6 +1745,7 @@ const loadDetailData = (row: any) => {
   })
   
   console.log('出库单号成本价映射:', Array.from(outboundCostPriceMap.entries()))
+  console.log('入库单号成本价映射:', Array.from(inboundCostPriceMap.entries()))
   
   // 添加第一个月的期初数据
   if (sortedMonths.length > 0) {
@@ -1640,13 +1824,30 @@ const loadDetailData = (row: any) => {
     
     // 处理当月每条记录
     entries.forEach(entry => {
-      if (entry.inboundQty > 0) {
+      if (entry.inboundQty !== 0) {
         // 判断是否是调拨入库
         const isTransferInbound = entry.type === '调拨入库'
+        
+        // 判断是否是采购退货（有 originalVoucherNo 字段或者数量为负）
+        const isPurchaseReturnEntry = entry.originalVoucherNo || entry.inboundQty < 0
         
         if (isTransferInbound) {
           // 调拨入库：保持第一步已经设置好的成本价和金额
           console.log(`调拨入库 ${entry.docNo} 保持成本价:`, entry.inboundUnitPrice, '金额:', entry.inboundAmount)
+        } else if (isPurchaseReturnEntry && entry.originalVoucherNo) {
+          // 采购退货：使用原始入库单的成本价
+          const origInboundNo = String(entry.originalVoucherNo || '')
+          if (inboundCostPriceMap.has(origInboundNo)) {
+            const costPriceToUse = inboundCostPriceMap.get(origInboundNo)!
+            entry.inboundUnitPrice = costPriceToUse
+            entry.inboundAmount = entry.inboundQty * costPriceToUse
+            console.log(`采购退货单 ${entry.docNo} 使用原入库单 ${origInboundNo} 的成本价:`, costPriceToUse)
+          } else {
+            // 如果找不到原入库单，使用默认成本价逻辑
+            entry.inboundUnitPrice = entry.inboundUnitPrice || (entry.unitPriceInc > 0 ? entry.unitPriceInc : entry.unitPriceEx)
+            entry.inboundAmount = entry.inboundQty * entry.inboundUnitPrice
+            console.warn(`⚠️ 采购退货单 ${entry.docNo} 找不到原入库单 ${origInboundNo}，使用默认成本价:`, entry.inboundUnitPrice)
+          }
         } else {
           // 正常入库：更新库存数量和成本
           entry.inboundUnitPrice = entry.inboundUnitPrice || (entry.unitPriceInc > 0 ? entry.unitPriceInc : entry.unitPriceEx)
@@ -2080,5 +2281,52 @@ onMounted(() => {
 :deep(.monthly-row .stock-col),
 :deep(.yearly-row .stock-col) {
   background-color: transparent !important;
+}
+
+/* 调试信息框 */
+.debug-info-box {
+  margin-top: 16px;
+  padding: 16px;
+  background: #f5f7fa;
+  border-radius: 4px;
+  border: 1px solid #e4e7ed;
+}
+
+.debug-info-box h4 {
+  margin: 0 0 12px 0;
+  color: #303133;
+  font-size: 14px;
+}
+
+.debug-item {
+  margin-bottom: 12px;
+  padding: 12px;
+  background: #fff;
+  border-radius: 4px;
+  border: 1px solid #e4e7ed;
+  font-size: 13px;
+}
+
+.debug-item strong {
+  color: #606266;
+  margin-right: 8px;
+}
+
+.bill-item {
+  padding: 8px;
+  margin-bottom: 8px;
+  background: #f0f9eb;
+  border-radius: 4px;
+  font-size: 12px;
+  border-left: 3px solid #67c23a;
+}
+
+.bill-item > div {
+  margin-bottom: 4px;
+  word-break: break-all;
+}
+
+.bill-item:last-child {
+  margin-bottom: 0;
 }
 </style>

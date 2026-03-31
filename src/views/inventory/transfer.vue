@@ -210,6 +210,7 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getWeightedAverageCost, getCostFromSettlement } from '@/utils/cost'
+import { getCostPrice } from '@/utils/cost-database'
 import { getRealTimeStock, getStockBeforeDateTime } from '@/utils/stock'
 
 const searchQuery = ref('')
@@ -395,7 +396,7 @@ const handleDeleteItem = (index: number) => {
 }
 
 // 产品选择变化
-const handleProductChange = (index: number) => {
+const handleProductChange = async (index: number) => {
   const item = formData.items[index]
   const product = products.value.find(p => p.id === item.productId)
   if (product) {
@@ -403,8 +404,8 @@ const handleProductChange = (index: number) => {
     item.specification = product.specification
     item.unit = product.unit
     
-    // 自动从成本结算模块获取成本价
-    const costPrice = getCostFromSettlement(item.productId, formData.fromWarehouseId, formData.transferDate)
+    // 自动从数据库获取成本价（优先）或动态计算
+    const costPrice = await getCostPrice(item.productId, formData.fromWarehouseId, formData.transferDate)
     if (costPrice > 0) {
       item.unitPriceEx = costPrice
       // 根据数量和单价计算金额

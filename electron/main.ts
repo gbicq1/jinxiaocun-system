@@ -1,9 +1,13 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { resolve } from 'path'
-import { Database } from './database'
+import { InventoryDatabase } from './database'
+import { CostSettlementHandler } from './cost-settlement-handler'
+import { ScheduledTaskService } from './scheduled-task-service'
 
 let mainWindow: BrowserWindow | null = null
-let db: Database
+let db: InventoryDatabase
+let costHandler: CostSettlementHandler
+let scheduledTaskService: ScheduledTaskService
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -37,8 +41,21 @@ function createWindow() {
 // 初始化数据库
 function initDatabase() {
   const dbPath = resolve(app.getPath('userData'), 'inventory.db')
-  db = new Database(dbPath)
+  db = new InventoryDatabase(dbPath)
+  db.initialize()
   console.log('数据库初始化完成:', dbPath)
+  
+  // 初始化成本结算处理器
+  if (db.costDb) {
+    costHandler = new CostSettlementHandler(db.costDb, mainWindow!)
+    costHandler.registerHandlers()
+    console.log('成本结算处理器初始化完成')
+    
+    // 初始化定时任务服务
+    scheduledTaskService = new ScheduledTaskService(db.costDb, mainWindow!)
+    scheduledTaskService.start()
+    console.log('定时任务服务已启动')
+  }
 }
 
 // IPC 处理器
@@ -85,8 +102,8 @@ function setupIpcHandlers() {
 }
 
 app.whenReady().then(() => {
-  initDatabase()
   createWindow()
+  initDatabase()
   setupIpcHandlers()
 
   app.on('activate', () => {
