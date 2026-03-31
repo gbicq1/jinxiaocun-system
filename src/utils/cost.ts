@@ -909,69 +909,103 @@ export const initializeCostCalculation = (): any[] => {
     // 为每个产品每个仓库计算成本结算
     const settlements: any[] = []
     
+    // 按月份分组
+    const recordsByMonth = new Map<string, any[]>()
+    allRecords.forEach((rec: any) => {
+      const monthKey = rec.dateStr.slice(0, 7) // YYYY-MM
+      if (!recordsByMonth.has(monthKey)) {
+        recordsByMonth.set(monthKey, [])
+      }
+      recordsByMonth.get(monthKey)!.push(rec)
+    })
+    
+    // 获取排序后的月份列表
+    const sortedMonths = Array.from(recordsByMonth.keys()).sort()
+    console.log('数据覆盖的月份:', sortedMonths)
+    
     products.forEach((product: any) => {
       warehouses.forEach((warehouse: any) => {
         const productId = product.id
         const productCode = product.code
         const warehouseId = warehouse.id
         
-        // 筛选该产品和仓库的记录
-        const productRecords = allRecords.filter((r: any) => 
-          (r.productId === productId || r.productCode === productCode) && 
-          r.warehouseId === warehouseId
-        )
-        
-        if (productRecords.length === 0) {
-          return // 没有记录，跳过
-        }
-        
         // 从 0 开始计算
         let runningQty = 0
         let runningCost = 0
         
-        // 遍历所有记录
-        productRecords.forEach((rec: any) => {
-          if (rec.isInbound) {
-            // 入库：增加库存和成本
-            runningQty += rec.quantity
-            runningCost += rec.amount
-          } else if (rec.isOutbound) {
-            // 出库：使用加权平均单价计算出库成本
-            const avgPrice = runningQty > 0 ? runningCost / runningQty : 0
-            const outboundCost = rec.quantity * avgPrice
-            
-            runningQty -= rec.quantity
-            runningCost -= outboundCost
-          }
-        })
-        
-        // 如果最终有库存，生成结算数据
-        if (runningQty > 0) {
-          const avgPrice = runningCost / runningQty
+        // 逐月计算
+        sortedMonths.forEach((monthKey, index) => {
+          const monthRecords = recordsByMonth.get(monthKey)!
+            .filter((r: any) => 
+              (r.productId === productId || r.productCode === productCode) && 
+              r.warehouseId === warehouseId
+            )
           
-          settlements.push({
-            productId: productId,
-            productCode: productCode,
-            productName: product.name,
-            specification: product.specification || '',
-            unit: product.unit || '',
-            warehouseId: warehouseId,
-            warehouseName: warehouse.name,
-            periodRange: [earliestDate.toISOString().slice(0, 10), latestDate.toISOString().slice(0, 10)],
-            openingQty: 0,
-            openingCost: 0,
-            inboundQty: productRecords.filter((r: any) => r.isInbound).reduce((sum: number, r: any) => sum + r.quantity, 0),
-            inboundCost: productRecords.filter((r: any) => r.isInbound).reduce((sum: number, r: any) => sum + r.amount, 0),
-            outboundQty: productRecords.filter((r: any) => r.isOutbound).reduce((sum: number, r: any) => sum + r.quantity, 0),
-            outboundCost: productRecords.filter((r: any) => r.isOutbound).reduce((sum: number, r: any) => sum + (r.quantity * (runningCost / runningQty)), 0),
-            avgPrice: Number(avgPrice.toFixed(2)),
-            closingQty: runningQty,
-            closingCost: runningCost,
-            _initialized: true // 标记为初始化数据
+          if (monthRecords.length === 0) {
+            return // 该月没有该产品的记录
+          }
+          
+          // 计算该月的入库和出库
+          const monthInboundQty = monthRecords
+            .filter((r: any) => r.isInbound)
+            .reduce((sum: number, r: any) => sum + r.quantity, 0)
+          const monthInboundCost = monthRecords
+            .filter((r: any) => r.isInbound)
+            .reduce((sum: number, r: any) => sum + r.amount, 0)
+          const monthOutboundQty = monthRecords
+            .filter((r: any) => r.isOutbound)
+            .reduce((sum: number, r: any) => sum + r.quantity, 0)
+          
+          // 处理该月的出入库记录
+          monthRecords.forEach((rec: any) => {
+            if (rec.isInbound) {
+              runningQty += rec.quantity
+              runningCost += rec.amount
+            } else if (rec.isOutbound) {
+              const avgPrice = runningQty > 0 ? runningCost / runningQty : 0
+              const outboundCost = rec.quantity * avgPrice
+              runningQty -= rec.quantity
+              runningCost -= outboundCost
+            }
           })
           
-          console.log(`产品 ${productCode} ${product.name} 仓库 ${warehouse.name}: 库存=${runningQty}, 成本价=${avgPrice.toFixed(2)}`)
-        }
+          // 如果该月有库存结余，生成结算数据
+          if (runningQty > 0) {
+            const avgPrice = runningCost / runningQty
+            const monthEnd = new Date(monthKey + '-01')
+            monthEnd.setMonth(monthEnd.getMonth() + 1)
+            monthEnd.setDate(0) // 设置为月末
+            
+            settlements.push({
+              productId: productId,
+              productCode: productCode,
+              productName: product.name,
+              specification: product.specification || '',
+              unit: product.unit || '',
+              warehouseId: warehouseId,
+              warehouseName: warehouse.name,
+              periodRange: [monthKey + '-01', monthEnd.toISOString().slice(0, 10)],
+              openingQty: index === 0 ? 0 : settlements.find((s: any) => 
+                s.productId === productId && s.warehouseId === warehouseId
+              )?.closingQty || 0,
+              openingCost: index === 0 ? 0 : settlements.find((s: any) => 
+                s.productId === productId && s.warehouseId === warehouseId
+              )?.closingCost || 0,
+              inboundQty: monthInboundQty,
+              inboundCost: monthInboundCost,
+              outboundQty: monthOutboundQty,
+              outboundCost: monthOutboundQty * avgPrice,
+              avgPrice: Number(avgPrice.toFixed(2)),
+              closingQty: runningQty,
+              closingCost: runningCost,
+              _initialized: true // 标记为初始化数据
+            })
+            
+            if (index === sortedMonths.length - 1) {
+              console.log(`产品 ${productCode} ${product.name} 仓库 ${warehouse.name}: 库存=${runningQty}, 成本价=${avgPrice.toFixed(2)}`)
+            }
+          }
+        })
       })
     })
     

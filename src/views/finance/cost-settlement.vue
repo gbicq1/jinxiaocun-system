@@ -601,6 +601,14 @@ const loadSettlementData = () => {
   console.log('当前期间之前的结算数据数量:', previousSettlements.length)
   if (previousSettlements.length > 0) {
     console.log('最新的上期结算数据:', previousSettlements[0])
+  } else {
+    console.log('⚠️ 未找到上期结算数据！期初将为 0')
+    console.log('所有结算数据:', allSettlements.map((s: any) => ({
+      productCode: s.productCode,
+      periodRange: s.periodRange,
+      closingQty: s.closingQty,
+      closingCost: s.closingCost
+    })))
   }
   
   // 参照实时库存查询的明细功能，遍历所有 localStorage 键来查找出入库记录
