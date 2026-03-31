@@ -1763,6 +1763,58 @@ const loadDetailData = (row: any) => {
   })
   
   console.log('明细数据加载完成，共', ledgerEntries.value.length, '条记录')
+  
+  // ========== 优化：即使本月没有业务，也要显示上月结转 ==========
+  // 如果 ledgerEntries 为空（本月没有业务），但期初有数据，添加上月结转行
+  if (ledgerEntries.value.length === 0 && (openingQty > 0 || openingCost > 0)) {
+    console.log('本月没有业务，但期初有数据，添加上月结转行')
+    
+    const firstMonth = sortedMonths.length > 0 ? sortedMonths[0] : periodStart.toISOString().slice(0, 7)
+    
+    const openingEntry = {
+      rowType: 'carryover' as const,
+      date: openingDateStr,
+      type: '期初',
+      docNo: '-',
+      inboundQty: 0,  // 上月结转不显示入库数据
+      inboundUnitPrice: 0,
+      inboundAmount: 0,
+      outboundQty: 0,  // 上月结转不显示出库数据
+      outboundUnitPrice: 0,
+      outboundAmount: 0,
+      counter: '-',
+      remark: '-',
+      runningQty: openingQty,  // 直接在库存结余列显示
+      runningAmount: openingCost,
+      costPrice: openingPrice,
+      monthKey: firstMonth
+    }
+    
+    ledgerEntries.value.push(openingEntry)
+    
+    // 添加本月合计行（显示 0）
+    const monthlyEntry = {
+      rowType: 'monthly' as const,
+      date: '[本月合计]',
+      type: '',
+      docNo: '',
+      inboundQty: 0,
+      inboundUnitPrice: 0,
+      inboundAmount: 0,
+      outboundQty: 0,
+      outboundUnitPrice: 0,
+      outboundAmount: 0,
+      counter: '',
+      remark: '',
+      runningQty: openingQty,
+      runningAmount: openingCost,
+      costPrice: openingPrice,
+      monthKey: firstMonth
+    }
+    ledgerEntries.value.push(monthlyEntry)
+    
+    console.log('已添加上月结转和本月合计行')
+  }
 }
 
 // 页面加载时自动加载数据
