@@ -192,7 +192,7 @@
               <el-table-column label="入库数据" align="center">
                 <el-table-column prop="inboundQty" label="数量" width="100" min-width="80" class-name="inbound-col">
                   <template #default="{ row }">
-                    <span v-if="row.rowType === 'carryover'" style="color: #67c23a; font-weight: bold">{{ row.inboundQty }}</span>
+                    <span v-if="row.rowType === 'carryover'">-</span>
                     <span v-else-if="row.inboundQty > 0" style="color: #67c23a">{{ row.inboundQty }}</span>
                     <span v-else-if="row.inboundQty < 0" style="color: #f56c6c">{{ row.inboundQty }}</span>
                     <span v-else>-</span>
@@ -200,14 +200,14 @@
                 </el-table-column>
                 <el-table-column prop="inboundUnitPrice" label="成本价" width="120" min-width="100" class-name="inbound-col">
                   <template #default="{ row }">
-                    <span v-if="row.rowType === 'carryover'" style="font-weight: bold">¥{{ (row.inboundUnitPrice || 0).toFixed(2) }}</span>
+                    <span v-if="row.rowType === 'carryover'">-</span>
                     <span v-else-if="row.inboundQty !== 0">¥{{ (row.inboundUnitPrice || 0).toFixed(2) }}</span>
                     <span v-else>-</span>
                   </template>
                 </el-table-column>
                 <el-table-column prop="inboundAmount" label="金额" width="140" min-width="120" class-name="inbound-col">
                   <template #default="{ row }">
-                    <span v-if="row.rowType === 'carryover'" style="font-weight: bold">¥{{ (row.inboundAmount || 0).toFixed(2) }}</span>
+                    <span v-if="row.rowType === 'carryover'">-</span>
                     <span v-else-if="row.inboundQty !== 0">¥{{ (row.inboundAmount || 0).toFixed(2) }}</span>
                     <span v-else>-</span>
                   </template>
@@ -1776,12 +1776,12 @@ const loadDetailData = (row: any) => {
       date: openingDateStr,
       type: '期初',
       docNo: '-',
-      inboundQty: 0,  // 上月结转不显示入库数据
-      inboundUnitPrice: 0,
-      inboundAmount: 0,
-      outboundQty: 0,  // 上月结转不显示出库数据
-      outboundUnitPrice: 0,
-      outboundAmount: 0,
+      inboundQty: null,  // 上月结转不显示入库数据
+      inboundUnitPrice: null,
+      inboundAmount: null,
+      outboundQty: null,  // 上月结转不显示出库数据
+      outboundUnitPrice: null,
+      outboundAmount: null,
       counter: '-',
       remark: '-',
       runningQty: openingQty,  // 直接在库存结余列显示
