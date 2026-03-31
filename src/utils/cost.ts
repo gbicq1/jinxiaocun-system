@@ -826,30 +826,12 @@ export const initializeCostCalculation = (): any[] => {
           const items = rec.items || rec.products || rec.details || rec.lines || rec.itemsList
           if (!Array.isArray(items)) return
           
-          // 判断是入库还是出库
-          let recWarehouseId = null
-          let isInbound = false
-          let isOutbound = false
-          let isTransferOut = false
-          let isTransferIn = false
+          // 获取调拨单信息
+          const isTransferKey = key.includes('transfer')
+          const fromWarehouseId = rec.fromWarehouseId
+          const toWarehouseId = rec.toWarehouseId
           
-          if (isTransferKey) {
-            // 调拨单
-            recWarehouseId = rec.fromWarehouseId || rec.toWarehouseId
-            isTransferOut = true
-            isTransferIn = true
-          } else if (isInboundKey || isSalesReturn) {
-            // 入库单或销售退货（销售退货当作入库处理）
-            recWarehouseId = rec.warehouseId
-            isInbound = true
-          } else if (isOutboundKey || isPurchaseReturn) {
-            // 出库单或采购退货（采购退货当作出库处理）
-            recWarehouseId = rec.warehouseId
-            isOutbound = true
-          }
-          
-          if (!recWarehouseId) return
-          
+          // 处理每条明细
           items.forEach((it: any) => {
             const itId = it.productId || it.id || null
             if (!itId) return
@@ -861,21 +843,85 @@ export const initializeCostCalculation = (): any[] => {
             const costPrice = Number(it.unitPriceEx || it.costPrice || it.unitPrice || it.price || 0)
             const amount = Number(it.totalAmountEx || it.totalAmount || it.amount || (quantity * costPrice))
             
-            // 添加到记录列表
-            allRecords.push({
-              productId: itId,
-              productCode: it.productCode || it.code || it.sku || '',
-              warehouseId: recWarehouseId,
-              date: recDate,
-              dateStr: recDateStr.slice(0, 10),
-              isInbound: isInbound || (isTransferIn && Number(rec.toWarehouseId) === Number(recWarehouseId)),
-              isOutbound: isOutbound || (isTransferOut && Number(rec.fromWarehouseId) === Number(recWarehouseId)),
-              isTransfer: isTransferKey,
-              quantity,
-              costPrice,
-              amount,
-              _timestamp: rec.createdAt || rec.createdTime || rec.createTime || rec.timestamp
-            })
+            // 判断单据类型并添加记录
+            const isPurchaseReturn = key.includes('return') && (key.includes('purchase') || key.includes('inbound'))
+            const isSalesReturn = key.includes('return') && (key.includes('sales') || key.includes('outbound'))
+            const isInboundKey = key.includes('inbound') || (key.includes('purchase') && !key.includes('return'))
+            const isOutboundKey = key.includes('outbound') || (key.includes('sales') && !key.includes('return'))
+            
+            if (isTransferKey && fromWarehouseId && toWarehouseId) {
+              // 调拨单：生成两条记录（调出和调入）
+              
+              // 1. 调出仓库：出库记录
+              allRecords.push({
+                productId: itId,
+                productCode: it.productCode || it.code || it.sku || '',
+                warehouseId: fromWarehouseId,
+                date: recDate,
+                dateStr: recDateStr.slice(0, 10),
+                isInbound: false,
+                isOutbound: true,
+                isTransfer: true,
+                quantity,
+                costPrice,
+                amount,
+                _timestamp: rec.createdAt || rec.createdTime || rec.createTime || rec.timestamp
+              })
+              
+              // 2. 调入仓库：入库记录
+              allRecords.push({
+                productId: itId,
+                productCode: it.productCode || it.code || it.sku || '',
+                warehouseId: toWarehouseId,
+                date: recDate,
+                dateStr: recDateStr.slice(0, 10),
+                isInbound: true,
+                isOutbound: false,
+                isTransfer: true,
+                quantity,
+                costPrice,
+                amount,
+                _timestamp: rec.createdAt || rec.createdTime || rec.createTime || rec.timestamp
+              })
+            } else if (isInboundKey || isSalesReturn) {
+              // 入库单或销售退货（销售退货当作入库处理）
+              const recWarehouseId = rec.warehouseId
+              if (!recWarehouseId) return
+              
+              allRecords.push({
+                productId: itId,
+                productCode: it.productCode || it.code || it.sku || '',
+                warehouseId: recWarehouseId,
+                date: recDate,
+                dateStr: recDateStr.slice(0, 10),
+                isInbound: true,
+                isOutbound: false,
+                isTransfer: false,
+                quantity,
+                costPrice,
+                amount,
+                _timestamp: rec.createdAt || rec.createdTime || rec.createTime || rec.timestamp
+              })
+            } else if (isOutboundKey || isPurchaseReturn) {
+              // 出库单或采购退货（采购退货当作出库处理）
+              const recWarehouseId = rec.warehouseId
+              if (!recWarehouseId) return
+              
+              allRecords.push({
+                productId: itId,
+                productCode: it.productCode || it.code || it.sku || '',
+                warehouseId: recWarehouseId,
+                date: recDate,
+                dateStr: recDateStr.slice(0, 10),
+                isInbound: false,
+                isOutbound: true,
+                isTransfer: false,
+                quantity,
+                costPrice,
+                amount,
+                _timestamp: rec.createdAt || rec.createdTime || rec.createTime || rec.timestamp
+              })
+            }
           })
         })
       } catch (e) {
