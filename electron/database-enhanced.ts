@@ -10,13 +10,12 @@ import Database from 'better-sqlite3'
 import { resolve } from 'path'
 
 export class EnhancedInventoryDatabase {
-  private db: Database.Database
+  private db: Database.Database | null = null
   private dbPath: string
   private initialized: boolean = false
 
   constructor(dbPath: string) {
     this.dbPath = dbPath
-    this.db = null
   }
 
   /**

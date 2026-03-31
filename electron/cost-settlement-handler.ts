@@ -124,16 +124,15 @@ export class CostSettlementHandler {
     
     // 异步执行，不阻塞主线程
     setTimeout(() => {
-      this.settlementService.recalculateFromMonth(year, month)
-        .then(result => {
-          console.log('重新结算结果:', result)
-          // 通知前端更新
-          this.mainWindow.webContents.send('cost:recalculate-complete', result)
-        })
-        .catch(error => {
-          console.error('重新结算失败:', error)
-          this.mainWindow.webContents.send('cost:recalculate-error', error)
-        })
+      try {
+        const result = this.settlementService.recalculateFromMonth(year, month)
+        console.log('重新结算结果:', result)
+        // 通知前端更新
+        this.mainWindow.webContents.send('cost:recalculate-complete', result)
+      } catch (error) {
+        console.error('重新结算失败:', error)
+        this.mainWindow.webContents.send('cost:recalculate-error', error)
+      }
     }, 100)
   }
 }

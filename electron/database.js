@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.InventoryDatabase = void 0;
 const better_sqlite3_1 = __importDefault(require("better-sqlite3"));
+const database_cost_1 = require("./database-cost");
 class InventoryDatabase {
     constructor(dbPath) {
         this.db = null;
@@ -14,6 +15,9 @@ class InventoryDatabase {
         try {
             this.db = new better_sqlite3_1.default(this.dbPath);
             this.createTables();
+            // 初始化成本结算数据库
+            this.costDb = new database_cost_1.CostSettlementDatabase(this.db);
+            this.costDb.initialize();
             return true;
         }
         catch (error) {

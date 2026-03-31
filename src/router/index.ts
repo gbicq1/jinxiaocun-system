@@ -234,6 +234,12 @@ const routes: any[] = [
         name: 'SystemRecycleBin',
         component: () => import('@/views/system/recycle-bin.vue'),
         meta: { title: '回收站', icon: 'Delete' }
+      },
+      {
+        path: 'data-migration',
+        name: 'SystemDataMigration',
+        component: () => import('@/views/system/data-migration.vue'),
+        meta: { title: '数据迁移', icon: 'Upload' }
       }
     ]
   }

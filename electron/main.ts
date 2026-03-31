@@ -65,8 +65,8 @@ function setupIpcHandlers() {
     return db.initialize()
   })
 
-  ipcMain.handle('db-query', async (event, table: string, sql: string, params: any[] = []) => {
-    return db.query(table, sql, params)
+  ipcMain.handle('db-query', async (event, table: string, sql: string, params?: any[]) => {
+    return db.query(sql, params || [])
   })
 
   ipcMain.handle('db-insert', async (event, table: string, data: any) => {

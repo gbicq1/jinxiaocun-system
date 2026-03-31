@@ -3,13 +3,12 @@ import { resolve } from 'path'
 import { CostSettlementDatabase } from './database-cost'
 
 export class InventoryDatabase {
-  private db: Database.Database
+  private db: Database.Database | null = null
   private dbPath: string
-  public costDb: CostSettlementDatabase
+  public costDb!: CostSettlementDatabase
 
   constructor(dbPath: string) {
     this.dbPath = dbPath
-    this.db = null
   }
 
   initialize(): boolean {
@@ -415,7 +414,7 @@ export class InventoryDatabase {
   }
 
   query(sql: string, params: any[] = []): any[] {
-    return this.db.prepare(sql).all(...params)
+    return this.db!.prepare(sql).all(...params)
   }
 
   insert(table: string, data: any): number {
@@ -424,9 +423,9 @@ export class InventoryDatabase {
     const placeholders = keys.map(() => '?').join(',')
     
     const sql = `INSERT INTO ${table} (${keys.join(',')}) VALUES (${placeholders})`
-    const stmt = this.db.prepare(sql)
+    const stmt = this.db!.prepare(sql)
     const result = stmt.run(...values)
-    return result.lastInsertRowid
+    return Number(result.lastInsertRowid)
   }
 
   update(table: string, data: any, where: string, whereParams: any[] = []): number {
@@ -450,8 +449,8 @@ export class InventoryDatabase {
   // 产品相关方法
   getProductList(page: number = 1, pageSize: number = 10): any {
     const offset = (page - 1) * pageSize
-    const total = this.db.prepare('SELECT COUNT(*) as count FROM products').get()
-    const products = this.db.prepare(`
+    const total = this.db!.prepare('SELECT COUNT(*) as count FROM products').get() as any
+    const products = this.db!.prepare(`
       SELECT * FROM products 
       ORDER BY created_at DESC 
       LIMIT ? OFFSET ?

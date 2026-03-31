@@ -148,7 +148,7 @@ export class MonthlyCostSettlementService {
   /**
    * 获取期初数据（上月期末）
    */
-  private getOpeningData(productCode: string, warehouseId: number, year: number, month: number) {
+  private getOpeningData(productCode: string, warehouseId: number, year: number, month: number): { qty: number; cost: number } | null {
     // 计算上月
     let prevYear = year
     let prevMonth = month - 1
@@ -529,12 +529,11 @@ export class MonthlyCostSettlementService {
 
       while (y < currentYear || (y === currentYear && m <= currentMonth)) {
         const isSettled = this.costDb.isSettled(y, m)
-        const isLocked = this.costDb.isLocked(y, m)
 
-        console.log(`  ${y}年${m}月: 已结算=${isSettled}, 已锁定=${isLocked}`)
+        console.log(`  ${y}年${m}月：已结算=${isSettled}`)
 
-        if (isSettled && !isLocked) {
-          // 如果已结算但未锁定，说明可能需要重新计算
+        if (isSettled) {
+          // 如果已结算，说明可能需要重新计算
           hasUnlockedMonth = true
           break
         }

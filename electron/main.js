@@ -2,18 +2,13 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const electron_1 = require("electron");
 const path_1 = require("path");
+const database_1 = require("./database");
+const cost_settlement_handler_1 = require("./cost-settlement-handler");
+const scheduled_task_service_1 = require("./scheduled-task-service");
 let mainWindow = null;
 let db;
-// 动态导入数据库模块（支持打包后的 ASAR 路径）
-let InventoryDatabase;
-if (electron_1.app.isPackaged) {
-    // 生产环境：从 ASAR 内部加载
-    InventoryDatabase = require((0, path_1.join)((0, path_1.dirname)(__filename), 'database.js')).default;
-}
-else {
-    // 开发环境：直接导入
-    InventoryDatabase = require('./database').default;
-}
+let costHandler;
+let scheduledTaskService;
 function createWindow() {
     mainWindow = new electron_1.BrowserWindow({
         width: 1400,
@@ -21,9 +16,9 @@ function createWindow() {
         minWidth: 1024,
         minHeight: 768,
         webPreferences: {
-            nodeIntegration: false,
-            contextIsolation: true,
-            preload: (0, path_1.join)(__dirname, 'preload.js')
+            nodeIntegration: true,
+            contextIsolation: false,
+            preload: (0, path_1.resolve)(__dirname, 'preload.js')
         },
         icon: (0, path_1.resolve)(__dirname, '../assets/icon.png'),
         title: '进销存管理系统'
@@ -44,55 +39,39 @@ function createWindow() {
 // 初始化数据库
 function initDatabase() {
     const dbPath = (0, path_1.resolve)(electron_1.app.getPath('userData'), 'inventory.db');
-    db = new InventoryDatabase(dbPath);
-    const success = db.initialize();
-    console.log('数据库初始化完成:', dbPath, '成功:', success);
-    return success;
+    db = new database_1.InventoryDatabase(dbPath);
+    db.initialize();
+    console.log('数据库初始化完成:', dbPath);
+    // 初始化成本结算处理器
+    if (db.costDb) {
+        costHandler = new cost_settlement_handler_1.CostSettlementHandler(db.costDb, mainWindow);
+        costHandler.registerHandlers();
+        console.log('成本结算处理器初始化完成');
+        // 初始化定时任务服务
+        scheduledTaskService = new scheduled_task_service_1.ScheduledTaskService(db.costDb, mainWindow);
+        scheduledTaskService.start();
+        console.log('定时任务服务已启动');
+    }
 }
 // IPC 处理器
 function setupIpcHandlers() {
-    // 数据库初始化
-    electron_1.ipcMain.handle('db-init', async () => {
-        return initDatabase();
-    });
     // 数据库操作
-    electron_1.ipcMain.handle('db-query', async (event, sql, params = []) => {
-        try {
-            return db.query(sql, params);
-        }
-        catch (error) {
-            console.error('查询失败:', error);
-            throw error;
-        }
+    electron_1.ipcMain.handle('db-init', async () => {
+        return db.initialize();
+    });
+    electron_1.ipcMain.handle('db-query', async (event, table, sql, params) => {
+        return db.query(sql, params || []);
     });
     electron_1.ipcMain.handle('db-insert', async (event, table, data) => {
-        try {
-            return db.insert(table, data);
-        }
-        catch (error) {
-            console.error('插入失败:', error);
-            throw error;
-        }
+        return db.insert(table, data);
     });
     electron_1.ipcMain.handle('db-update', async (event, table, data, where, whereParams) => {
-        try {
-            return db.update(table, data, where, whereParams);
-        }
-        catch (error) {
-            console.error('更新失败:', error);
-            throw error;
-        }
+        return db.update(table, data, where, whereParams);
     });
     electron_1.ipcMain.handle('db-delete', async (event, table, where, whereParams) => {
-        try {
-            return db.delete(table, where, whereParams);
-        }
-        catch (error) {
-            console.error('删除失败:', error);
-            throw error;
-        }
+        return db.delete(table, where, whereParams);
     });
-    // 业务逻辑 - 产品
+    // 业务逻辑
     electron_1.ipcMain.handle('product-list', async (event, page = 1, pageSize = 10) => {
         return db.getProductList(page, pageSize);
     });
@@ -105,10 +84,11 @@ function setupIpcHandlers() {
     electron_1.ipcMain.handle('product-delete', async (event, id) => {
         return db.deleteProduct(id);
     });
+    // 更多 IPC 处理器...
 }
 electron_1.app.whenReady().then(() => {
-    initDatabase();
     createWindow();
+    initDatabase();
     setupIpcHandlers();
     electron_1.app.on('activate', () => {
         if (electron_1.BrowserWindow.getAllWindows().length === 0) {
