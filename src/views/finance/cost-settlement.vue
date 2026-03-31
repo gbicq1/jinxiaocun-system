@@ -491,13 +491,64 @@ const loadSettlementData = () => {
   const products = JSON.parse(localStorage.getItem('products') || '[]')
   console.log('产品数量:', products.length)
   
-  // 获取上期结算数据（作为本期期初）
+  // ========== 改进的期初数据获取逻辑 ==========
+  // 问题：如果 2025 年有库存，2026 年 1-2 月没有业务，3 月的期初应该从 2025 年结转
+  // 解决方案：查找当前期间之前的最后一个有数据的结算期间
+  
+  // ========== 性能优化说明 ==========
+  // 当前采用分层缓存策略，确保准确性和性能的平衡：
+  // 
+  // 【第一层：成本结算缓存】（当前实现）
+  // - 优先使用已结算数据作为期初
+  // - 查找当前期间之前最新的结算数据
+  // - 优点：计算快速，数据准确
+  // - 适用：已结算的会计期间
+  //
+  // 【第二层：实时库存快照】（建议后续实现）
+  // - 为每个仓库每个产品保存实时库存快照
+  // - 包含：数量、成本价、最后更新时间
+  // - 计算时从快照开始，只计算快照之后的单据
+  // - 优点：无需从第一笔单据开始计算
+  // - 适用：未结算但有实时库存的期间
+  //
+  // 【第三层：全量计算】（兜底方案）
+  // - 从系统启用时的第一笔单据开始计算
+  // - 扫描所有出入库记录
+  // - 优点：数据最准确，不会遗漏
+  // - 缺点：数据量大时性能较慢
+  // - 适用：新系统或没有历史数据的期间
+  //
+  // ========== 未来优化建议 ==========
+  // 1. 添加按月索引：为每个月建立出入库索引，直接读取汇总数据
+  // 2. 添加快照机制：每次结算后保存库存快照，后续计算从快照开始
+  // 3. 添加增量计算：只计算变动的单据，复用已有的计算结果
+  // 4. 添加 Web Worker：将计算逻辑放到后台线程，避免阻塞 UI
+  // ================================
+  
   const allSettlements = JSON.parse(localStorage.getItem('cost_settlements') || '[]')
-  const previousSettlements = allSettlements.filter((s: any) => {
-    const periodEndStr = s.periodRange ? s.periodRange[1] : s.period
-    return periodEndStr === previousPeriodEnd.toISOString().slice(0, 10)
-  })
-  console.log('上期结算数据数量:', previousSettlements.length)
+  console.log('所有结算数据数量:', allSettlements.length)
+  
+  // 使用之前已声明的 previousPeriodEnd
+  const previousPeriodEndStr = previousPeriodEnd.toISOString().slice(0, 10)
+  console.log('上期最后一天:', previousPeriodEndStr)
+  
+  // 查找当前期间之前的所有结算数据，按结束日期倒序排序
+  const previousSettlements = allSettlements
+    .filter((s: any) => {
+      if (!s.periodRange || s.periodRange.length !== 2) return false
+      const periodEnd = s.periodRange[1]
+      // 查找当前期间之前（不包括当前期间）的所有结算
+      return periodEnd < periodStart.toISOString().slice(0, 10)
+    })
+    .sort((a: any, b: any) => {
+      // 按结束日期倒序排序，最新的在前
+      return new Date(b.periodRange[1]).getTime() - new Date(a.periodRange[1]).getTime()
+    })
+  
+  console.log('当前期间之前的结算数据数量:', previousSettlements.length)
+  if (previousSettlements.length > 0) {
+    console.log('最新的上期结算数据:', previousSettlements[0])
+  }
   
   // 参照实时库存查询的明细功能，遍历所有 localStorage 键来查找出入库记录
   const periodInboundRecords: any[] = []  // 本期入库记录
@@ -875,11 +926,17 @@ warehousesToProcess.forEach((warehouse: any) => {
   
   products.forEach((product: any) => {
     // ========== 1. 期初数据（来自上期期末）==========
-    const previousRecord = previousSettlements.find((s: any) => 
-      s.productCode === product.code && s.warehouseId === warehouseId
-    )
+    // 使用最新的上期结算数据（已经按结束日期倒序排序）
+    const previousRecord = previousSettlements.length > 0 ? 
+      previousSettlements.find((s: any) => 
+        s.productCode === product.code && s.warehouseId === warehouseId
+      ) : null
     const openingQty = previousRecord ? Number(previousRecord.closingQty || 0) : 0
     const openingCost = previousRecord ? Number(previousRecord.closingCost || 0) : 0
+    
+    if (previousRecord) {
+      console.log(`产品 ${product.code} ${product.name} 期初数据来自 ${previousRecord.periodRange[1]}: 数量=${openingQty}, 成本=${openingCost}`)
+    }
     
     // ========== 2. 本期入库数据（当前会计期间，指定仓库）==========
     const inboundRecords = periodInboundRecords.filter((rec: any) => {
