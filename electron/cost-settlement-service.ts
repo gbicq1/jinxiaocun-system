@@ -387,4 +387,175 @@ export class MonthlyCostSettlementService {
       return { success: false, message: String(error) }
     }
   }
+
+  /**
+   * 自动补全所有历史月份的结算数据
+   * 从系统第一个有业务的月份开始，逐月结算到上月
+   */
+  autoCompleteHistory(): { success: boolean; message: string; settledMonths: number } {
+    try {
+      console.log('开始自动补全历史月份结算数据...')
+
+      // 1. 获取系统最早的单据日期
+      const firstDocumentDate = this.getFirstDocumentDate()
+      if (!firstDocumentDate) {
+        console.log('没有找到任何业务单据，跳过自动补全')
+        return { success: true, message: '没有业务数据', settledMonths: 0 }
+      }
+
+      const firstYear = firstDocumentDate.getFullYear()
+      const firstMonth = firstDocumentDate.getMonth() + 1
+
+      // 2. 计算到上月的所有月份
+      const now = new Date()
+      const currentYear = now.getFullYear()
+      const currentMonth = now.getMonth() + 1
+
+      let prevYear = currentYear
+      let prevMonth = currentMonth - 1
+      if (prevMonth === 0) {
+        prevYear = currentYear - 1
+        prevMonth = 12
+      }
+
+      console.log(`从 ${firstYear}年${firstMonth}月 到 ${prevYear}年${prevMonth}月`)
+
+      // 3. 逐月检查并结算
+      let y = firstYear
+      let m = firstMonth
+      let settledCount = 0
+      let skippedCount = 0
+
+      while (y < prevYear || (y === prevYear && m <= prevMonth)) {
+        // 检查是否已结算
+        if (this.costDb.isSettled(y, m)) {
+          console.log(`${y}年${m}月 已结算，跳过`)
+          skippedCount++
+        } else {
+          console.log(`结算 ${y}年${m}月 ...`)
+          const result = this.settleMonth(y, m, true)
+          if (result.success) {
+            settledCount++
+            console.log(`  ✓ 成功结算 ${result.count} 条记录`)
+          } else {
+            console.error(`  ✗ 结算失败：${result.error}`)
+          }
+        }
+
+        // 下一个月
+        m++
+        if (m > 12) {
+          m = 1
+          y++
+        }
+      }
+
+      const message = `完成！结算 ${settledCount} 个月，跳过 ${skippedCount} 个月`
+      console.log(message)
+      return { success: true, message, settledMonths: settledCount }
+    } catch (error) {
+      console.error('自动补全历史月份失败:', error)
+      return { success: false, message: String(error), settledMonths: 0 }
+    }
+  }
+
+  /**
+   * 获取系统最早的单据日期
+   */
+  private getFirstDocumentDate(): Date | null {
+    const allDates: Date[] = []
+
+    // 检查所有可能的单据表
+    const recordKeys = [
+      'purchase_inbound_records',
+      'purchaseInbounds',
+      'sales_outbound_records',
+      'salesOutbounds',
+      'inventory_transfer_records',
+      'inventoryTransfers',
+      'stock_adjustment_records',
+      'stockAdjustments'
+    ]
+
+    for (const key of recordKeys) {
+      const raw = localStorage.getItem(key)
+      if (!raw) continue
+
+      const records = JSON.parse(raw)
+      if (!Array.isArray(records) || records.length === 0) continue
+
+      // 找出最早的单据日期
+      for (const rec of records) {
+        const dateStr = rec.voucherDate || rec.date || rec.transferDate || rec.adjustmentDate || rec.createdAt
+        if (dateStr) {
+          const date = new Date(dateStr)
+          if (!isNaN(date.getTime())) {
+            allDates.push(date)
+          }
+        }
+      }
+    }
+
+    if (allDates.length === 0) return null
+
+    // 返回最早的日期
+    return new Date(Math.min(...allDates.map(d => d.getTime())))
+  }
+
+  /**
+   * 检测指定产品仓库在指定日期之后是否有新单据
+   * 如果有，则触发从该月份开始的重新结算
+   */
+  checkAndRecalculateIfNeeded(
+    productCode: string,
+    warehouseId: number,
+    documentDate: string
+  ): { needsRecalculation: boolean; message?: string } {
+    try {
+      const docDate = new Date(documentDate)
+      const docYear = docDate.getFullYear()
+      const docMonth = docDate.getMonth() + 1
+
+      console.log(`检查是否需要重新结算：产品 ${productCode}, 仓库 ${warehouseId}, 日期 ${documentDate}`)
+
+      // 检查该月份之后的所有月份是否已结算
+      const now = new Date()
+      const currentYear = now.getFullYear()
+      const currentMonth = now.getMonth() + 1
+
+      let y = docYear
+      let m = docMonth
+      let hasUnlockedMonth = false
+
+      while (y < currentYear || (y === currentYear && m <= currentMonth)) {
+        const isSettled = this.costDb.isSettled(y, m)
+        const isLocked = this.costDb.isLocked(y, m)
+
+        console.log(`  ${y}年${m}月: 已结算=${isSettled}, 已锁定=${isLocked}`)
+
+        if (isSettled && !isLocked) {
+          // 如果已结算但未锁定，说明可能需要重新计算
+          hasUnlockedMonth = true
+          break
+        }
+
+        m++
+        if (m > 12) {
+          m = 1
+          y++
+        }
+      }
+
+      if (hasUnlockedMonth) {
+        console.log(`检测到 ${docYear}年${docMonth}月 之后有未锁定的结算，触发重新结算`)
+        this.recalculateFromMonth(docYear, docMonth)
+        return { needsRecalculation: true, message: `检测到历史单据变更，已重新结算从 ${docYear}年${docMonth}月 开始的数据` }
+      }
+
+      return { needsRecalculation: false }
+    } catch (error) {
+      console.error('检查重新结算失败:', error)
+      return { needsRecalculation: false }
+    }
+  }
 }

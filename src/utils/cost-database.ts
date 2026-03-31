@@ -56,6 +56,41 @@ export const getCostFromDatabase = async (
       return Number(cost.toFixed(2))
     }
 
+    // 如果数据库没有，尝试从 localStorage 获取（兼容旧数据）
+    const settlementsRaw = localStorage.getItem('cost_settlements')
+    if (settlementsRaw) {
+      const settlements = JSON.parse(settlementsRaw)
+      
+      // 查找匹配的记录（兼容 productId 和 productCode）
+      const matchingSettlement = settlements.find((s: any) => {
+        if (!s.periodRange || s.periodRange.length !== 2) return false
+        
+        const periodEnd = new Date(s.periodRange[1])
+        const settlementYear = periodEnd.getFullYear()
+        const settlementMonth = periodEnd.getMonth() + 1
+        
+        // 匹配期间
+        if (settlementYear !== year || settlementMonth !== month) return false
+        
+        // 匹配产品（兼容多种 ID 格式）
+        const productMatch = 
+          String(s.productCode) === String(productCode) ||
+          String(s.productId) === String(productCode) ||
+          String(s.productCode) === String(productCode).padStart(3, '0') || // '01' -> '001'
+          String(s.productId) === String(productCode).padStart(3, '0')
+        
+        // 匹配仓库
+        const warehouseMatch = String(s.warehouseId) === String(warehouseId)
+        
+        return productMatch && warehouseMatch
+      })
+      
+      if (matchingSettlement && matchingSettlement.avgPrice > 0) {
+        console.log('✅ 从 localStorage 获取成本价:', matchingSettlement.avgPrice)
+        return Number(matchingSettlement.avgPrice.toFixed(2))
+      }
+    }
+
     console.log('⚠️ 数据库中没有结算数据，使用动态计算')
     return 0
   } catch (error) {

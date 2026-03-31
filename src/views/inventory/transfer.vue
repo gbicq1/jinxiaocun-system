@@ -701,11 +701,46 @@ const handleSubmit = () => {
       updateInventory()
     }
     
+    // 检测是否需要重新结算成本（新增或修改历史单据时）
+    checkAndRecalculateCost()
+    
     dialogVisible.value = false
     loadTransferList()
   } catch (error) {
     console.error('保存调拨单失败:', error)
     ElMessage.error('保存失败')
+  }
+}
+
+/**
+ * 检测是否需要重新结算成本
+ */
+const checkAndRecalculateCost = async () => {
+  try {
+    // 检测每个产品的调拨日期
+    for (const item of formData.items) {
+      if (!item.productId || !formData.fromWarehouseId) continue
+      
+      // 调用后端检测并触发重算
+      const result = await (window as any).electron?.invoke?.(
+        'cost:check-and-recalculate',
+        {
+          productCode: String(item.productId),
+          warehouseId: Number(formData.fromWarehouseId),
+          documentDate: formData.transferDate
+        }
+      )
+      
+      if (result && result.needsRecalculation) {
+        console.log('成本重新结算:', result.message)
+        ElMessage.info({
+          message: result.message || '检测到历史单据变更，正在重新结算成本...',
+          duration: 3000
+        })
+      }
+    }
+  } catch (error) {
+    console.error('检测成本重新结算失败:', error)
   }
 }
 

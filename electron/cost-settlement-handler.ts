@@ -65,6 +65,16 @@ export class CostSettlementHandler {
     ipcMain.handle('cost:check-bill-date-and-recalculate', async (event, { billDate }) => {
       return this.checkBillDateAndRecalculate(billDate)
     })
+
+    // 自动补全历史月份
+    ipcMain.handle('cost:auto-complete-history', async () => {
+      return this.settlementService.autoCompleteHistory()
+    })
+
+    // 检测产品仓库的单据日期并触发重算
+    ipcMain.handle('cost:check-and-recalculate', async (event, { productCode, warehouseId, documentDate }) => {
+      return this.settlementService.checkAndRecalculateIfNeeded(productCode, warehouseId, documentDate)
+    })
   }
 
   /**

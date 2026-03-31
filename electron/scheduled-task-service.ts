@@ -24,6 +24,11 @@ export class ScheduledTaskService {
   start() {
     console.log('启动定时任务服务...')
 
+    // 系统启动时立即补全历史月份（延迟 10 秒执行）
+    setTimeout(() => {
+      this.autoCompleteHistory()
+    }, 10000) // 10 秒后
+
     // 每天凌晨 2 点检查是否需要结算上月
     const dailyCheckTimer = setInterval(() => {
       this.checkAndSettlePreviousMonth()
@@ -31,7 +36,7 @@ export class ScheduledTaskService {
 
     this.timers.push(dailyCheckTimer)
 
-    // 启动时立即检查一次
+    // 启动时立即检查一次（延迟 5 秒）
     setTimeout(() => {
       this.checkAndSettlePreviousMonth()
     }, 5000) // 5 秒后
@@ -112,6 +117,41 @@ export class ScheduledTaskService {
   private showNotification(title: string, body: string) {
     if (this.mainWindow) {
       this.mainWindow.webContents.send('system:notification', { title, body })
+    }
+  }
+
+  /**
+   * 自动补全历史月份结算数据
+   */
+  private async autoCompleteHistory() {
+    try {
+      console.log('开始自动补全历史月份结算数据...')
+
+      const result = this.settlementService.autoCompleteHistory()
+
+      if (result.success && result.settledMonths > 0) {
+        console.log(`历史月份补全完成：${result.message}`)
+
+        // 通知前端
+        this.mainWindow.webContents.send('cost:auto-complete-history', {
+          success: true,
+          message: result.message,
+          settledMonths: result.settledMonths
+        })
+
+        // 显示系统通知
+        this.showNotification('历史成本结算完成', result.message)
+      } else if (result.success) {
+        console.log('历史月份补全：没有需要结算的月份')
+      } else {
+        console.error('历史月份补全失败:', result.message)
+        this.mainWindow.webContents.send('cost:auto-complete-history', {
+          success: false,
+          message: result.message
+        })
+      }
+    } catch (error) {
+      console.error('自动补全历史月份失败:', error)
     }
   }
 
