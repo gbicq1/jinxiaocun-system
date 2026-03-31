@@ -536,6 +536,13 @@ export class InventoryDatabase {
     }
   }
 
+  /**
+   * 获取所有产品（不分页）
+   */
+  getAllProducts(): any[] {
+    return this.db!.prepare('SELECT * FROM products WHERE status = 1 ORDER BY code').all()
+  }
+
   addProduct(product: any): number {
     return this.insert('products', product)
   }
@@ -552,7 +559,7 @@ export class InventoryDatabase {
 
   // 仓库相关方法
   getAllWarehouses(): any[] {
-    return this.db!.prepare('SELECT * FROM warehouses ORDER BY created_at DESC').all()
+    return this.db!.prepare('SELECT * FROM warehouses WHERE status = 1 ORDER BY id').all()
   }
 
   addWarehouse(warehouse: any): number {

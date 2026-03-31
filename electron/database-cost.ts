@@ -58,7 +58,37 @@ export class CostSettlementDatabase {
         ON cost_settlements(is_locked)
       `)
 
-      console.log('成本结算表初始化成功')
+      // 库存快照表（优化功能 1：月末快照机制）
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS inventory_snapshots (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          product_code TEXT NOT NULL,
+          product_name TEXT,
+          warehouse_id INTEGER NOT NULL,
+          warehouse_name TEXT,
+          snapshot_date TEXT NOT NULL,
+          snapshot_year INTEGER NOT NULL,
+          snapshot_month INTEGER NOT NULL,
+          snapshot_day INTEGER NOT NULL,
+          quantity REAL DEFAULT 0,
+          cost REAL DEFAULT 0,
+          amount REAL DEFAULT 0,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(product_code, warehouse_id, snapshot_date)
+        )
+      `)
+
+      this.db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_inventory_snapshots_date 
+        ON inventory_snapshots(snapshot_year, snapshot_month, snapshot_day)
+      `)
+
+      this.db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_inventory_snapshots_product 
+        ON inventory_snapshots(product_code, warehouse_id)
+      `)
+
+      console.log('成本结算表和库存快照表初始化成功')
       return true
     } catch (error) {
       console.error('成本结算表初始化失败:', error)
@@ -296,5 +326,96 @@ export class CostSettlementDatabase {
       ORDER BY period_year DESC, period_month DESC
     `)
     return stmt.all(productCode, warehouseId) as any[]
+  }
+
+  /**
+   * 保存库存快照（优化功能 1：月末快照机制）
+   */
+  saveSnapshot(
+    productCode: string,
+    productName: string,
+    warehouseId: number,
+    warehouseName: string,
+    date: string,
+    quantity: number,
+    cost: number
+  ) {
+    try {
+      const snapshotDate = new Date(date)
+      const stmt = this.db.prepare(`
+        INSERT OR REPLACE INTO inventory_snapshots 
+        (product_code, product_name, warehouse_id, warehouse_name, 
+         snapshot_date, snapshot_year, snapshot_month, snapshot_day,
+         quantity, cost, amount, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      `)
+      
+      stmt.run(
+        productCode,
+        productName,
+        warehouseId,
+        warehouseName,
+        date,
+        snapshotDate.getFullYear(),
+        snapshotDate.getMonth() + 1,
+        snapshotDate.getDate(),
+        quantity,
+        cost,
+        quantity * cost
+      )
+      
+      return true
+    } catch (error) {
+      console.error('保存库存快照失败:', error)
+      return false
+    }
+  }
+
+  /**
+   * 获取指定日期的库存快照
+   */
+  getSnapshot(productCode: string, warehouseId: number, date: string) {
+    const stmt = this.db.prepare(`
+      SELECT * FROM inventory_snapshots 
+      WHERE product_code = ? 
+        AND warehouse_id = ? 
+        AND snapshot_date = ?
+    `)
+    return stmt.get(productCode, warehouseId, date) as any
+  }
+
+  /**
+   * 获取指定日期之前的最新快照
+   */
+  getLatestSnapshotBeforeDate(productCode: string, warehouseId: number, beforeDate: string) {
+    const stmt = this.db.prepare(`
+      SELECT * FROM inventory_snapshots 
+      WHERE product_code = ? 
+        AND warehouse_id = ? 
+        AND snapshot_date <= ?
+      ORDER BY snapshot_date DESC
+      LIMIT 1
+    `)
+    return stmt.get(productCode, warehouseId, beforeDate) as any
+  }
+
+  /**
+   * 获取月末最后一天的快照
+   */
+  getMonthEndSnapshot(productCode: string, warehouseId: number, year: number, month: number) {
+    // 获取月末最后一天的日期
+    const lastDay = new Date(year, month, 0).getDate()
+    const endDate = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`
+    
+    const stmt = this.db.prepare(`
+      SELECT * FROM inventory_snapshots 
+      WHERE product_code = ? 
+        AND warehouse_id = ? 
+        AND snapshot_year = ? 
+        AND snapshot_month = ?
+      ORDER BY snapshot_day DESC
+      LIMIT 1
+    `)
+    return stmt.get(productCode, warehouseId, year, month) as any
   }
 }

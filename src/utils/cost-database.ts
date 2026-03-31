@@ -16,8 +16,28 @@ export const getCostFromDatabase = async (
     const year = target.getFullYear()
     const month = target.getMonth() + 1
 
-    // 尝试从数据库获取已结算数据
-    const settled = await (window as any).electron?.invoke?.(
+    console.log('========== getCostFromDatabase 调试 ==========')
+    console.log('目标日期:', targetDate, '所属期间:', `${year}年${month}月`)
+
+    // 1. 优先获取当月单月期间的结算数据（最精确）
+    const currentSettled = await (window as any).electron?.invoke?.(
+      'cost:get-settlement',
+      {
+        productCode: String(productCode),
+        warehouseId: Number(warehouseId),
+        year,
+        month
+      }
+    )
+
+    if (currentSettled && currentSettled.closing_qty > 0) {
+      const cost = currentSettled.avg_cost || (currentSettled.closing_cost / currentSettled.closing_qty)
+      console.log('✅ 从当月数据库获取成本价:', cost, '期间:', `${year}-${month}`)
+      return Number(cost.toFixed(2))
+    }
+
+    // 2. 如果当月没有，尝试获取已锁定的当月数据
+    const lockedSettled = await (window as any).electron?.invoke?.(
       'cost:get-locked-settlement',
       {
         productCode: String(productCode),
@@ -27,12 +47,12 @@ export const getCostFromDatabase = async (
       }
     )
 
-    if (settled && settled.closing_qty > 0) {
-      console.log('✅ 从数据库获取成本价:', settled.avg_cost, '期间:', `${year}-${month}`)
-      return Number(settled.avg_cost)
+    if (lockedSettled && lockedSettled.closing_qty > 0) {
+      console.log('✅ 从数据库获取已锁定成本价:', lockedSettled.avg_cost, '期间:', `${year}-${month}`)
+      return Number(lockedSettled.avg_cost)
     }
 
-    // 如果当月未结算，尝试获取上月期末
+    // 3. 如果当月未结算，尝试获取上月期末
     let prevYear = year
     let prevMonth = month - 1
     if (prevMonth === 0) {
@@ -56,7 +76,7 @@ export const getCostFromDatabase = async (
       return Number(cost.toFixed(2))
     }
 
-    // 如果数据库没有，尝试从 localStorage 获取（兼容旧数据）
+    // 4. 如果数据库没有，尝试从 localStorage 获取（兼容旧数据）
     const settlementsRaw = localStorage.getItem('cost_settlements')
     if (settlementsRaw) {
       const settlements = JSON.parse(settlementsRaw)
@@ -96,6 +116,49 @@ export const getCostFromDatabase = async (
   } catch (error) {
     console.error('从数据库获取成本价失败:', error)
     return 0
+  }
+}
+
+/**
+ * 新增单据时自动触发成本结算
+ * 在保存单据到 localStorage 后立即调用
+ */
+export const triggerAutoSettlement = async (
+  documentDate: string,
+  productCode?: string,
+  warehouseId?: number
+): Promise<void> => {
+  try {
+    console.log('========== 触发自动成本结算 ==========')
+    console.log('单据日期:', documentDate)
+    if (productCode && warehouseId) {
+      console.log('产品:', productCode, '仓库:', warehouseId)
+    }
+
+    // 异步调用，不阻塞主流程
+    // 使用 setTimeout 确保 localStorage 已经保存完成
+    setTimeout(async () => {
+      try {
+        const result = await (window as any).electron?.invoke?.(
+          'cost:auto-settle-on-new',
+          {
+            documentDate,
+            productCode,
+            warehouseId
+          }
+        )
+
+        if (result && result.success) {
+          console.log('✅ 自动结算成功:', result.message)
+        } else {
+          console.log('ℹ️ 自动结算提示:', result?.message || '无需操作')
+        }
+      } catch (error) {
+        console.warn('⚠️ 自动结算失败:', error)
+      }
+    }, 100)
+  } catch (error) {
+    console.error('触发自动结算失败:', error)
   }
 }
 

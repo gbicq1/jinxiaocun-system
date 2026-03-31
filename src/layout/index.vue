@@ -63,6 +63,7 @@
           <el-menu-item index="/finance/cost-settlement">成本结算</el-menu-item>
           <el-menu-item index="/finance/receipt">收款单</el-menu-item>
           <el-menu-item index="/finance/payment">付款单</el-menu-item>
+          <el-menu-item index="/finance/reports">报表中心</el-menu-item>
         </el-sub-menu>
 
         <el-sub-menu index="system">
@@ -73,6 +74,7 @@
           <el-menu-item index="/system/users">用户管理</el-menu-item>
           <el-menu-item index="/system/roles">角色管理</el-menu-item>
           <el-menu-item index="/system/employees">职工档案</el-menu-item>
+          <el-menu-item index="/system/barcode-settings">条码扫描设置</el-menu-item>
           <el-menu-item index="/system/logs">操作日志</el-menu-item>
           <el-menu-item index="/system/recycle-bin">回收站</el-menu-item>
         </el-sub-menu>

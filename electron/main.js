@@ -47,11 +47,11 @@ function initDatabase() {
         costHandler = new cost_settlement_handler_1.CostSettlementHandler(db.costDb, mainWindow);
         costHandler.registerHandlers();
         console.log('成本结算处理器初始化完成');
-        // 初始化定时任务服务
-        scheduledTaskService = new scheduled_task_service_1.ScheduledTaskService(db.costDb, mainWindow);
-        scheduledTaskService.start();
-        console.log('定时任务服务已启动');
     }
+    // 初始化定时任务服务
+    scheduledTaskService = new scheduled_task_service_1.ScheduledTaskService(db.costDb, mainWindow);
+    scheduledTaskService.start();
+    console.log('定时任务服务已启动');
 }
 // IPC 处理器
 function setupIpcHandlers() {
@@ -119,6 +119,7 @@ function setupIpcHandlers() {
         }
     });
     // 业务逻辑
+    // 产品管理
     electron_1.ipcMain.handle('product-list', async (event, page = 1, pageSize = 10) => {
         return db.getProductList(page, pageSize);
     });
@@ -130,6 +131,10 @@ function setupIpcHandlers() {
     });
     electron_1.ipcMain.handle('product-delete', async (event, id) => {
         return db.deleteProduct(id);
+    });
+    // 获取所有产品（不分页）
+    electron_1.ipcMain.handle('db:products-list', async () => {
+        return db.getAllProducts();
     });
     // 仓库管理
     electron_1.ipcMain.handle('warehouse-list', async (event) => {
@@ -143,6 +148,10 @@ function setupIpcHandlers() {
     });
     electron_1.ipcMain.handle('warehouse-delete', async (event, id) => {
         return db.deleteWarehouse(id);
+    });
+    // 获取所有仓库（不分页）
+    electron_1.ipcMain.handle('db:warehouses-list', async () => {
+        return db.getAllWarehouses();
     });
     // 供应商管理
     electron_1.ipcMain.handle('supplier-list', async (event) => {
@@ -226,6 +235,8 @@ electron_1.app.whenReady().then(() => {
     createWindow();
     initDatabase();
     setupIpcHandlers();
+    // 系统启动完成
+    console.log('\n========== 系统启动完成 ==========');
     electron_1.app.on('activate', () => {
         if (electron_1.BrowserWindow.getAllWindows().length === 0) {
             createWindow();

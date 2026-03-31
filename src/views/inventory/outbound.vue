@@ -349,6 +349,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import dayjs from 'dayjs'
 import exportToCsv from '../../utils/exportCsv'
 import { getRealTimeStock, getStockBeforeDateTime } from '@/utils/stock'
+import { handleDocumentSave, DocumentType } from '@/utils/cost-recalculation'
 
 interface OutboundItem {
   productId?: number
@@ -983,6 +984,14 @@ const handleSubmit = async () => {
       }
       ElMessage.success('新增成功')
     }
+    
+    // 检测是否需要重新结算成本
+    await handleDocumentSave(
+      DocumentType.INVENTORY_OUTBOUND,
+      formData.items || [],
+      formData.voucherDate
+    )
+    
     dialogVisible.value = false
     loadOutboundList()
   } catch (error) {

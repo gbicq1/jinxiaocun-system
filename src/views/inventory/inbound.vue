@@ -339,6 +339,7 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import dayjs from 'dayjs'
 import exportToCsv from '../../utils/exportCsv'
+import { handleDocumentSave, DocumentType } from '@/utils/cost-recalculation'
 
 // 定义接口
 interface InboundItem {
@@ -763,6 +764,13 @@ const handleSubmit = async () => {
       }
       ElMessage.success('新增成功')
     }
+    
+    // 检测是否需要重新结算成本
+    await handleDocumentSave(
+      DocumentType.INVENTORY_INBOUND,
+      formData.items || [],
+      formData.voucherDate
+    )
     
     dialogVisible.value = false
     loadInboundList()

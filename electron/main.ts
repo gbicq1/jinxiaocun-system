@@ -50,12 +50,12 @@ function initDatabase() {
     costHandler = new CostSettlementHandler(db.costDb, mainWindow!)
     costHandler.registerHandlers()
     console.log('成本结算处理器初始化完成')
-    
-    // 初始化定时任务服务
-    scheduledTaskService = new ScheduledTaskService(db.costDb, mainWindow!)
-    scheduledTaskService.start()
-    console.log('定时任务服务已启动')
   }
+  
+  // 初始化定时任务服务
+  scheduledTaskService = new ScheduledTaskService(db.costDb, mainWindow!)
+  scheduledTaskService.start()
+  console.log('定时任务服务已启动')
 }
 
 // IPC 处理器
@@ -125,6 +125,7 @@ function setupIpcHandlers() {
   })
 
   // 业务逻辑
+  // 产品管理
   ipcMain.handle('product-list', async (event, page = 1, pageSize = 10) => {
     return db.getProductList(page, pageSize)
   })
@@ -139,6 +140,11 @@ function setupIpcHandlers() {
 
   ipcMain.handle('product-delete', async (event, id: number) => {
     return db.deleteProduct(id)
+  })
+
+  // 获取所有产品（不分页）
+  ipcMain.handle('db:products-list', async () => {
+    return db.getAllProducts()
   })
 
   // 仓库管理
@@ -156,6 +162,11 @@ function setupIpcHandlers() {
 
   ipcMain.handle('warehouse-delete', async (event, id: number) => {
     return db.deleteWarehouse(id)
+  })
+
+  // 获取所有仓库（不分页）
+  ipcMain.handle('db:warehouses-list', async () => {
+    return db.getAllWarehouses()
   })
 
   // 供应商管理
@@ -263,6 +274,9 @@ app.whenReady().then(() => {
   createWindow()
   initDatabase()
   setupIpcHandlers()
+
+  // 系统启动完成
+  console.log('\n========== 系统启动完成 ==========')
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

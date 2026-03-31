@@ -387,6 +387,69 @@ class InventoryDatabase {
       )
     `);
         console.log('数据库表创建完成');
+        // 创建索引以优化查询性能
+        this.createIndexes();
+    }
+    createIndexes() {
+        try {
+            // 产品索引
+            this.db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_products_code ON products(code)
+      `);
+            this.db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode)
+      `);
+            this.db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_products_category ON products(category)
+      `);
+            // 仓库索引
+            this.db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_warehouses_code ON warehouses(code)
+      `);
+            // 供应商索引
+            this.db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_suppliers_code ON suppliers(code)
+      `);
+            // 客户索引
+            this.db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_customers_code ON customers(code)
+      `);
+            // 采购入库索引
+            this.db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_inbound_date ON purchase_inbound_records(voucher_date)
+      `);
+            this.db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_inbound_warehouse ON purchase_inbound_records(warehouse_id)
+      `);
+            this.db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_inbound_supplier ON purchase_inbound_records(supplier_id)
+      `);
+            // 销售出库索引
+            this.db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_outbound_date ON sales_outbound_records(voucher_date)
+      `);
+            this.db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_outbound_warehouse ON sales_outbound_records(warehouse_id)
+      `);
+            this.db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_outbound_customer ON sales_outbound_records(customer_id)
+      `);
+            // 库存调拨索引
+            this.db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_transfer_date ON transfer_records(transfer_date)
+      `);
+            // 成本结算索引
+            this.db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_cost_period ON cost_settlements(period_year, period_month)
+      `);
+            this.db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_cost_product ON cost_settlements(product_code, warehouse_id)
+      `);
+            console.log('数据库索引创建完成');
+        }
+        catch (error) {
+            console.error('创建索引失败:', error);
+        }
     }
     query(sql, params = []) {
         return this.db.prepare(sql).all(...params);
@@ -431,6 +494,12 @@ class InventoryDatabase {
             data: products
         };
     }
+    /**
+     * 获取所有产品（不分页）
+     */
+    getAllProducts() {
+        return this.db.prepare('SELECT * FROM products WHERE status = 1 ORDER BY code').all();
+    }
     addProduct(product) {
         return this.insert('products', product);
     }
@@ -444,7 +513,7 @@ class InventoryDatabase {
     }
     // 仓库相关方法
     getAllWarehouses() {
-        return this.db.prepare('SELECT * FROM warehouses ORDER BY created_at DESC').all();
+        return this.db.prepare('SELECT * FROM warehouses WHERE status = 1 ORDER BY id').all();
     }
     addWarehouse(warehouse) {
         return this.insert('warehouses', warehouse);
