@@ -812,16 +812,16 @@ const loadSettlementData = () => {
           const productId = it.productId || it.id || null
           let qty = Number(it.quantity || it.qty || it.count || it.num || 0)
           
-          // 采购退货：视为入库，但数量为负数
+          // 采购退货：视为出库（减少库存），使用正数数量
           if (isPurchaseReturn) {
-            isInbound = true
-            qty = -qty
+            isOutbound = true
+            qty = Math.abs(qty)  // 取绝对值
           }
           
-          // 销售退货：视为出库，但数量为负数
+          // 销售退货：视为入库（增加库存），使用正数数量
           if (isSalesReturn) {
-            isOutbound = true
-            qty = -qty
+            isInbound = true
+            qty = Math.abs(qty)  // 取绝对值
           }
           
           // ========== 成本价提取规则 ==========
