@@ -81,6 +81,31 @@ export class CostSettlementDatabase {
   }
 
   /**
+   * 获取指定期间的所有成本结算数据
+   */
+  getSettlements(year: number, month: number, productCode?: string, warehouseId?: number) {
+    let whereClause = 'WHERE period_year = ? AND period_month = ?'
+    const params: any[] = [year, month]
+
+    if (productCode) {
+      whereClause += ' AND product_code = ?'
+      params.push(productCode)
+    }
+
+    if (warehouseId) {
+      whereClause += ' AND warehouse_id = ?'
+      params.push(warehouseId)
+    }
+
+    const stmt = this.db.prepare(`
+      SELECT * FROM cost_settlements 
+      ${whereClause}
+      ORDER BY warehouse_id, product_code
+    `)
+    return stmt.all(...params) as any[]
+  }
+
+  /**
    * 获取已锁定的成本结算数据
    */
   getLockedSettlement(productCode: string, warehouseId: number, year: number, month: number) {

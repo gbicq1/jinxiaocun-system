@@ -65,20 +65,63 @@ function setupIpcHandlers() {
     return db.initialize()
   })
 
-  ipcMain.handle('db-query', async (event, table: string, sql: string, params?: any[]) => {
-    return db.query(sql, params || [])
+  ipcMain.handle('db-query', async (event, sql: string, params?: any[]) => {
+    try {
+      const result = db.query(sql, params || [])
+      return result
+    } catch (error: any) {
+      console.error('数据库查询错误:', error.message, 'SQL:', sql, '参数:', params)
+      throw error
+    }
   })
 
   ipcMain.handle('db-insert', async (event, table: string, data: any) => {
-    return db.insert(table, data)
+    try {
+      const id = db.insert(table, data)
+      console.log('数据库插入成功:', table, 'ID:', id)
+      return id
+    } catch (error: any) {
+      console.error('数据库插入错误:', error.message, '表:', table, '数据:', data)
+      throw error
+    }
   })
 
   ipcMain.handle('db-update', async (event, table: string, data: any, where: string, whereParams: any[]) => {
-    return db.update(table, data, where, whereParams)
+    try {
+      const changes = db.update(table, data, where, whereParams)
+      console.log('数据库更新成功:', table, '影响行数:', changes)
+      return changes
+    } catch (error: any) {
+      console.error('数据库更新错误:', error.message, '表:', table, '数据:', data)
+      throw error
+    }
   })
 
   ipcMain.handle('db-delete', async (event, table: string, where: string, whereParams: any[]) => {
-    return db.delete(table, where, whereParams)
+    try {
+      const changes = db.delete(table, where, whereParams)
+      console.log('数据库删除成功:', table, '影响行数:', changes)
+      return changes
+    } catch (error: any) {
+      console.error('数据库删除错误:', error.message, '表:', table)
+      throw error
+    }
+  })
+
+  ipcMain.handle('db-transaction', async (event, operations: any[]) => {
+    try {
+      const transaction = db.db!.transaction((ops: any[]) => {
+        for (const op of ops) {
+          op()
+        }
+      })
+      await transaction(operations)
+      console.log('数据库事务执行成功')
+      return { success: true }
+    } catch (error: any) {
+      console.error('数据库事务错误:', error.message)
+      throw error
+    }
   })
 
   // 业务逻辑
@@ -98,7 +141,122 @@ function setupIpcHandlers() {
     return db.deleteProduct(id)
   })
 
-  // 更多 IPC 处理器...
+  // 仓库管理
+  ipcMain.handle('warehouse-list', async (event) => {
+    return db.getAllWarehouses()
+  })
+
+  ipcMain.handle('warehouse-add', async (event, warehouse: any) => {
+    return db.addWarehouse(warehouse)
+  })
+
+  ipcMain.handle('warehouse-update', async (event, warehouse: any) => {
+    return db.updateWarehouse(warehouse)
+  })
+
+  ipcMain.handle('warehouse-delete', async (event, id: number) => {
+    return db.deleteWarehouse(id)
+  })
+
+  // 供应商管理
+  ipcMain.handle('supplier-list', async (event) => {
+    return db.getAllSuppliers()
+  })
+
+  ipcMain.handle('supplier-add', async (event, supplier: any) => {
+    return db.addSupplier(supplier)
+  })
+
+  ipcMain.handle('supplier-update', async (event, supplier: any) => {
+    return db.updateSupplier(supplier)
+  })
+
+  ipcMain.handle('supplier-delete', async (event, id: number) => {
+    return db.deleteSupplier(id)
+  })
+
+  // 客户管理
+  ipcMain.handle('customer-list', async (event) => {
+    return db.getAllCustomers()
+  })
+
+  ipcMain.handle('customer-add', async (event, customer: any) => {
+    return db.addCustomer(customer)
+  })
+
+  ipcMain.handle('customer-update', async (event, customer: any) => {
+    return db.updateCustomer(customer)
+  })
+
+  ipcMain.handle('customer-delete', async (event, id: number) => {
+    return db.deleteCustomer(id)
+  })
+
+  // 采购入库
+  ipcMain.handle('inbound-list', async (event, page = 1, pageSize = 10, where?: string, params?: any[]) => {
+    return db.getInboundList(page, pageSize, where, params)
+  })
+
+  ipcMain.handle('inbound-add', async (event, inbound: any) => {
+    return db.addInbound(inbound)
+  })
+
+  ipcMain.handle('inbound-update', async (event, inbound: any) => {
+    return db.updateInbound(inbound)
+  })
+
+  ipcMain.handle('inbound-delete', async (event, id: number) => {
+    return db.deleteInbound(id)
+  })
+
+  // 销售出库
+  ipcMain.handle('outbound-list', async (event, page = 1, pageSize = 10, where?: string, params?: any[]) => {
+    return db.getOutboundList(page, pageSize, where, params)
+  })
+
+  ipcMain.handle('outbound-add', async (event, outbound: any) => {
+    return db.addOutbound(outbound)
+  })
+
+  ipcMain.handle('outbound-update', async (event, outbound: any) => {
+    return db.updateOutbound(outbound)
+  })
+
+  ipcMain.handle('outbound-delete', async (event, id: number) => {
+    return db.deleteOutbound(id)
+  })
+
+  // 库存调拨
+  ipcMain.handle('transfer-list', async (event, page = 1, pageSize = 10, where?: string, params?: any[]) => {
+    return db.getTransferList(page, pageSize, where, params)
+  })
+
+  ipcMain.handle('transfer-add', async (event, transfer: any) => {
+    return db.addTransfer(transfer)
+  })
+
+  ipcMain.handle('transfer-update', async (event, transfer: any) => {
+    return db.updateTransfer(transfer)
+  })
+
+  ipcMain.handle('transfer-delete', async (event, id: number) => {
+    return db.deleteTransfer(id)
+  })
+
+  // 库存查询
+  ipcMain.handle('inventory-query', async (event, warehouseId?: number, productCode?: string) => {
+    return db.getInventory(warehouseId, productCode)
+  })
+
+  // 成本结算查询
+  ipcMain.handle('cost-settlement-query', async (event, year: number, month: number, productCode?: string, warehouseId?: number) => {
+    if (!db.costDb) {
+      throw new Error('成本结算数据库未初始化')
+    }
+    return db.costDb.getSettlements(year, month, productCode, warehouseId)
+  })
+
+  console.log('IPC 处理器设置完成')
 }
 
 app.whenReady().then(() => {

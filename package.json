@@ -6,11 +6,12 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "electron:dev": "tsc -p electron/tsconfig.json && electron .",
+    "electron:dev": "tsc -p electron/tsconfig.json && electron electron/main.js",
     "electron:build": "vite build && tsc -p electron/tsconfig.json && electron-builder"
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.1",
+    "better-sqlite3": "^12.8.0",
     "dayjs": "^1.11.10",
     "element-plus": "^2.4.4",
     "pinia": "^2.1.7",
@@ -21,9 +22,9 @@
   "devDependencies": {
     "@types/node": "^20.10.5",
     "@vitejs/plugin-vue": "^4.5.0",
-    "better-sqlite3": "^12.8.0",
     "electron": "^41.1.0",
     "electron-builder": "^26.8.1",
+    "electron-rebuild": "^3.2.9",
     "typescript": "^5.3.3",
     "vite": "^5.0.0",
     "vue-tsc": "^1.8.27"

@@ -442,6 +442,144 @@ class InventoryDatabase {
     deleteProduct(id) {
         return this.delete('products', 'id = ?', [id]);
     }
+    // 仓库相关方法
+    getAllWarehouses() {
+        return this.db.prepare('SELECT * FROM warehouses ORDER BY created_at DESC').all();
+    }
+    addWarehouse(warehouse) {
+        return this.insert('warehouses', warehouse);
+    }
+    updateWarehouse(warehouse) {
+        const id = warehouse.id;
+        delete warehouse.id;
+        return this.update('warehouses', warehouse, 'id = ?', [id]);
+    }
+    deleteWarehouse(id) {
+        return this.delete('warehouses', 'id = ?', [id]);
+    }
+    // 供应商相关方法
+    getAllSuppliers() {
+        return this.db.prepare('SELECT * FROM suppliers ORDER BY created_at DESC').all();
+    }
+    addSupplier(supplier) {
+        return this.insert('suppliers', supplier);
+    }
+    updateSupplier(supplier) {
+        const id = supplier.id;
+        delete supplier.id;
+        return this.update('suppliers', supplier, 'id = ?', [id]);
+    }
+    deleteSupplier(id) {
+        return this.delete('suppliers', 'id = ?', [id]);
+    }
+    // 客户相关方法
+    getAllCustomers() {
+        return this.db.prepare('SELECT * FROM customers ORDER BY created_at DESC').all();
+    }
+    addCustomer(customer) {
+        return this.insert('customers', customer);
+    }
+    updateCustomer(customer) {
+        const id = customer.id;
+        delete customer.id;
+        return this.update('customers', customer, 'id = ?', [id]);
+    }
+    deleteCustomer(id) {
+        return this.delete('customers', 'id = ?', [id]);
+    }
+    // 采购入库相关方法
+    getInboundList(page = 1, pageSize = 10, where, params) {
+        let whereClause = where ? `WHERE ${where}` : '';
+        const offset = (page - 1) * pageSize;
+        const countSql = `SELECT COUNT(*) as count FROM purchase_inbound_records ${whereClause}`;
+        const total = this.db.prepare(countSql).get(...(params || []));
+        const dataSql = `SELECT * FROM purchase_inbound_records ${whereClause} ORDER BY voucher_date DESC LIMIT ? OFFSET ?`;
+        const data = this.db.prepare(dataSql).all(...(params || []), pageSize, offset);
+        return {
+            total: total.count,
+            page,
+            pageSize,
+            data
+        };
+    }
+    addInbound(inbound) {
+        return this.insert('purchase_inbound_records', inbound);
+    }
+    updateInbound(inbound) {
+        const id = inbound.id;
+        delete inbound.id;
+        return this.update('purchase_inbound_records', inbound, 'id = ?', [id]);
+    }
+    deleteInbound(id) {
+        return this.delete('purchase_inbound_records', 'id = ?', [id]);
+    }
+    // 销售出库相关方法
+    getOutboundList(page = 1, pageSize = 10, where, params) {
+        let whereClause = where ? `WHERE ${where}` : '';
+        const offset = (page - 1) * pageSize;
+        const countSql = `SELECT COUNT(*) as count FROM sales_outbound_records ${whereClause}`;
+        const total = this.db.prepare(countSql).get(...(params || []));
+        const dataSql = `SELECT * FROM sales_outbound_records ${whereClause} ORDER BY voucher_date DESC LIMIT ? OFFSET ?`;
+        const data = this.db.prepare(dataSql).all(...(params || []), pageSize, offset);
+        return {
+            total: total.count,
+            page,
+            pageSize,
+            data
+        };
+    }
+    addOutbound(outbound) {
+        return this.insert('sales_outbound_records', outbound);
+    }
+    updateOutbound(outbound) {
+        const id = outbound.id;
+        delete outbound.id;
+        return this.update('sales_outbound_records', outbound, 'id = ?', [id]);
+    }
+    deleteOutbound(id) {
+        return this.delete('sales_outbound_records', 'id = ?', [id]);
+    }
+    // 库存调拨相关方法
+    getTransferList(page = 1, pageSize = 10, where, params) {
+        let whereClause = where ? `WHERE ${where}` : '';
+        const offset = (page - 1) * pageSize;
+        const countSql = `SELECT COUNT(*) as count FROM transfer_records ${whereClause}`;
+        const total = this.db.prepare(countSql).get(...(params || []));
+        const dataSql = `SELECT * FROM transfer_records ${whereClause} ORDER BY transfer_date DESC LIMIT ? OFFSET ?`;
+        const data = this.db.prepare(dataSql).all(...(params || []), pageSize, offset);
+        return {
+            total: total.count,
+            page,
+            pageSize,
+            data
+        };
+    }
+    addTransfer(transfer) {
+        return this.insert('transfer_records', transfer);
+    }
+    updateTransfer(transfer) {
+        const id = transfer.id;
+        delete transfer.id;
+        return this.update('transfer_records', transfer, 'id = ?', [id]);
+    }
+    deleteTransfer(id) {
+        return this.delete('transfer_records', 'id = ?', [id]);
+    }
+    // 库存查询
+    getInventory(warehouseId, productCode) {
+        let whereClause = 'WHERE 1=1';
+        const params = [];
+        if (warehouseId) {
+            whereClause += ' AND warehouse_id = ?';
+            params.push(warehouseId);
+        }
+        if (productCode) {
+            whereClause += ' AND product_code = ?';
+            params.push(productCode);
+        }
+        const sql = `SELECT * FROM inventory_balance ${whereClause} ORDER BY warehouse_id, product_code`;
+        return this.db.prepare(sql).all(...params);
+    }
     close() {
         if (this.db) {
             this.db.close();

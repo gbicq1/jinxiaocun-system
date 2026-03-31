@@ -196,6 +196,12 @@ const routes: any[] = [
         name: 'FinancePayment',
         component: () => import('@/views/finance/payment.vue'),
         meta: { title: '付款单', icon: 'Money' }
+      },
+      {
+        path: 'reports',
+        name: 'FinanceReports',
+        component: () => import('@/views/finance/reports.vue'),
+        meta: { title: '报表中心', icon: 'DataAnalysis' }
       }
     ]
   },
@@ -224,6 +230,12 @@ const routes: any[] = [
         meta: { title: '职工档案', icon: 'OfficeBuilding' }
       },
       {
+        path: 'barcode-settings',
+        name: 'SystemBarcodeSettings',
+        component: () => import('@/views/system/barcode-settings.vue'),
+        meta: { title: '条码扫描设置', icon: 'Scanner' }
+      },
+      {
         path: 'logs',
         name: 'SystemLogs',
         component: () => import('@/views/system/logs.vue'),
@@ -234,12 +246,6 @@ const routes: any[] = [
         name: 'SystemRecycleBin',
         component: () => import('@/views/system/recycle-bin.vue'),
         meta: { title: '回收站', icon: 'Delete' }
-      },
-      {
-        path: 'data-migration',
-        name: 'SystemDataMigration',
-        component: () => import('@/views/system/data-migration.vue'),
-        meta: { title: '数据迁移', icon: 'Upload' }
       }
     ]
   }

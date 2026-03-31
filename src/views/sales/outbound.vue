@@ -299,12 +299,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getRealTimeStock, getStockDetails, getStockBeforeDateTime } from '@/utils/stock'
 import dayjs from 'dayjs'
 import exportToCsv from '../../utils/exportCsv'
 import { handleDocumentSave, DocumentType } from '@/utils/cost-recalculation'
+import { onBarcodeScan, type BarcodeScanEvent } from '@/utils/barcode-scanner'
 
 interface OutboundItem {
   productId?: number

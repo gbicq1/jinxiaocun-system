@@ -3,7 +3,7 @@ import { resolve } from 'path'
 import { CostSettlementDatabase } from './database-cost'
 
 export class InventoryDatabase {
-  private db: Database.Database | null = null
+  public db: Database.Database | null = null
   private dbPath: string
   public costDb!: CostSettlementDatabase
 
@@ -411,6 +411,78 @@ export class InventoryDatabase {
     `)
 
     console.log('数据库表创建完成')
+    
+    // 创建索引以优化查询性能
+    this.createIndexes()
+  }
+
+  private createIndexes() {
+    try {
+      // 产品索引
+      this.db!.exec(`
+        CREATE INDEX IF NOT EXISTS idx_products_code ON products(code)
+      `)
+      this.db!.exec(`
+        CREATE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode)
+      `)
+      this.db!.exec(`
+        CREATE INDEX IF NOT EXISTS idx_products_category ON products(category)
+      `)
+
+      // 仓库索引
+      this.db!.exec(`
+        CREATE INDEX IF NOT EXISTS idx_warehouses_code ON warehouses(code)
+      `)
+
+      // 供应商索引
+      this.db!.exec(`
+        CREATE INDEX IF NOT EXISTS idx_suppliers_code ON suppliers(code)
+      `)
+
+      // 客户索引
+      this.db!.exec(`
+        CREATE INDEX IF NOT EXISTS idx_customers_code ON customers(code)
+      `)
+
+      // 采购入库索引
+      this.db!.exec(`
+        CREATE INDEX IF NOT EXISTS idx_inbound_date ON purchase_inbound_records(voucher_date)
+      `)
+      this.db!.exec(`
+        CREATE INDEX IF NOT EXISTS idx_inbound_warehouse ON purchase_inbound_records(warehouse_id)
+      `)
+      this.db!.exec(`
+        CREATE INDEX IF NOT EXISTS idx_inbound_supplier ON purchase_inbound_records(supplier_id)
+      `)
+
+      // 销售出库索引
+      this.db!.exec(`
+        CREATE INDEX IF NOT EXISTS idx_outbound_date ON sales_outbound_records(voucher_date)
+      `)
+      this.db!.exec(`
+        CREATE INDEX IF NOT EXISTS idx_outbound_warehouse ON sales_outbound_records(warehouse_id)
+      `)
+      this.db!.exec(`
+        CREATE INDEX IF NOT EXISTS idx_outbound_customer ON sales_outbound_records(customer_id)
+      `)
+
+      // 库存调拨索引
+      this.db!.exec(`
+        CREATE INDEX IF NOT EXISTS idx_transfer_date ON transfer_records(transfer_date)
+      `)
+
+      // 成本结算索引
+      this.db!.exec(`
+        CREATE INDEX IF NOT EXISTS idx_cost_period ON cost_settlements(period_year, period_month)
+      `)
+      this.db!.exec(`
+        CREATE INDEX IF NOT EXISTS idx_cost_product ON cost_settlements(product_code, warehouse_id)
+      `)
+
+      console.log('数据库索引创建完成')
+    } catch (error) {
+      console.error('创建索引失败:', error)
+    }
   }
 
   query(sql: string, params: any[] = []): any[] {
@@ -476,6 +548,181 @@ export class InventoryDatabase {
 
   deleteProduct(id: number): number {
     return this.delete('products', 'id = ?', [id])
+  }
+
+  // 仓库相关方法
+  getAllWarehouses(): any[] {
+    return this.db!.prepare('SELECT * FROM warehouses ORDER BY created_at DESC').all()
+  }
+
+  addWarehouse(warehouse: any): number {
+    return this.insert('warehouses', warehouse)
+  }
+
+  updateWarehouse(warehouse: any): number {
+    const id = warehouse.id
+    delete warehouse.id
+    return this.update('warehouses', warehouse, 'id = ?', [id])
+  }
+
+  deleteWarehouse(id: number): number {
+    return this.delete('warehouses', 'id = ?', [id])
+  }
+
+  // 供应商相关方法
+  getAllSuppliers(): any[] {
+    return this.db!.prepare('SELECT * FROM suppliers ORDER BY created_at DESC').all()
+  }
+
+  addSupplier(supplier: any): number {
+    return this.insert('suppliers', supplier)
+  }
+
+  updateSupplier(supplier: any): number {
+    const id = supplier.id
+    delete supplier.id
+    return this.update('suppliers', supplier, 'id = ?', [id])
+  }
+
+  deleteSupplier(id: number): number {
+    return this.delete('suppliers', 'id = ?', [id])
+  }
+
+  // 客户相关方法
+  getAllCustomers(): any[] {
+    return this.db!.prepare('SELECT * FROM customers ORDER BY created_at DESC').all()
+  }
+
+  addCustomer(customer: any): number {
+    return this.insert('customers', customer)
+  }
+
+  updateCustomer(customer: any): number {
+    const id = customer.id
+    delete customer.id
+    return this.update('customers', customer, 'id = ?', [id])
+  }
+
+  deleteCustomer(id: number): number {
+    return this.delete('customers', 'id = ?', [id])
+  }
+
+  // 采购入库相关方法
+  getInboundList(page: number = 1, pageSize: number = 10, where?: string, params?: any[]): any {
+    let whereClause = where ? `WHERE ${where}` : ''
+    const offset = (page - 1) * pageSize
+    
+    const countSql = `SELECT COUNT(*) as count FROM purchase_inbound_records ${whereClause}`
+    const total = this.db!.prepare(countSql).get(...(params || [])) as any
+    
+    const dataSql = `SELECT * FROM purchase_inbound_records ${whereClause} ORDER BY voucher_date DESC LIMIT ? OFFSET ?`
+    const data = this.db!.prepare(dataSql).all(...(params || []), pageSize, offset)
+    
+    return {
+      total: total.count,
+      page,
+      pageSize,
+      data
+    }
+  }
+
+  addInbound(inbound: any): number {
+    return this.insert('purchase_inbound_records', inbound)
+  }
+
+  updateInbound(inbound: any): number {
+    const id = inbound.id
+    delete inbound.id
+    return this.update('purchase_inbound_records', inbound, 'id = ?', [id])
+  }
+
+  deleteInbound(id: number): number {
+    return this.delete('purchase_inbound_records', 'id = ?', [id])
+  }
+
+  // 销售出库相关方法
+  getOutboundList(page: number = 1, pageSize: number = 10, where?: string, params?: any[]): any {
+    let whereClause = where ? `WHERE ${where}` : ''
+    const offset = (page - 1) * pageSize
+    
+    const countSql = `SELECT COUNT(*) as count FROM sales_outbound_records ${whereClause}`
+    const total = this.db!.prepare(countSql).get(...(params || [])) as any
+    
+    const dataSql = `SELECT * FROM sales_outbound_records ${whereClause} ORDER BY voucher_date DESC LIMIT ? OFFSET ?`
+    const data = this.db!.prepare(dataSql).all(...(params || []), pageSize, offset)
+    
+    return {
+      total: total.count,
+      page,
+      pageSize,
+      data
+    }
+  }
+
+  addOutbound(outbound: any): number {
+    return this.insert('sales_outbound_records', outbound)
+  }
+
+  updateOutbound(outbound: any): number {
+    const id = outbound.id
+    delete outbound.id
+    return this.update('sales_outbound_records', outbound, 'id = ?', [id])
+  }
+
+  deleteOutbound(id: number): number {
+    return this.delete('sales_outbound_records', 'id = ?', [id])
+  }
+
+  // 库存调拨相关方法
+  getTransferList(page: number = 1, pageSize: number = 10, where?: string, params?: any[]): any {
+    let whereClause = where ? `WHERE ${where}` : ''
+    const offset = (page - 1) * pageSize
+    
+    const countSql = `SELECT COUNT(*) as count FROM transfer_records ${whereClause}`
+    const total = this.db!.prepare(countSql).get(...(params || [])) as any
+    
+    const dataSql = `SELECT * FROM transfer_records ${whereClause} ORDER BY transfer_date DESC LIMIT ? OFFSET ?`
+    const data = this.db!.prepare(dataSql).all(...(params || []), pageSize, offset)
+    
+    return {
+      total: total.count,
+      page,
+      pageSize,
+      data
+    }
+  }
+
+  addTransfer(transfer: any): number {
+    return this.insert('transfer_records', transfer)
+  }
+
+  updateTransfer(transfer: any): number {
+    const id = transfer.id
+    delete transfer.id
+    return this.update('transfer_records', transfer, 'id = ?', [id])
+  }
+
+  deleteTransfer(id: number): number {
+    return this.delete('transfer_records', 'id = ?', [id])
+  }
+
+  // 库存查询
+  getInventory(warehouseId?: number, productCode?: string): any[] {
+    let whereClause = 'WHERE 1=1'
+    const params: any[] = []
+    
+    if (warehouseId) {
+      whereClause += ' AND warehouse_id = ?'
+      params.push(warehouseId)
+    }
+    
+    if (productCode) {
+      whereClause += ' AND product_code = ?'
+      params.push(productCode)
+    }
+    
+    const sql = `SELECT * FROM inventory_balance ${whereClause} ORDER BY warehouse_id, product_code`
+    return this.db!.prepare(sql).all(...params)
   }
 
   close() {
