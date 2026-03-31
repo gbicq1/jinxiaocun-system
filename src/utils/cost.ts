@@ -302,17 +302,31 @@ export const getCostFromSettlement = (productId: number | undefined, warehouseId
       }
     }
     
-    // 如果找到了成本结算数据，直接使用本月合计的加权平均单价
-    if (matchingSettlement && matchingSettlement.avgPrice != null) {
-      const result = Number(matchingSettlement.avgPrice.toFixed(2))
-      console.log('✅ 直接提取本月合计行的成本价:', result)
-      return result
+    // 如果找到了成本结算数据
+    if (matchingSettlement) {
+      const periodEnd = new Date(matchingSettlement.periodRange[1])
+      const transferDateObj = new Date(transferDate)
+      
+      // 如果调拨日期在期间结束日期之前（不是同一天），使用本月合计的加权平均单价
+      // 如果调拨日期就是期间结束日期，需要计算当天的实时成本价
+      if (transferDateObj.getTime() < periodEnd.getTime()) {
+        // 调拨日期在期间中间，使用本月合计的加权平均单价
+        if (matchingSettlement.avgPrice != null) {
+          const result = Number(matchingSettlement.avgPrice.toFixed(2))
+          console.log('✅ 调拨日期在期间中间，使用本月合计成本价:', result)
+          return result
+        }
+      } else {
+        // 调拨日期是期间结束日期，需要计算当天的实时成本价
+        console.log('调拨日期是期间结束日期，需要计算实时成本价')
+        // 继续执行下面的动态计算逻辑
+      }
     }
     
-    console.log('未找到已结算数据，动态计算调拨日期所在月份的成本价')
+    console.log('未找到已结算数据或需要计算实时成本价，动态计算调拨日期前的成本价')
     
-    // 如果没有找到已结算数据，动态计算调拨日期所在月份的成本价
-    return calculateMonthlyCost(productId, warehouseId, transferDate)
+    // 如果没有找到已结算数据，或者调拨日期是期间结束日期，动态计算调拨日期前的成本价
+    return calculateCostBeforeDate(productId, warehouseId, transferDate)
   } catch (error) {
     console.error('从成本结算获取成本价失败:', error)
     // 回退到动态计算
