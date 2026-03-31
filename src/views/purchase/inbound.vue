@@ -444,9 +444,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { defineComponent, ref, reactive, computed, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import dayjs from 'dayjs'
+import { handleDocumentSave, DocumentType } from '@/utils/cost-recalculation'
 import exportToCsv from '../../utils/exportCsv'
 
 // 定义接口
@@ -1322,6 +1323,13 @@ const handleSubmit = async () => {
       }
       ElMessage.success('新增成功')
     }
+    
+    // 检测是否需要重新结算成本
+    await handleDocumentSave(
+      DocumentType.PURCHASE_INBOUND,
+      formData.items || [],
+      formData.voucherDate
+    )
     
     dialogVisible.value = false
     loadInboundList()

@@ -487,6 +487,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Printer, Download, Search } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import { getStockBeforeDateTime } from '@/utils/stock'
+import { handleDocumentSave, DocumentType } from '@/utils/cost-recalculation'
 
 // 类型定义
 interface ReturnItem {
@@ -1050,6 +1051,14 @@ const handleSubmit = async () => {
     localStorage.setItem('purchaseReturns', JSON.stringify(allReturns))
 
     ElMessage.success('保存成功')
+    
+    // 检测是否需要重新结算成本
+    await handleDocumentSave(
+      DocumentType.PURCHASE_RETURN,
+      formData.items,
+      formData.voucherDate
+    )
+    
     dialogVisible.value = false
     loadReturnsList()
   } catch (error: any) {
