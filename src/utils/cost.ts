@@ -836,13 +836,9 @@ export const initializeCostCalculation = (): any[] => {
             const itId = it.productId || it.id || null
             if (!itId) return
             
-            // 获取数量，如果是负数则取绝对值
-            let quantity = Number(it.quantity || 0)
+            // 获取数量（保持原始值，包括负数）
+            const quantity = Number(it.quantity || 0)
             if (quantity === 0) return
-            
-            // 如果数量是负数，取绝对值（退货单可能记录为负数）
-            const isNegativeQuantity = quantity < 0
-            quantity = Math.abs(quantity)
             
             // 优先使用不含税单价
             const costPrice = Number(it.unitPriceEx || it.costPrice || it.unitPrice || it.price || 0)
@@ -856,8 +852,7 @@ export const initializeCostCalculation = (): any[] => {
             
             if (isTransferKey && fromWarehouseId && toWarehouseId) {
               // 调拨单：生成两条记录（调出和调入）
-              
-              // 1. 调出仓库：出库记录
+              // 调出仓库：减少库存（数量取负数）
               allRecords.push({
                 productId: itId,
                 productCode: it.productCode || it.code || it.sku || '',
@@ -867,13 +862,13 @@ export const initializeCostCalculation = (): any[] => {
                 isInbound: false,
                 isOutbound: true,
                 isTransfer: true,
-                quantity,
+                quantity: Math.abs(quantity),  // 调出使用正数
                 costPrice,
-                amount,
+                amount: Math.abs(amount),  // 金额使用正数
                 _timestamp: rec.createdAt || rec.createdTime || rec.createTime || rec.timestamp
               })
               
-              // 2. 调入仓库：入库记录
+              // 调入仓库：增加库存（数量保持正数）
               allRecords.push({
                 productId: itId,
                 productCode: it.productCode || it.code || it.sku || '',
@@ -883,19 +878,16 @@ export const initializeCostCalculation = (): any[] => {
                 isInbound: true,
                 isOutbound: false,
                 isTransfer: true,
-                quantity,
+                quantity: Math.abs(quantity),  // 调入使用正数
                 costPrice,
-                amount,
+                amount: Math.abs(amount),  // 金额使用正数
                 _timestamp: rec.createdAt || rec.createdTime || rec.createTime || rec.timestamp
               })
             } else if (isInboundKey || isSalesReturn) {
               // 入库单或销售退货（销售退货当作入库处理）
-              // 如果数量是负数，说明是负入库（实际是出库），需要反转处理
+              // 直接使用原始数量（正数表示入库，负数表示负入库）
               const recWarehouseId = rec.warehouseId
               if (!recWarehouseId) return
-              
-              const actualIsInbound = isSalesReturn || (isInboundKey && !isNegativeQuantity)
-              const actualIsOutbound = !actualIsInbound
               
               allRecords.push({
                 productId: itId,
@@ -903,22 +895,19 @@ export const initializeCostCalculation = (): any[] => {
                 warehouseId: recWarehouseId,
                 date: recDate,
                 dateStr: recDateStr.slice(0, 10),
-                isInbound: actualIsInbound,
-                isOutbound: actualIsOutbound,
+                isInbound: true,  // 入库类型
+                isOutbound: false,
                 isTransfer: false,
-                quantity,
+                quantity,  // 保持原始数量（可能是负数）
                 costPrice,
-                amount,
+                amount,  // 保持原始金额（可能是负数）
                 _timestamp: rec.createdAt || rec.createdTime || rec.createTime || rec.timestamp
               })
             } else if (isOutboundKey || isPurchaseReturn) {
               // 出库单或采购退货（采购退货当作出库处理）
-              // 如果数量是负数，说明是负出库（实际是入库），需要反转处理
+              // 直接使用原始数量（正数表示出库，负数表示负出库）
               const recWarehouseId = rec.warehouseId
               if (!recWarehouseId) return
-              
-              const actualIsOutbound = isPurchaseReturn || (isOutboundKey && !isNegativeQuantity)
-              const actualIsInbound = !actualIsOutbound
               
               allRecords.push({
                 productId: itId,
@@ -926,12 +915,12 @@ export const initializeCostCalculation = (): any[] => {
                 warehouseId: recWarehouseId,
                 date: recDate,
                 dateStr: recDateStr.slice(0, 10),
-                isInbound: actualIsInbound,
-                isOutbound: actualIsOutbound,
+                isInbound: false,
+                isOutbound: true,  // 出库类型
                 isTransfer: false,
-                quantity,
+                quantity,  // 保持原始数量（可能是负数）
                 costPrice,
-                amount,
+                amount,  // 保持原始金额（可能是负数）
                 _timestamp: rec.createdAt || rec.createdTime || rec.createTime || rec.timestamp
               })
             }
