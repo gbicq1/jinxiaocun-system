@@ -134,7 +134,7 @@ export const getCostFromSettlement = (
       return getCostFromSettlement(productId, warehouseId, lastMonthEnd.toISOString().slice(0, 10))
     }
 
-    // 4. 从期初数据开始，逐笔计算当月业务
+    // 4. 从期初数据开始，逐笔计算当月业务（只计算到调拨日期为止）
     let runningQty = openingData.qty
     let runningAmount = openingData.amount
 
@@ -145,8 +145,17 @@ export const getCostFromSettlement = (
       return dateA - dateB
     })
 
-    // 5. 逐笔计算
+    // 5. 只计算调拨日期之前的业务
+    const targetTime = targetDate.getTime()
     for (const rec of monthRecords) {
+      const recTime = new Date(rec.date).getTime()
+      
+      // 只处理调拨日期之前的业务（包含当天早于调拨时间的业务）
+      if (recTime > targetTime) {
+        console.log('跳过调拨日期之后的业务:', rec)
+        continue
+      }
+      
       if (rec.type === 'inbound') {
         // 入库：增加数量和金额
         runningQty += rec.qty

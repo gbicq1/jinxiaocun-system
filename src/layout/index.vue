@@ -51,8 +51,6 @@
           </template>
           <el-menu-item index="/inventory/stock">实时库存查询</el-menu-item>
           <el-menu-item index="/inventory/transfer">库存调拨</el-menu-item>
-          <el-menu-item index="/inventory/count">库存盘点</el-menu-item>
-          <el-menu-item index="/inventory/other">其他出入库</el-menu-item>
           <el-menu-item index="/inventory/period">库存期初期末</el-menu-item>
         </el-sub-menu>
 
