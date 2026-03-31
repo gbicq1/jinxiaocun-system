@@ -47,6 +47,10 @@
         
         <!-- 右侧功能按钮 -->
         <div class="action-buttons">
+          <el-button type="primary" @click="handleInitialize">
+            <el-icon><Refresh /></el-icon>
+            初始化成本数据
+          </el-button>
           <el-button type="success" @click="handleCalculate">
             <el-icon><Check /></el-icon>
             开始计算
@@ -286,9 +290,10 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, watch, onMounted } from 'vue'
-import { Search, RefreshLeft, Check, Back, Download, Printer, Close } from '@element-plus/icons-vue'
+import { Search, RefreshLeft, Check, Back, Download, Printer, Close, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import exportToCsv from '../../utils/exportCsv'
+import { initializeCostCalculation } from '../../utils/cost'
 
 // 查询表单
 const queryForm = reactive({
@@ -361,6 +366,54 @@ const handleReset = () => {
   queryForm.warehouse = ''
   settlementList.value = []
   allSettlementData.value = []
+}
+
+// 初始化成本数据
+const handleInitialize = async () => {
+  ElMessageBox.confirm(
+    '初始化成本数据将从系统启用时的第一笔单据开始，全面计算所有产品和仓库的库存结余。\n\n注意：\n1. 此操作会覆盖现有的初始化数据\n2. 如果数据量较大，可能需要几分钟时间\n3. 建议在首次使用或数据不完整时使用\n\n确定要继续吗？',
+    '初始化成本数据',
+    {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning'
+    }
+  )
+  
+  try {
+    ElMessage.info('正在初始化成本数据，请稍候...')
+    
+    // 调用初始化函数
+    const settlements = initializeCostCalculation()
+    
+    if (settlements.length === 0) {
+      ElMessage.warning('没有可用的出入库记录，初始化失败')
+      return
+    }
+    
+    // 保存到 localStorage（只保存初始化数据，不覆盖已结算数据）
+    const existingSettlements = JSON.parse(localStorage.getItem('cost_settlements') || '[]')
+    
+    // 过滤掉旧的初始化数据
+    const nonInitializedSettlements = existingSettlements.filter((s: any) => !s._initialized)
+    
+    // 合并新的初始化数据
+    const allSettlements = [...nonInitializedSettlements, ...settlements]
+    localStorage.setItem('cost_settlements', JSON.stringify(allSettlements))
+    
+    console.log('初始化完成，生成的结算数据:', settlements.length)
+    console.log('总结算数据:', allSettlements.length)
+    
+    ElMessage.success(`初始化完成！共为 ${settlements.length} 个产品仓库组合计算了库存结余`)
+    
+    // 自动刷新列表
+    if (queryForm.periodRange && queryForm.periodRange.length === 2) {
+      loadSettlementData()
+    }
+  } catch (error) {
+    console.error('初始化成本数据失败:', error)
+    ElMessage.error('初始化失败，请查看控制台日志')
+  }
 }
 
 // 开始计算

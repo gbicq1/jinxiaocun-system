@@ -752,3 +752,235 @@ const calculateCostBeforeDate = (productId: number | undefined, warehouseId: num
     return getWeightedAverageCost(productId, warehouseId)
   }
 }
+
+/**
+ * 初始化成本计算：从系统启用时开始，为每个产品每个仓库计算历史库存结余
+ * 用于软件启动时或首次使用时，建立完整的成本结算数据
+ * @returns 生成的成本结算数据数组
+ */
+export const initializeCostCalculation = (): any[] => {
+  console.log('========== 开始初始化成本计算 ==========')
+  
+  try {
+    // 获取所有产品
+    const products = JSON.parse(localStorage.getItem('products') || '[]')
+    console.log('产品数量:', products.length)
+    
+    // 获取所有仓库
+    const warehouses = JSON.parse(localStorage.getItem('warehouses') || '[]')
+    console.log('仓库数量:', warehouses.length)
+    
+    if (products.length === 0 || warehouses.length === 0) {
+      console.log('没有产品或仓库数据，跳过初始化')
+      return []
+    }
+    
+    // 收集所有出入库记录
+    const allRecords: any[] = []
+    
+    // 扫描所有 localStorage 键
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i)
+      if (!key) continue
+      
+      try {
+        const raw = localStorage.getItem(key)
+        if (!raw) continue
+        
+        const arr = JSON.parse(raw)
+        if (!Array.isArray(arr)) continue
+        
+        // 判断单据类型
+        const isPurchaseReturn = key.includes('return') && (key.includes('purchase') || key.includes('inbound'))
+        const isSalesReturn = key.includes('return') && (key.includes('sales') || key.includes('outbound'))
+        const isInboundKey = key.includes('inbound') || (key.includes('purchase') && !key.includes('return'))
+        const isOutboundKey = key.includes('outbound') || (key.includes('sales') && !key.includes('return'))
+        const isTransferKey = key.includes('transfer')
+        
+        if (!isInboundKey && !isOutboundKey && !isTransferKey && !isPurchaseReturn && !isSalesReturn) {
+          continue
+        }
+        
+        arr.forEach((rec: any) => {
+          // 获取单据日期
+          const recDateStr = rec.voucherDate || rec.orderDate || rec.date || rec.createdAt || rec.transferDate || ''
+          if (!recDateStr) return
+          
+          const recDate = new Date(recDateStr)
+          
+          // 获取单据明细
+          const items = rec.items || rec.products || rec.details || rec.lines || rec.itemsList
+          if (!Array.isArray(items)) return
+          
+          // 判断是入库还是出库
+          let recWarehouseId = null
+          let isInbound = false
+          let isOutbound = false
+          let isTransferOut = false
+          let isTransferIn = false
+          
+          if (isTransferKey) {
+            // 调拨单
+            recWarehouseId = rec.fromWarehouseId || rec.toWarehouseId
+            isTransferOut = true
+            isTransferIn = true
+          } else if (isInboundKey || isSalesReturn) {
+            // 入库单或销售退货（销售退货当作入库处理）
+            recWarehouseId = rec.warehouseId
+            isInbound = true
+          } else if (isOutboundKey || isPurchaseReturn) {
+            // 出库单或采购退货（采购退货当作出库处理）
+            recWarehouseId = rec.warehouseId
+            isOutbound = true
+          }
+          
+          if (!recWarehouseId) return
+          
+          items.forEach((it: any) => {
+            const itId = it.productId || it.id || null
+            if (!itId) return
+            
+            const quantity = Number(it.quantity || 0)
+            if (quantity <= 0) return
+            
+            // 优先使用不含税单价
+            const costPrice = Number(it.unitPriceEx || it.costPrice || it.unitPrice || it.price || 0)
+            const amount = Number(it.totalAmountEx || it.totalAmount || it.amount || (quantity * costPrice))
+            
+            // 添加到记录列表
+            allRecords.push({
+              productId: itId,
+              productCode: it.productCode || it.code || it.sku || '',
+              warehouseId: recWarehouseId,
+              date: recDate,
+              dateStr: recDateStr.slice(0, 10),
+              isInbound: isInbound || (isTransferIn && Number(rec.toWarehouseId) === Number(recWarehouseId)),
+              isOutbound: isOutbound || (isTransferOut && Number(rec.fromWarehouseId) === Number(recWarehouseId)),
+              isTransfer: isTransferKey,
+              quantity,
+              costPrice,
+              amount,
+              _timestamp: rec.createdAt || rec.createdTime || rec.createTime || rec.timestamp
+            })
+          })
+        })
+      } catch (e) {
+        // 忽略解析错误
+      }
+    }
+    
+    console.log('收集到的出入库记录总数:', allRecords.length)
+    
+    if (allRecords.length === 0) {
+      console.log('没有出入库记录，跳过初始化')
+      return []
+    }
+    
+    // 按日期排序
+    allRecords.sort((a, b) => {
+      const dateCompare = a.date.getTime() - b.date.getTime()
+      if (dateCompare !== 0) return dateCompare
+      
+      let timeA = 0
+      let timeB = 0
+      
+      if (a._timestamp) {
+        const tA = new Date(a._timestamp).getTime()
+        if (!isNaN(tA)) timeA = tA
+      }
+      if (b._timestamp) {
+        const tB = new Date(b._timestamp).getTime()
+        if (!isNaN(tB)) timeB = tB
+      }
+      
+      if (timeA > 0 && timeB > 0) return timeA - timeB
+      if (timeA > 0) return -1
+      if (timeB > 0) return 1
+      
+      return 0
+    })
+    
+    // 找到最早的日期
+    const earliestDate = allRecords[0].date
+    const latestDate = allRecords[allRecords.length - 1].date
+    console.log('最早单据日期:', earliestDate.toISOString().slice(0, 10))
+    console.log('最晚单据日期:', latestDate.toISOString().slice(0, 10))
+    
+    // 为每个产品每个仓库计算成本结算
+    const settlements: any[] = []
+    
+    products.forEach((product: any) => {
+      warehouses.forEach((warehouse: any) => {
+        const productId = product.id
+        const productCode = product.code
+        const warehouseId = warehouse.id
+        
+        // 筛选该产品和仓库的记录
+        const productRecords = allRecords.filter((r: any) => 
+          (r.productId === productId || r.productCode === productCode) && 
+          r.warehouseId === warehouseId
+        )
+        
+        if (productRecords.length === 0) {
+          return // 没有记录，跳过
+        }
+        
+        // 从 0 开始计算
+        let runningQty = 0
+        let runningCost = 0
+        
+        // 遍历所有记录
+        productRecords.forEach((rec: any) => {
+          if (rec.isInbound) {
+            // 入库：增加库存和成本
+            runningQty += rec.quantity
+            runningCost += rec.amount
+          } else if (rec.isOutbound) {
+            // 出库：使用加权平均单价计算出库成本
+            const avgPrice = runningQty > 0 ? runningCost / runningQty : 0
+            const outboundCost = rec.quantity * avgPrice
+            
+            runningQty -= rec.quantity
+            runningCost -= outboundCost
+          }
+        })
+        
+        // 如果最终有库存，生成结算数据
+        if (runningQty > 0) {
+          const avgPrice = runningCost / runningQty
+          
+          settlements.push({
+            productId: productId,
+            productCode: productCode,
+            productName: product.name,
+            specification: product.specification || '',
+            unit: product.unit || '',
+            warehouseId: warehouseId,
+            warehouseName: warehouse.name,
+            periodRange: [earliestDate.toISOString().slice(0, 10), latestDate.toISOString().slice(0, 10)],
+            openingQty: 0,
+            openingCost: 0,
+            inboundQty: productRecords.filter((r: any) => r.isInbound).reduce((sum: number, r: any) => sum + r.quantity, 0),
+            inboundCost: productRecords.filter((r: any) => r.isInbound).reduce((sum: number, r: any) => sum + r.amount, 0),
+            outboundQty: productRecords.filter((r: any) => r.isOutbound).reduce((sum: number, r: any) => sum + r.quantity, 0),
+            outboundCost: productRecords.filter((r: any) => r.isOutbound).reduce((sum: number, r: any) => sum + (r.quantity * (runningCost / runningQty)), 0),
+            avgPrice: Number(avgPrice.toFixed(2)),
+            closingQty: runningQty,
+            closingCost: runningCost,
+            _initialized: true // 标记为初始化数据
+          })
+          
+          console.log(`产品 ${productCode} ${product.name} 仓库 ${warehouse.name}: 库存=${runningQty}, 成本价=${avgPrice.toFixed(2)}`)
+        }
+      })
+    })
+    
+    console.log('========== 初始化成本计算完成 ==========')
+    console.log('生成的结算数据数量:', settlements.length)
+    
+    return settlements
+  } catch (error) {
+    console.error('初始化成本计算失败:', error)
+    return []
+  }
+}
