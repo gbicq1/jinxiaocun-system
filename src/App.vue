@@ -5,10 +5,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
 
 const locale = ref(zhCn)
+
+onMounted(() => {
+  console.log('应用启动完成')
+})
 </script>
 
 <style>

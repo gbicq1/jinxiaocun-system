@@ -529,14 +529,31 @@ const loadWarehouses = () => {
 }
 
 // 加载发票管理列表（核心逻辑：综合出库单和退货单）
-const loadInvoiceList = () => {
+const loadInvoiceList = async () => {
   try {
-    // 1. 读取数据
-    const outboundsData = localStorage.getItem('sales_outbound_records')
-    const returnsData = localStorage.getItem('salesReturns')
+    // 从数据库读取数据
+    let allOutbounds: any[] = []
+    let allReturns: any[] = []
     
-    const allOutbounds = outboundsData ? JSON.parse(outboundsData) : []
-    const allReturns = returnsData ? JSON.parse(returnsData) : []
+    // 检查是否在 Electron 环境
+    if (window.electron && window.electron.outboundList) {
+      // 从数据库获取出库单
+      const outboundResult = await window.electron.outboundList(1, 1000)
+      allOutbounds = outboundResult.data || []
+      
+      // 从数据库获取退货单
+      if (window.electron.salesReturnList) {
+        const returnResult = await window.electron.salesReturnList(1, 1000)
+        allReturns = returnResult.data || []
+      }
+    } else {
+      // 非 Electron 环境，使用 localStorage（兼容开发测试）
+      const outboundsData = localStorage.getItem('sales_outbound_records')
+      const returnsData = localStorage.getItem('salesReturns')
+      
+      allOutbounds = outboundsData ? JSON.parse(outboundsData) : []
+      allReturns = returnsData ? JSON.parse(returnsData) : []
+    }
     
     // 2. 创建出库单记录
     const map = new Map()
@@ -742,12 +759,13 @@ const handleSelectionChange = (selection: any[]) => {
 
 // 查看明细
 const handleViewDetail = (row: InvoiceRecord) => {
-  currentDetail.value = { ...row }
+  // 使用 JSON 序列化来避免响应式问题
+  currentDetail.value = JSON.parse(JSON.stringify(row))
   detailDialogVisible.value = true
 }
 
 // 开票
-const handleInvoice = (row: InvoiceRecord) => {
+const handleInvoice = async (row: InvoiceRecord) => {
   if (row.pendingAmount <= 0) {
     ElMessage.warning('该单据没有待开票金额')
     return
@@ -759,7 +777,7 @@ const handleInvoice = (row: InvoiceRecord) => {
     inputValue: row.pendingAmount.toFixed(2),
     inputPattern: /^\d+(\.\d{1,2})?$/,
     inputErrorMessage: '请输入有效的金额'
-  }).then(({ value }) => {
+  }).then(async ({ value }) => {
     const invoiceAmount = parseFloat(value)
     if (invoiceAmount > row.pendingAmount) {
       ElMessage.error('开票金额不能大于待开票金额')
@@ -768,20 +786,44 @@ const handleInvoice = (row: InvoiceRecord) => {
     
     // 更新出库单的已开票金额
     try {
-      const savedOutbounds = localStorage.getItem('sales_outbound_records')
-      const outbounds = savedOutbounds ? JSON.parse(savedOutbounds) : []
-      
-      const outbound = outbounds.find((o: any) => o.voucherNo === row.voucherNo)
-      if (outbound) {
-        outbound.invoicedAmount = (outbound.invoicedAmount || 0) + invoiceAmount
-        outbound.invoiceDate = dayjs().format('YYYY-MM-DD')
+      if (window.electron && window.electron.outboundUpdate) {
+        // 从数据库获取出库单
+        const outboundResult = await window.electron.outboundList(1, 1000)
+        const outbounds = outboundResult.data || []
         
-        localStorage.setItem('sales_outbound_records', JSON.stringify(outbounds))
+        const outbound = outbounds.find((o: any) => o.voucherNo === row.voucherNo)
+        if (outbound) {
+          // 更新已开票金额
+          const updatedOutbound = {
+            ...outbound,
+            invoicedAmount: (outbound.invoicedAmount || 0) + invoiceAmount,
+            invoiceDate: dayjs().format('YYYY-MM-DD')
+          }
+          
+          await window.electron.outboundUpdate(updatedOutbound)
+          
+          // 重新加载列表
+          loadInvoiceList()
+          
+          ElMessage.success(`开票成功，开票金额：¥${invoiceAmount.toFixed(2)}`)
+        }
+      } else {
+        // 非 Electron 环境，使用 localStorage
+        const savedOutbounds = localStorage.getItem('sales_outbound_records')
+        const outbounds = savedOutbounds ? JSON.parse(savedOutbounds) : []
         
-        // 重新加载列表
-        loadInvoiceList()
-        
-        ElMessage.success(`开票成功，开票金额：¥${invoiceAmount.toFixed(2)}`)
+        const outbound = outbounds.find((o: any) => o.voucherNo === row.voucherNo)
+        if (outbound) {
+          outbound.invoicedAmount = (outbound.invoicedAmount || 0) + invoiceAmount
+          outbound.invoiceDate = dayjs().format('YYYY-MM-DD')
+          
+          localStorage.setItem('sales_outbound_records', JSON.stringify(outbounds))
+          
+          // 重新加载列表
+          loadInvoiceList()
+          
+          ElMessage.success(`开票成功，开票金额：¥${invoiceAmount.toFixed(2)}`)
+        }
       }
     } catch (error) {
       console.error('开票失败:', error)

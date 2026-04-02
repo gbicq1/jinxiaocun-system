@@ -47,6 +47,8 @@
 
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { dbQuery, dbInsert, dbUpdate, dbDelete } from '@/utils/db'
 
 const suppliers = ref<any[]>([])
 const dialogVisible = ref(false)
@@ -58,15 +60,17 @@ const formRules = {
   name: [{ required: true, message: '请输入名称', trigger: 'blur' }]
 }
 
-const loadSuppliers = () => {
-  const saved = localStorage.getItem('suppliers')
-  suppliers.value = saved ? JSON.parse(saved) : []
+const loadSuppliers = async () => {
+  try {
+    const result = await dbQuery('SELECT * FROM suppliers ORDER BY created_at DESC')
+    suppliers.value = result
+  } catch (error: any) {
+    console.error('加载供应商列表失败:', error)
+  }
 }
 
-const saveSuppliers = () => localStorage.setItem('suppliers', JSON.stringify(suppliers.value))
-
 const handleAdd = () => {
-  Object.assign(formData, { id: Date.now(), code: '', name: '', contactPerson: '', contactPhone: '', contactEmail: '', status: 1 })
+  Object.assign(formData, { id: null, code: '', name: '', contactPerson: '', contactPhone: '', contactEmail: '', status: 1 })
   dialogVisible.value = true
 }
 
@@ -75,25 +79,44 @@ const handleEdit = (row: any) => {
   dialogVisible.value = true
 }
 
-const handleDelete = (row: any) => {
-  suppliers.value = suppliers.value.filter(s => s.id !== row.id)
-  saveSuppliers()
+const handleDelete = async (row: any) => {
+  try {
+    await ElMessageBox.confirm('确定要删除该供应商吗？', '提示', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+    
+    await dbDelete('suppliers', 'id = ?', [row.id])
+    loadSuppliers()
+    ElMessage.success('删除成功')
+  } catch (error: any) {
+    if (error !== 'cancel') {
+      console.error('删除失败:', error)
+      ElMessage.error('删除失败：' + error.message)
+    }
+  }
 }
 
-const handleSubmit = () => {
+const handleSubmit = async () => {
   if (!formRef.value) return
   
-  formRef.value.validate((valid: boolean) => {
-    if (valid) {
-      const idx = suppliers.value.findIndex(s => s.id === formData.id)
-      if (idx === -1) suppliers.value.push({ ...formData })
-      else suppliers.value[idx] = { ...formData }
-      saveSuppliers()
-      dialogVisible.value = false
+  try {
+    await formRef.value.validate()
+    
+    if (formData.id) {
+      await dbUpdate('suppliers', formData, 'id = ?', [formData.id])
+      ElMessage.success('更新成功')
     } else {
-      return false
+      await dbInsert('suppliers', formData)
+      ElMessage.success('新增成功')
     }
-  })
+    
+    dialogVisible.value = false
+    loadSuppliers()
+  } catch (error: any) {
+    console.error('表单验证失败:', error)
+  }
 }
 
 onMounted(() => loadSuppliers())

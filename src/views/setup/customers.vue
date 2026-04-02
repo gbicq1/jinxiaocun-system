@@ -51,6 +51,8 @@
 
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { dbQuery, dbInsert, dbUpdate, dbDelete } from '@/utils/db'
 
 const customers = ref<any[]>([])
 const dialogVisible = ref(false)
@@ -62,15 +64,17 @@ const formRules = {
   name: [{ required: true, message: '请输入名称', trigger: 'blur' }]
 }
 
-const loadCustomers = () => {
-  const saved = localStorage.getItem('customers')
-  customers.value = saved ? JSON.parse(saved) : []
+const loadCustomers = async () => {
+  try {
+    const result = await dbQuery('SELECT * FROM customers ORDER BY created_at DESC')
+    customers.value = result
+  } catch (error: any) {
+    console.error('加载客户列表失败:', error)
+  }
 }
 
-const saveCustomers = () => localStorage.setItem('customers', JSON.stringify(customers.value))
-
 const handleAdd = () => {
-  Object.assign(formData, { id: Date.now(), code: '', name: '', contactPerson: '', contactPhone: '', creditLimit: 0, status: 1 })
+  Object.assign(formData, { id: null, code: '', name: '', contactPerson: '', contactPhone: '', creditLimit: 0, status: 1 })
   dialogVisible.value = true
 }
 
@@ -79,25 +83,44 @@ const handleEdit = (row: any) => {
   dialogVisible.value = true
 }
 
-const handleDelete = (row: any) => {
-  customers.value = customers.value.filter(c => c.id !== row.id)
-  saveCustomers()
+const handleDelete = async (row: any) => {
+  try {
+    await ElMessageBox.confirm('确定要删除该客户吗？', '提示', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+    
+    await dbDelete('customers', 'id = ?', [row.id])
+    loadCustomers()
+    ElMessage.success('删除成功')
+  } catch (error: any) {
+    if (error !== 'cancel') {
+      console.error('删除失败:', error)
+      ElMessage.error('删除失败：' + error.message)
+    }
+  }
 }
 
-const handleSubmit = () => {
+const handleSubmit = async () => {
   if (!formRef.value) return
   
-  formRef.value.validate((valid: boolean) => {
-    if (valid) {
-      const idx = customers.value.findIndex(c => c.id === formData.id)
-      if (idx === -1) customers.value.push({ ...formData })
-      else customers.value[idx] = { ...formData }
-      saveCustomers()
-      dialogVisible.value = false
+  try {
+    await formRef.value.validate()
+    
+    if (formData.id) {
+      await dbUpdate('customers', formData, 'id = ?', [formData.id])
+      ElMessage.success('更新成功')
     } else {
-      return false
+      await dbInsert('customers', formData)
+      ElMessage.success('新增成功')
     }
-  })
+    
+    dialogVisible.value = false
+    loadCustomers()
+  } catch (error: any) {
+    console.error('表单验证失败:', error)
+  }
 }
 
 onMounted(() => loadCustomers())

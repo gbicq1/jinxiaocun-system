@@ -463,43 +463,42 @@ export class MonthlyCostSettlementService {
    * 获取系统最早的单据日期
    */
   private getFirstDocumentDate(): Date | null {
-    const allDates: Date[] = []
-
-    // 检查所有可能的单据表
-    const recordKeys = [
-      'purchase_inbound_records',
-      'purchaseInbounds',
-      'sales_outbound_records',
-      'salesOutbounds',
-      'inventory_transfer_records',
-      'inventoryTransfers',
-      'stock_adjustment_records',
-      'stockAdjustments'
-    ]
-
-    for (const key of recordKeys) {
-      const raw = localStorage.getItem(key)
-      if (!raw) continue
-
-      const records = JSON.parse(raw)
-      if (!Array.isArray(records) || records.length === 0) continue
-
-      // 找出最早的单据日期
-      for (const rec of records) {
-        const dateStr = rec.voucherDate || rec.date || rec.transferDate || rec.adjustmentDate || rec.createdAt
-        if (dateStr) {
-          const date = new Date(dateStr)
-          if (!isNaN(date.getTime())) {
-            allDates.push(date)
+    try {
+      const allDates: Date[] = []
+      
+      // 从数据库查询所有单据表的最早日期
+      const tables = [
+        { name: 'purchase_inbound', dateField: 'inbound_date' },
+        { name: 'sales_outbound', dateField: 'outbound_date' },
+        { name: 'inventory_transfer', dateField: 'transfer_date' }
+      ]
+      
+      for (const table of tables) {
+        try {
+          const result = (this.costDb as any).db?.query(
+            `SELECT MIN(${table.dateField}) as min_date FROM ${table.name}`,
+            []
+          )
+          
+          if (result && result.length > 0 && result[0].min_date) {
+            const date = new Date(result[0].min_date)
+            if (!isNaN(date.getTime())) {
+              allDates.push(date)
+            }
           }
+        } catch (error) {
+          console.log(`查询 ${table.name} 表失败，跳过`, error)
         }
       }
+      
+      if (allDates.length === 0) return null
+      
+      // 返回最早的日期
+      return new Date(Math.min(...allDates.map(d => d.getTime())))
+    } catch (error) {
+      console.error('获取最早单据日期失败:', error)
+      return null
     }
-
-    if (allDates.length === 0) return null
-
-    // 返回最早的日期
-    return new Date(Math.min(...allDates.map(d => d.getTime())))
   }
 
   /**

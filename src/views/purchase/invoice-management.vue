@@ -147,8 +147,8 @@
         <el-descriptions-item label="仓库">{{ currentDetail.warehouseName }}</el-descriptions-item>
         <el-descriptions-item label="经办人">{{ currentDetail.handlerName }}</el-descriptions-item>
         <el-descriptions-item label="开票状态">
-          <el-tag :type="getInvoiceStatusType(currentDetail.invoiceStatus)">
-            {{ getInvoiceStatusText(currentDetail.invoiceStatus) }}
+          <el-tag :type="currentDetail.invoiceIssued ? 'success' : getInvoiceStatusType(currentDetail.invoiceStatus)">
+            {{ currentDetail.invoiceIssued ? '已开票' : getInvoiceStatusText(currentDetail.invoiceStatus) }}
           </el-tag>
         </el-descriptions-item>
       </el-descriptions>
@@ -392,6 +392,7 @@ interface InvoiceRecord {
   invoicedAmount: number
   pendingAmount: number
   invoiceStatus: 'uninvoiced' | 'invoiced' | 'partial'
+  invoiceIssued: boolean
   inboundItems: InvoiceItem[]
   returnItems: ReturnItem[]
   netItems: NetItem[]
@@ -440,6 +441,7 @@ const currentDetail = ref<InvoiceRecord>({
   invoicedAmount: 0,
   pendingAmount: 0,
   invoiceStatus: 'uninvoiced',
+  invoiceIssued: false,
   inboundItems: [],
   returnItems: [],
   netItems: []
@@ -533,21 +535,53 @@ const loadWarehouses = () => {
 }
 
 // 加载发票管理列表（核心逻辑：综合入库单和退货单）
-const loadInvoiceList = () => {
+const loadInvoiceList = async () => {
   try {
-    // 1. 读取数据
-    const inboundsData = localStorage.getItem('inbound_records')
-    const returnsData = localStorage.getItem('purchaseReturns')
+    console.log('开始加载发票管理列表...')
     
-    const allInbounds = inboundsData ? JSON.parse(inboundsData) : []
-    const allReturns = returnsData ? JSON.parse(returnsData) : []
+    // 从数据库读取数据
+    let allInbounds: any[] = []
+    let allReturns: any[] = []
+    
+    // 检查是否在 Electron 环境
+    if (window.electron && window.electron.inboundList) {
+      // 从数据库获取入库单
+      console.log('从数据库获取入库单...')
+      const inboundResult = await window.electron.inboundList(1, 1000)
+      console.log('入库单结果:', inboundResult)
+      allInbounds = inboundResult.data || []
+      console.log('入库单数据:', allInbounds)
+      
+      // 从数据库获取退货单
+      if (window.electron.purchaseReturnList) {
+        console.log('从数据库获取退货单...')
+        const returnResult = await window.electron.purchaseReturnList(1, 1000)
+        console.log('退货单结果:', returnResult)
+        allReturns = returnResult.data || []
+        console.log('退货单数据:', allReturns)
+      }
+    } else {
+      // 非 Electron 环境，使用 localStorage（兼容开发测试）
+      console.log('从 localStorage 获取数据...')
+      const inboundsData = localStorage.getItem('inbound_records')
+      const returnsData = localStorage.getItem('purchaseReturns')
+      
+      allInbounds = inboundsData ? JSON.parse(inboundsData) : []
+      allReturns = returnsData ? JSON.parse(returnsData) : []
+    }
+    
+    console.log('处理入库单数据...')
     
     // 2. 创建入库单记录
     const map = new Map()
     
+    console.log('开始遍历入库单，数量:', allInbounds.length)
     for (let i = 0; i < allInbounds.length; i++) {
       const ib = allInbounds[i]
+      console.log(`入库单 ${i}:`, ib)
+      console.log(`入库单 ${i} 的字段:`, Object.keys(ib))
       const key = ib.voucherNo
+      console.log(`入库单 ${i} 的 voucherNo:`, key)
       
       // 计算入库单总金额（优先使用 totalAmount，否则计算）
       let ibTotalAmount = 0
@@ -580,18 +614,22 @@ const loadInvoiceList = () => {
         invoicedAmount: ibInvoicedAmount,
         pendingAmount: ibTotalAmount - ibInvoicedAmount,
         invoiceStatus: 'uninvoiced',
-        inboundItems: (ib.items || []).map((item: any) => ({
-          productId: item.productId,
-          productName: item.productName,
-          specification: item.specification,
-          quantity: item.quantity,
-          unit: item.unit,
-          unitPrice: item.unitPrice,
-          unitPriceEx: item.unitPriceEx,
-          taxRate: item.taxRate,
-          taxAmount: item.taxAmount,
-          amount: item.totalAmount
-        })),
+        invoiceIssued: ib.invoiceIssued || false, // 保存入库单的开票状态
+        inboundItems: (ib.items || []).map((item: any, index: number) => {
+          console.log(`入库单 ${i} 的明细项 ${index}:`, item)
+          return {
+            productId: item.productId,
+            productName: item.productName,
+            specification: item.specification,
+            quantity: item.quantity,
+            unit: item.unit,
+            unitPrice: item.unitPrice,
+            unitPriceEx: item.unitPriceEx,
+            taxRate: item.taxRate,
+            taxAmount: item.taxAmount,
+            amount: item.totalAmount
+          }
+        }),
         returnItems: [],
         netItems: []
       }
@@ -648,74 +686,83 @@ const loadInvoiceList = () => {
     const list: InvoiceRecord[] = []
     
     map.forEach((record: InvoiceRecord) => {
-      // 计算净额
-      record.netAmount = record.originalAmount - record.returnedAmount
-      record.pendingAmount = record.netAmount - record.invoicedAmount
-      
-      // 更新开票状态
-      if (record.invoicedAmount <= 0) {
-        record.invoiceStatus = 'uninvoiced'
-      } else if (record.invoicedAmount >= record.netAmount) {
+      // 判断是否已开票
+      if (record.invoiceIssued) {
+        // 已开票状态：净额为0，待开票为0，净额明细为空
+        record.netAmount = 0
+        record.pendingAmount = 0
         record.invoiceStatus = 'invoiced'
+        record.netItems = []
       } else {
-        record.invoiceStatus = 'partial'
-      }
-      
-      // 计算净额商品明细（入库商品明细 + 退货商品明细）
-      const netMap = new Map<number, any>()
-      
-      // 先加入库商品
-      for (let i = 0; i < record.inboundItems.length; i++) {
-        const item = record.inboundItems[i]
-        if (netMap.has(item.productId)) {
-          const existing = netMap.get(item.productId)!
-          existing.quantity += item.quantity
-          existing.amount += item.amount
-          existing.taxAmount += item.taxAmount || 0
+        // 未开票状态：正常计算净额（入库单 - 退货单）
+        record.netAmount = record.originalAmount - record.returnedAmount
+        record.pendingAmount = record.netAmount - record.invoicedAmount
+        
+        // 更新开票状态
+        if (record.invoicedAmount <= 0) {
+          record.invoiceStatus = 'uninvoiced'
+        } else if (record.invoicedAmount >= record.netAmount) {
+          record.invoiceStatus = 'invoiced'
         } else {
-          netMap.set(item.productId, { 
-            productId: item.productId,
-            productName: item.productName,
-            specification: item.specification,
-            quantity: item.quantity,
-            unit: item.unit,
-            unitPrice: item.unitPrice,
-            unitPriceEx: item.unitPriceEx,
-            taxRate: item.taxRate,
-            taxAmount: item.taxAmount || 0,
-            amount: item.amount
-          })
+          record.invoiceStatus = 'partial'
         }
-      }
-      
-      // 再加退货商品（因为退货商品的数量和金额都是正数，所以需要减去）
-      for (let i = 0; i < record.returnItems.length; i++) {
-        const item = record.returnItems[i]
-        if (netMap.has(item.productId)) {
-          const existing = netMap.get(item.productId)!
-          // 退货数量是正数，所以需要减去
-          existing.quantity -= Math.abs(item.quantity)
-          existing.amount -= Math.abs(item.totalInc)
-          existing.taxAmount -= Math.abs(item.taxAmount || 0)
-        } else {
-          // 如果退货商品不在入库商品中，也添加进去（但数量和金额为负）
-          netMap.set(item.productId, { 
-            productId: item.productId,
-            productName: item.productName,
-            specification: item.specification,
-            quantity: -Math.abs(item.quantity),
-            unit: item.unit,
-            unitPrice: item.unitPrice,
-            unitPriceEx: item.unitPriceEx,
-            taxRate: item.taxRate,
-            taxAmount: -Math.abs(item.taxAmount || 0),
-            amount: -Math.abs(item.totalInc)
-          })
+        
+        // 计算净额商品明细（入库商品明细 + 退货商品明细）
+        const netMap = new Map<number, any>()
+        
+        // 先加入库商品
+        for (let i = 0; i < record.inboundItems.length; i++) {
+          const item = record.inboundItems[i]
+          if (netMap.has(item.productId)) {
+            const existing = netMap.get(item.productId)!
+            existing.quantity += item.quantity
+            existing.amount += item.amount
+            existing.taxAmount += item.taxAmount || 0
+          } else {
+            netMap.set(item.productId, { 
+              productId: item.productId,
+              productName: item.productName,
+              specification: item.specification,
+              quantity: item.quantity,
+              unit: item.unit,
+              unitPrice: item.unitPrice,
+              unitPriceEx: item.unitPriceEx,
+              taxRate: item.taxRate,
+              taxAmount: item.taxAmount || 0,
+              amount: item.amount
+            })
+          }
         }
+        
+        // 再加退货商品（因为退货商品的数量和金额都是正数，所以需要减去）
+        for (let i = 0; i < record.returnItems.length; i++) {
+          const item = record.returnItems[i]
+          if (netMap.has(item.productId)) {
+            const existing = netMap.get(item.productId)!
+            // 退货数量是正数，所以需要减去
+            existing.quantity -= Math.abs(item.quantity)
+            existing.amount -= Math.abs(item.totalInc)
+            existing.taxAmount -= Math.abs(item.taxAmount || 0)
+          } else {
+            // 如果退货商品不在入库商品中，也添加进去（但数量和金额为负）
+            netMap.set(item.productId, { 
+              productId: item.productId,
+              productName: item.productName,
+              specification: item.specification,
+              quantity: -Math.abs(item.quantity),
+              unit: item.unit,
+              unitPrice: item.unitPrice,
+              unitPriceEx: item.unitPriceEx,
+              taxRate: item.taxRate,
+              taxAmount: -Math.abs(item.taxAmount || 0),
+              amount: -Math.abs(item.totalInc)
+            })
+          }
+        }
+        
+        // 转换为数组，只保留数量>0 的商品
+        record.netItems = Array.from(netMap.values()).filter((item: any) => item.quantity > 0)
       }
-      
-      // 转换为数组，只保留数量>0 的商品
-      record.netItems = Array.from(netMap.values()).filter((item: any) => item.quantity > 0)
       
       list.push(record)
     })
@@ -760,12 +807,17 @@ const handleSelectionChange = (selection: any[]) => {
 
 // 查看明细
 const handleViewDetail = (row: InvoiceRecord) => {
-  currentDetail.value = { ...row }
+  console.log('查看明细 - 原始数据:', row)
+  console.log('voucherNo:', row.voucherNo)
+  console.log('inboundItems:', row.inboundItems)
+  // 使用 JSON 序列化来避免响应式问题
+  currentDetail.value = JSON.parse(JSON.stringify(row))
+  console.log('当前明细数据:', currentDetail.value)
   detailDialogVisible.value = true
 }
 
 // 开票
-const handleInvoice = (row: InvoiceRecord) => {
+const handleInvoice = async (row: InvoiceRecord) => {
   if (row.pendingAmount <= 0) {
     ElMessage.warning('该单据没有待开票金额')
     return
@@ -777,7 +829,7 @@ const handleInvoice = (row: InvoiceRecord) => {
     inputValue: row.pendingAmount.toFixed(2),
     inputPattern: /^\d+(\.\d{1,2})?$/,
     inputErrorMessage: '请输入有效的金额'
-  }).then(({ value }) => {
+  }).then(async ({ value }) => {
     const invoiceAmount = parseFloat(value)
     if (invoiceAmount > row.pendingAmount) {
       ElMessage.error('开票金额不能大于待开票金额')
@@ -786,20 +838,44 @@ const handleInvoice = (row: InvoiceRecord) => {
     
     // 更新入库单的已开票金额
     try {
-      const savedInbounds = localStorage.getItem('inbound_records')
-      const inbounds = savedInbounds ? JSON.parse(savedInbounds) : []
-      
-      const inbound = inbounds.find((o: any) => o.voucherNo === row.voucherNo)
-      if (inbound) {
-        inbound.invoicedAmount = (inbound.invoicedAmount || 0) + invoiceAmount
-        inbound.invoiceDate = dayjs().format('YYYY-MM-DD')
+      if (window.electron && window.electron.inboundUpdate) {
+        // 从数据库获取入库单
+        const inboundResult = await window.electron.inboundList(1, 1000)
+        const inbounds = inboundResult.data || []
         
-        localStorage.setItem('inbound_records', JSON.stringify(inbounds))
+        const inbound = inbounds.find((o: any) => o.voucherNo === row.voucherNo)
+        if (inbound) {
+          // 更新已开票金额
+          const updatedInbound = {
+            ...inbound,
+            invoicedAmount: (inbound.invoicedAmount || 0) + invoiceAmount,
+            invoiceDate: dayjs().format('YYYY-MM-DD')
+          }
+          
+          await window.electron.inboundUpdate(updatedInbound)
+          
+          // 重新加载列表
+          loadInvoiceList()
+          
+          ElMessage.success(`开票成功，开票金额：¥${invoiceAmount.toFixed(2)}`)
+        }
+      } else {
+        // 非 Electron 环境，使用 localStorage
+        const savedInbounds = localStorage.getItem('inbound_records')
+        const inbounds = savedInbounds ? JSON.parse(savedInbounds) : []
         
-        // 重新加载列表
-        loadInvoiceList()
-        
-        ElMessage.success(`开票成功，开票金额：¥${invoiceAmount.toFixed(2)}`)
+        const inbound = inbounds.find((o: any) => o.voucherNo === row.voucherNo)
+        if (inbound) {
+          inbound.invoicedAmount = (inbound.invoicedAmount || 0) + invoiceAmount
+          inbound.invoiceDate = dayjs().format('YYYY-MM-DD')
+          
+          localStorage.setItem('inbound_records', JSON.stringify(inbounds))
+          
+          // 重新加载列表
+          loadInvoiceList()
+          
+          ElMessage.success(`开票成功，开票金额：¥${invoiceAmount.toFixed(2)}`)
+        }
       }
     } catch (error) {
       console.error('开票失败:', error)

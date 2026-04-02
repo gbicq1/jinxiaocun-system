@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain, Menu } from 'electron'
 import { resolve } from 'path'
 import { InventoryDatabase } from './database'
 import { CostSettlementHandler } from './cost-settlement-handler'
@@ -10,6 +10,8 @@ let costHandler: CostSettlementHandler
 let scheduledTaskService: ScheduledTaskService
 
 function createWindow() {
+  console.log('创建窗口，preload 路径:', resolve(__dirname, 'preload.js'))
+  
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -17,7 +19,7 @@ function createWindow() {
     minHeight: 768,
     webPreferences: {
       nodeIntegration: true,
-      contextIsolation: false,
+      contextIsolation: true,
       preload: resolve(__dirname, 'preload.js')
     },
     icon: resolve(__dirname, '../assets/icon.png'),
@@ -26,6 +28,7 @@ function createWindow() {
 
   // 开发环境加载 Vite 服务器，生产环境加载构建文件
   const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged
+  console.log('是否开发环境:', isDev)
   if (isDev) {
     mainWindow.loadURL('http://localhost:5173')
     mainWindow.webContents.openDevTools()
@@ -36,6 +39,70 @@ function createWindow() {
   mainWindow.on('closed', () => {
     mainWindow = null
   })
+
+  // 设置中文菜单
+  const template: any = [
+    {
+      label: '文件',
+      submenu: [
+        {
+          label: '退出',
+          accelerator: process.platform === 'darwin' ? 'Cmd+Q' : 'Alt+F4',
+          click: () => {
+            app.quit()
+          }
+        }
+      ]
+    },
+    {
+      label: '编辑',
+      submenu: [
+        { label: '撤销', role: 'undo' },
+        { label: '重做', role: 'redo' },
+        { type: 'separator' },
+        { label: '剪切', role: 'cut' },
+        { label: '复制', role: 'copy' },
+        { label: '粘贴', role: 'paste' },
+        { label: '全选', role: 'selectAll' }
+      ]
+    },
+    {
+      label: '视图',
+      submenu: [
+        { label: '刷新', role: 'reload' },
+        { label: '全屏', role: 'togglefullscreen' },
+        { type: 'separator' },
+        { label: '开发者工具', role: 'toggleDevTools' }
+      ]
+    },
+    {
+      label: '窗口',
+      submenu: [
+        { label: '最小化', role: 'minimize' },
+        { label: '关闭', role: 'close' }
+      ]
+    },
+    {
+      label: '帮助',
+      submenu: [
+        {
+          label: '关于',
+          click: () => {
+            const { dialog } = require('electron')
+            dialog.showMessageBox(mainWindow!, {
+              type: 'info',
+              title: '关于进销存管理系统',
+              message: '进销存管理系统',
+              detail: '版本：1.0.0\n\n一个完整的进销存管理系统，支持采购、销售、库存管理等功能。'
+            })
+          }
+        }
+      ]
+    }
+  ]
+
+  const menu = Menu.buildFromTemplate(template)
+  Menu.setApplicationMenu(menu)
 }
 
 // 初始化数据库
@@ -65,12 +132,28 @@ function setupIpcHandlers() {
     return db.initialize()
   })
 
-  ipcMain.handle('db-query', async (event, sql: string, params?: any[]) => {
+  ipcMain.handle('db-query', async (event, tableOrSql: string, sqlOrParams?: string | any[], params?: any[]) => {
     try {
-      const result = db.query(sql, params || [])
+      let sql: string
+      let sqlParams: any[]
+      
+      // 支持两种调用方式：
+      // 1. dbQuery(sql, params) - 旧方式
+      // 2. dbQuery(table, sql, params) - 新方式（为了兼容性）
+      if (typeof sqlOrParams === 'string') {
+        // 新方式：dbQuery(table, sql, params)
+        sql = sqlOrParams
+        sqlParams = params || []
+      } else {
+        // 旧方式：dbQuery(sql, params)
+        sql = tableOrSql
+        sqlParams = sqlOrParams || []
+      }
+      
+      const result = db.query(sql, sqlParams)
       return result
     } catch (error: any) {
-      console.error('数据库查询错误:', error.message, 'SQL:', sql, '参数:', params)
+      console.error('数据库查询错误:', error.message, 'SQL:', tableOrSql, '参数:', sqlOrParams, params)
       throw error
     }
   })
@@ -144,7 +227,9 @@ function setupIpcHandlers() {
 
   // 获取所有产品（不分页）
   ipcMain.handle('db:products-list', async () => {
-    return db.getAllProducts()
+    const products = db.getAllProducts()
+    console.log('获取产品列表:', products)
+    return products
   })
 
   // 仓库管理
@@ -166,7 +251,9 @@ function setupIpcHandlers() {
 
   // 获取所有仓库（不分页）
   ipcMain.handle('db:warehouses-list', async () => {
-    return db.getAllWarehouses()
+    const warehouses = db.getAllWarehouses()
+    console.log('获取仓库列表:', warehouses)
+    return warehouses
   })
 
   // 供应商管理
@@ -237,6 +324,40 @@ function setupIpcHandlers() {
     return db.deleteOutbound(id)
   })
 
+  // 采购退货
+  ipcMain.handle('purchase-return-add', async (event, returnData: any) => {
+    return db.addPurchaseReturn(returnData)
+  })
+
+  ipcMain.handle('purchase-return-list', async (event, page = 1, pageSize = 10) => {
+    return db.getPurchaseReturns(page, pageSize)
+  })
+
+  ipcMain.handle('purchase-return-update', async (event, returnData: any) => {
+    return db.updatePurchaseReturn(returnData)
+  })
+
+  ipcMain.handle('purchase-return-delete', async (event, id: number) => {
+    return db.deletePurchaseReturn(id)
+  })
+
+  // 销售退货
+  ipcMain.handle('sales-return-add', async (event, returnData: any) => {
+    return db.addSalesReturn(returnData)
+  })
+
+  ipcMain.handle('sales-return-list', async (event, page = 1, pageSize = 10) => {
+    return db.getSalesReturns(page, pageSize)
+  })
+
+  ipcMain.handle('sales-return-update', async (event, returnData: any) => {
+    return db.updateSalesReturn(returnData)
+  })
+
+  ipcMain.handle('sales-return-delete', async (event, id: number) => {
+    return db.deleteSalesReturn(id)
+  })
+
   // 库存调拨
   ipcMain.handle('transfer-list', async (event, page = 1, pageSize = 10, where?: string, params?: any[]) => {
     return db.getTransferList(page, pageSize, where, params)
@@ -257,6 +378,11 @@ function setupIpcHandlers() {
   // 库存查询
   ipcMain.handle('inventory-query', async (event, warehouseId?: number, productCode?: string) => {
     return db.getInventory(warehouseId, productCode)
+  })
+
+  // 获取单个产品的实时库存
+  ipcMain.handle('product-stock', async (event, productId: number, warehouseId: number) => {
+    return db.getProductStock(productId, warehouseId)
   })
 
   // 成本结算查询

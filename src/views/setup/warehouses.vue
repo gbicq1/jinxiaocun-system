@@ -89,6 +89,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { dbQuery, dbInsert, dbUpdate, dbDelete } from '@/utils/db'
 
 interface Warehouse {
   id?: number
@@ -120,16 +121,11 @@ const formData = reactive<Warehouse>({
 // 加载仓库列表
 const loadWarehouses = async () => {
   try {
-    if (window.electron && window.electron.dbQuery) {
-      const result = await window.electron.dbQuery('warehouses', 'SELECT * FROM warehouses ORDER BY created_at DESC')
-      warehouses.value = result
-    } else {
-      const savedData = localStorage.getItem('warehouses')
-      warehouses.value = savedData ? JSON.parse(savedData) : []
-    }
-  } catch (error) {
-    ElMessage.error('加载仓库列表失败')
-    console.error(error)
+    const result = await dbQuery('SELECT * FROM warehouses ORDER BY created_at DESC')
+    warehouses.value = result
+  } catch (error: any) {
+    console.error('加载仓库列表失败:', error)
+    ElMessage.error('加载仓库列表失败：' + error.message)
   }
 }
 
@@ -165,17 +161,15 @@ const handleDelete = async (row: Warehouse) => {
       type: 'warning'
     })
     
-    if (window.electron && window.electron.dbDelete) {
-      await window.electron.dbDelete('warehouses', 'id = ?', [row.id])
-    } else {
-      const filtered = warehouses.value.filter((r: Warehouse) => r.id !== row.id)
-      localStorage.setItem('warehouses', JSON.stringify(filtered))
-    }
+    await dbDelete('warehouses', 'id = ?', [row.id])
     
     ElMessage.success('删除成功')
     loadWarehouses()
-  } catch {
-    // 用户取消删除
+  } catch (error: any) {
+    if (error !== 'cancel') {
+      console.error('删除失败:', error)
+      ElMessage.error('删除失败：' + error.message)
+    }
   }
 }
 
@@ -186,40 +180,17 @@ const handleSubmit = async () => {
     
     if (formData.id) {
       // 更新
-      if (window.electron && window.electron.dbUpdate) {
-        await window.electron.dbUpdate('warehouses', formData, 'id = ?', [formData.id])
-      } else {
-        const savedData = localStorage.getItem('warehouses')
-        const allWarehouses = savedData ? JSON.parse(savedData) : []
-        const index = allWarehouses.findIndex((r: Warehouse) => r.id === formData.id)
-        if (index !== -1) {
-          allWarehouses[index] = { ...formData }
-          localStorage.setItem('warehouses', JSON.stringify(allWarehouses))
-        }
-      }
+      await dbUpdate('warehouses', formData, 'id = ?', [formData.id])
       ElMessage.success('更新成功')
     } else {
       // 新增
-      const newWarehouse = {
-        ...formData,
-        id: Date.now()
-      }
-      
-      if (window.electron && window.electron.dbInsert) {
-        await window.electron.dbInsert('warehouses', newWarehouse)
-      } else {
-        const savedData = localStorage.getItem('warehouses')
-        const allWarehouses = savedData ? JSON.parse(savedData) : []
-        allWarehouses.push(newWarehouse)
-        localStorage.setItem('warehouses', JSON.stringify(allWarehouses))
-      }
-      
+      await dbInsert('warehouses', formData)
       ElMessage.success('新增成功')
     }
     
     dialogVisible.value = false
     loadWarehouses()
-  } catch (error) {
+  } catch (error: any) {
     console.error('表单验证失败:', error)
   }
 }

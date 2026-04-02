@@ -178,6 +178,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { dbQuery, dbInsert, dbUpdate, dbDelete } from '@/utils/db'
 import exportToCsv from '../../utils/exportCsv'
 
 interface Product {
@@ -228,39 +229,31 @@ const rules = {
 // 加载产品列表
 const loadProducts = async () => {
   try {
-    // 检查是否有 Electron 环境
-    if (window.electron && window.electron.dbQuery) {
-      // Electron 环境
-      const result = await window.electron.dbQuery('products', 'SELECT * FROM products ORDER BY created_at DESC LIMIT ? OFFSET ?', [
-        pageSize.value,
-        (currentPage.value - 1) * pageSize.value
-      ])
-      products.value = result
-      total.value = result.length
-    } else {
-      // 前端环境 - 使用模拟数据
-      const savedData = localStorage.getItem('products')
-      const allProducts = savedData ? JSON.parse(savedData) : []
-      
-      // 搜索过滤
-      let filtered = allProducts
-      if (searchQuery.value) {
-        const query = searchQuery.value.toLowerCase()
-        filtered = allProducts.filter((p: Product) => 
-          p.code.toLowerCase().includes(query) || 
-          p.name.toLowerCase().includes(query)
-        )
-      }
-      
-      // 分页
-      const start = (currentPage.value - 1) * pageSize.value
-      const end = start + pageSize.value
-      products.value = filtered.slice(start, end)
-      total.value = filtered.length
+    let sql = 'SELECT * FROM products'
+    let countSql = 'SELECT COUNT(*) as total FROM products'
+    let params: any[] = []
+    let countParams: any[] = []
+    
+    if (searchQuery.value) {
+      sql += ' WHERE code LIKE ? OR name LIKE ?'
+      countSql += ' WHERE code LIKE ? OR name LIKE ?'
+      const searchPattern = `%${searchQuery.value}%`
+      params = [searchPattern, searchPattern]
+      countParams = [searchPattern, searchPattern]
     }
-  } catch (error) {
-    ElMessage.error('加载产品列表失败')
-    console.error(error)
+    
+    sql += ' ORDER BY created_at DESC LIMIT ? OFFSET ?'
+    params.push(pageSize.value, (currentPage.value - 1) * pageSize.value)
+    
+    const result = await dbQuery(sql, params)
+    products.value = result
+    
+    // 获取总数
+    const countResult = await dbQuery(countSql, countParams)
+    total.value = countResult[0]?.total || 0
+  } catch (error: any) {
+    console.error('加载产品列表失败:', error)
+    ElMessage.error('加载产品列表失败：' + error.message)
   }
 }
 
@@ -300,21 +293,15 @@ const handleDelete = async (row: Product) => {
       type: 'warning'
     })
     
-    if (window.electron && window.electron.dbDelete) {
-      // Electron 环境
-      await window.electron.dbDelete('products', 'id = ?', [row.id])
-    } else {
-      // 前端环境 - 使用 localStorage
-      const savedData = localStorage.getItem('products')
-      const allProducts = savedData ? JSON.parse(savedData) : []
-      const filtered = allProducts.filter((p: Product) => p.id !== row.id)
-      localStorage.setItem('products', JSON.stringify(filtered))
-    }
+    await dbDelete('products', 'id = ?', [row.id])
     
     ElMessage.success('删除成功')
     loadProducts()
-  } catch {
-    // 用户取消删除
+  } catch (error: any) {
+    if (error !== 'cancel') {
+      console.error('删除失败:', error)
+      ElMessage.error('删除失败：' + error.message)
+    }
   }
 }
 
@@ -325,46 +312,18 @@ const handleSubmit = async () => {
     
     if (formData.id) {
       // 更新
-      if (window.electron && window.electron.dbUpdate) {
-        // Electron 环境
-        await window.electron.dbUpdate('products', formData, 'id = ?', [formData.id])
-      } else {
-        // 前端环境 - 使用 localStorage
-        const savedData = localStorage.getItem('products')
-        const allProducts = savedData ? JSON.parse(savedData) : []
-        const index = allProducts.findIndex((p: Product) => p.id === formData.id)
-        if (index !== -1) {
-          allProducts[index] = { ...formData }
-          localStorage.setItem('products', JSON.stringify(allProducts))
-        }
-      }
+      await dbUpdate('products', formData, 'id = ?', [formData.id])
       ElMessage.success('更新成功')
     } else {
       // 新增
-      const newProduct = {
-        ...formData,
-        id: Date.now() // 生成唯一 ID
-      }
-      
-      if (window.electron && window.electron.dbInsert) {
-        // Electron 环境
-        await window.electron.dbInsert('products', newProduct)
-      } else {
-        // 前端环境 - 使用 localStorage
-        const savedData = localStorage.getItem('products')
-        const allProducts = savedData ? JSON.parse(savedData) : []
-        allProducts.push(newProduct)
-        localStorage.setItem('products', JSON.stringify(allProducts))
-      }
-      
+      await dbInsert('products', formData)
       ElMessage.success('新增成功')
     }
     
     dialogVisible.value = false
     loadProducts()
-  } catch (error) {
+  } catch (error: any) {
     console.error('提交失败:', error)
-    // 不要显示错误消息，因为验证错误已经由表单显示了
   }
 }
 

@@ -235,7 +235,9 @@
                       active-text="默认"
                       inactive-text=""
                       style="--el-switch-width: 60px; --el-switch-inactive-color: #dcdfe6;"
-                      :disabled="dialogType === 'view'"
+                      :disabled="isViewMode"
+                      @click.stop
+                      @change="(val: boolean) => saveDefaultOperator(u.id, u.name)"
                     />
                   </div>
                 </el-option>
@@ -273,6 +275,7 @@
           style="width: 100%; margin-bottom: 10px"
           border
         >
+          <el-table-column label="序号" width="60" type="index" />
           <el-table-column label="商品" min-width="200">
             <template #default="{ row }">
               <el-select
@@ -488,6 +491,7 @@ import { Plus, Printer, Download, Search } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import { getStockBeforeDateTime } from '@/utils/stock'
 import { handleDocumentSave, DocumentType } from '@/utils/cost-recalculation'
+import { dbQuery } from '@/utils/db'
 
 // 类型定义
 interface ReturnItem {
@@ -575,6 +579,7 @@ const selectedRows = ref<ReturnRecord[]>([])
 
 // 默认经办人 ID
 const defaultHandlerId = ref<number | undefined>(undefined)
+const defaultOperator = ref<string | undefined>(undefined)
 // 默认仓库 ID
 const defaultWarehouseId = ref<number | undefined>(undefined)
 
@@ -626,26 +631,18 @@ const rules = {
 // 加载退货单列表
 const loadReturnsList = async () => {
   try {
-    const savedReturns = localStorage.getItem('purchaseReturns')
-    if (savedReturns) {
-      const allReturns = JSON.parse(savedReturns)
-      
-      // 按日期和时间戳正序排序
-      allReturns.sort((a: any, b: any) => {
-        const dateA = new Date(a.voucherDate || a.date || '1970-01-01').getTime()
-        const dateB = new Date(b.voucherDate || b.date || '1970-01-01').getTime()
-        if (dateA !== dateB) {
-          return dateA - dateB
-        }
-        const timeA = a.createdAt || a._timestamp || a.voucherDate || '1970-01-01'
-        const timeB = b.createdAt || b._timestamp || b.voucherDate || '1970-01-01'
-        return new Date(timeA).getTime() - new Date(timeB).getTime()
-      })
-      
-      const start = (currentPage.value - 1) * pageSize.value
-      const end = start + pageSize.value
-      returnsList.value = allReturns.slice(start, end)
-      total.value = allReturns.length
+    const electron = (window as any).electron
+    if (electron) {
+      const result = await electron.purchaseReturnList(currentPage.value, pageSize.value)
+      returnsList.value = result.data.map((item: any) => ({
+        ...item,
+        voucherNo: item.return_no,
+        voucherDate: item.return_date,
+        originalVoucherNo: item.original_inbound_no,
+        totalAmount: item.total_amount,
+        returnReason: item.return_reason
+      }))
+      total.value = result.total
     } else {
       returnsList.value = []
       total.value = 0
@@ -659,24 +656,32 @@ const loadReturnsList = async () => {
 // 加载入库单列表（用于选择原入库单）
 const loadInboundList = async () => {
   try {
-    // 尝试多个可能的键名
-    const possibleKeys = ['inbound_records', 'purchaseInbounds', 'purchase_inbounds']
-    let foundData = null
-    
-    for (const key of possibleKeys) {
-      const savedInbounds = localStorage.getItem(key)
-      if (savedInbounds) {
-        foundData = JSON.parse(savedInbounds)
-        break
-      }
-    }
-    
-    if (foundData) {
-      inboundList.value = foundData
-      console.log('成功加载入库单列表，共', foundData.length, '条记录')
+    const electron = (window as any).electron
+    if (electron && electron.inboundList) {
+      // 从 Electron 数据库加载
+      const result = await electron.inboundList(1, 1000)
+      inboundList.value = result.data || []
+      console.log('成功从数据库加载入库单列表，共', inboundList.value.length, '条记录')
     } else {
-      inboundList.value = []
-      console.log('未找到入库单数据')
+      // 降级到 localStorage
+      const possibleKeys = ['inbound_records', 'purchaseInbounds', 'purchase_inbounds']
+      let foundData = null
+      
+      for (const key of possibleKeys) {
+        const savedInbounds = localStorage.getItem(key)
+        if (savedInbounds) {
+          foundData = JSON.parse(savedInbounds)
+          break
+        }
+      }
+      
+      if (foundData) {
+        inboundList.value = foundData
+        console.log('成功从 localStorage 加载入库单列表，共', foundData.length, '条记录')
+      } else {
+        inboundList.value = []
+        console.log('未找到入库单数据')
+      }
     }
   } catch (error) {
     console.error('加载入库单列表失败:', error)
@@ -687,13 +692,15 @@ const loadInboundList = async () => {
 // 加载商品列表
 const loadProducts = async () => {
   try {
-    const savedProducts = localStorage.getItem('products')
-    if (savedProducts) {
-      const allProducts = JSON.parse(savedProducts)
-      products.value = allProducts.filter((p: Product) => (p.status as any) === 1 || (p.status as any) === true)
-    } else {
-      products.value = []
-    }
+    const result = await dbQuery('SELECT * FROM products WHERE status = 1 ORDER BY code')
+    products.value = result.map((p: any) => ({
+      id: p.id,
+      code: p.code,
+      name: p.name,
+      specification: p.spec || p.specification || '',
+      unit: p.unit || '',
+      costPrice: p.costPrice || 0
+    }))
   } catch (error) {
     console.error('加载商品列表失败:', error)
     products.value = []
@@ -703,13 +710,8 @@ const loadProducts = async () => {
 // 加载供应商列表
 const loadSuppliers = async () => {
   try {
-    const savedSuppliers = localStorage.getItem('suppliers')
-    if (savedSuppliers) {
-      const allSuppliers = JSON.parse(savedSuppliers)
-      suppliers.value = allSuppliers.filter((s: Supplier) => s.status === 1 || s.status === true)
-    } else {
-      suppliers.value = []
-    }
+    const result = await dbQuery('SELECT * FROM suppliers WHERE status = 1 ORDER BY name')
+    suppliers.value = result
   } catch (error) {
     console.error('加载供应商列表失败:', error)
     suppliers.value = []
@@ -719,86 +721,49 @@ const loadSuppliers = async () => {
 // 加载仓库列表
 const loadWarehouses = async () => {
   try {
-    const savedWarehouses = localStorage.getItem('warehouses')
-    if (savedWarehouses) {
-      const allWarehouses = JSON.parse(savedWarehouses)
-      warehouses.value = allWarehouses.filter((w: Warehouse) => w.status === 1)
-    } else {
-      warehouses.value = []
-    }
+    const result = await dbQuery('SELECT * FROM warehouses WHERE status = 1 ORDER BY name')
+    warehouses.value = result
   } catch (error) {
     console.error('加载仓库列表失败:', error)
     warehouses.value = []
   }
 }
 
-// 加载系统用户（用于经办人下拉），兼容多种存储键与字段
+// 加载系统用户（用于经办人下拉）
 const users = ref<any[]>([])
-const normalizeUser = (u: any) => ({ id: u.id ?? u.userId ?? u.uid ?? Date.now(), name: u.name || u.realname || u.realName || u.employeeName || u.fullName || u.username || u.userName || '' })
 const loadUsers = async () => {
   try {
-    // 优先从 employees 键加载员工数据
-    const employeeKeys = ['employees', 'employee_list', 'staff', 'system_users']
-    let found: any[] = []
-    
-    for (const k of employeeKeys) {
-      const raw = localStorage.getItem(k)
-      if (raw) {
-        try {
-          const parsed = JSON.parse(raw)
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            // 检查是否是员工数据（包含员工特有字段）
-            if (parsed[0].employeeName || parsed[0].realname || parsed[0].realName || parsed[0].status || parsed[0].department) {
-              // 过滤在职员工
-              found = parsed.filter((e: any) => 
-                (e.status as any) === 'active' || 
-                (e.status as any) === 1 || 
-                (e.status as any) === true ||
-                (e.status as any) === '在职' ||
-                !e.status  // 如果没有 status 字段，默认在职
-              )
-              break
-            }
-          }
-        } catch { continue }
-      }
-    }
-
-    users.value = (found || []).map(normalizeUser)
-
-    // 回退：使用当前登录用户作为单条选项
-    if ((!users.value || users.value.length === 0) && localStorage.getItem('currentUser')) {
-      try {
-        const cur = JSON.parse(localStorage.getItem('currentUser')!)
-        users.value = [normalizeUser(cur)]
-      } catch {
-        users.value = []
-      }
-    }
-    
-    // 加载默认经办人
-    const savedDefaultHandler = localStorage.getItem('defaultHandlerId')
-    if (savedDefaultHandler) {
-      defaultHandlerId.value = parseInt(savedDefaultHandler)
-    }
-    
-    // 加载默认仓库
-    const savedDefaultWarehouse = localStorage.getItem('defaultWarehouseId')
-    if (savedDefaultWarehouse) {
-      defaultWarehouseId.value = parseInt(savedDefaultWarehouse)
-    }
+    const result = await dbQuery("SELECT * FROM employees WHERE status = 'active' OR status = 1 ORDER BY name")
+    users.value = result.map((e: any) => ({
+      id: e.id,
+      name: e.name
+    }))
   } catch (error) {
-    console.error('加载系统用户失败:', error)
+    console.error('加载员工列表失败:', error)
     users.value = []
   }
 }
 
-// 加载当前用户
+// 加载当前用户和默认值
 const loadCurrentUser = () => {
   const user = localStorage.getItem('currentUser')
   if (user) {
     const userData = JSON.parse(user)
     formData.operator = userData.name || '管理员'
+  }
+  
+  // 加载默认经办人
+  const savedOperatorId = localStorage.getItem('defaultHandlerId')
+  const savedOperatorName = localStorage.getItem('defaultOperator')
+  if (savedOperatorId && savedOperatorName) {
+    defaultHandlerId.value = Number(savedOperatorId)
+    defaultOperator.value = savedOperatorName
+  }
+  
+  // 加载默认仓库
+  const savedWarehouseId = localStorage.getItem('defaultWarehouseId')
+  if (savedWarehouseId) {
+    defaultWarehouseId.value = Number(savedWarehouseId)
   }
 }
 
@@ -830,7 +795,46 @@ const handleAdd = () => {
 const handleEdit = (row: ReturnRecord) => {
   loadInboundList() // 加载入库单列表
   Object.assign(formData, row)
-  formData.items = JSON.parse(JSON.stringify(row.items))
+  
+  // 如果有原入库单号，先从原入库单加载所有商品，再填充已保存的数量
+  if (formData.originalVoucherNo) {
+    const inbound = inboundList.value.find(item => item.voucherNo === formData.originalVoucherNo)
+    if (inbound) {
+      // 先从原入库单加载所有商品
+      formData.items = inbound.items.map((item: any, index: number) => ({
+        productId: item.productId,
+        productName: item.productName,
+        specification: item.specification,
+        quantity: 0,
+        unit: item.unit,
+        unitPrice: item.unitPrice || 0,
+        unitPriceEx: item.unitPriceEx || 0,
+        taxRate: item.taxRate !== undefined ? item.taxRate : '免税',
+        taxAmount: 0,
+        totalAmount: 0,
+        deductionAmount: item.deductionAmount || 0,
+        allowDeduction: item.allowDeduction || false,
+        originalItemIndex: index, // 保存原入库单中的索引
+        _lastEdited: 'unitIncl'
+      }))
+      
+      // 然后根据已保存的数据填充数量（通过原索引匹配）
+      const savedItems = row.items || []
+      savedItems.forEach(savedItem => {
+        const origIndex = savedItem.original_item_index
+        if (origIndex !== undefined && origIndex >= 0 && origIndex < formData.items.length) {
+          const matchedItem = formData.items[origIndex]
+          if (matchedItem && matchedItem.productId === savedItem.product_id) {
+            matchedItem.quantity = savedItem.quantity
+            calculateRowTotal(matchedItem)
+          }
+        }
+      })
+    }
+  } else {
+    // 没有原入库单，直接加载保存的商品
+    formData.items = JSON.parse(JSON.stringify(row.items))
+  }
   
   // 确保供应商名称正确显示
   if (formData.supplierId) {
@@ -840,6 +844,9 @@ const handleEdit = (row: ReturnRecord) => {
     }
   }
   
+  // 重新计算总金额
+  calculateTotalAmount()
+  
   dialogTitle.value = '编辑退货单'
   isViewMode.value = false
   dialogVisible.value = true
@@ -848,7 +855,50 @@ const handleEdit = (row: ReturnRecord) => {
 // 查看
 const handleView = (row: ReturnRecord) => {
   Object.assign(formData, row)
-  formData.items = JSON.parse(JSON.stringify(row.items))
+  
+  // 如果有原入库单号，先从原入库单加载所有商品，再填充已保存的数量
+  if (formData.originalVoucherNo) {
+    const inbound = inboundList.value.find(item => item.voucherNo === formData.originalVoucherNo)
+    if (inbound) {
+      // 先从原入库单加载所有商品
+      formData.items = inbound.items.map((item: any, index: number) => ({
+        productId: item.productId,
+        productName: item.productName,
+        specification: item.specification,
+        quantity: 0,
+        unit: item.unit,
+        unitPrice: item.unitPrice || 0,
+        unitPriceEx: item.unitPriceEx || 0,
+        taxRate: item.taxRate !== undefined ? item.taxRate : '免税',
+        taxAmount: 0,
+        totalAmount: 0,
+        deductionAmount: item.deductionAmount || 0,
+        allowDeduction: item.allowDeduction || false,
+        originalItemIndex: index, // 保存原入库单中的索引
+        _lastEdited: 'unitIncl'
+      }))
+      
+      // 然后根据已保存的数据填充数量（通过原索引匹配）
+      const savedItems = row.items || []
+      savedItems.forEach(savedItem => {
+        const origIndex = savedItem.original_item_index
+        if (origIndex !== undefined && origIndex >= 0 && origIndex < formData.items.length) {
+          const matchedItem = formData.items[origIndex]
+          if (matchedItem && matchedItem.productId === savedItem.product_id) {
+            matchedItem.quantity = savedItem.quantity
+            calculateRowTotal(matchedItem)
+          }
+        }
+      })
+    }
+  } else {
+    // 没有原入库单，直接加载保存的商品
+    formData.items = JSON.parse(JSON.stringify(row.items))
+  }
+  
+  // 重新计算总金额
+  calculateTotalAmount()
+  
   dialogTitle.value = '查看退货单'
   isViewMode.value = true
   dialogVisible.value = true
@@ -861,15 +911,9 @@ const handleDelete = async (row: ReturnRecord) => {
       type: 'warning'
     })
 
-    const savedReturns = localStorage.getItem('purchaseReturns')
-    if (savedReturns) {
-      const allReturns = JSON.parse(savedReturns)
-      const filtered = allReturns.filter((r: ReturnRecord) => r.id !== row.id)
-      localStorage.setItem('purchaseReturns', JSON.stringify(filtered))
-      
-      // 更新库存（增加回库存）
-      updateInventoryOnReturn(row, true)
-      
+    const electron = (window as any).electron
+    if (electron) {
+      await electron.purchaseReturnDelete(row.id)
       ElMessage.success('删除成功')
       loadReturnsList()
     }
@@ -945,25 +989,27 @@ const validateReturnItems = (): boolean => {
   // 校验每一个退货商品
   for (let i = 0; i < formData.items.length; i++) {
     const retItem = formData.items[i]
+    const retQty = Math.abs(retItem.quantity || 0)
     
-    // 查找原订单中是否有这个商品
-    const origItem = originalOrder.items.find((item: any) => item.productId === retItem.productId)
-    
-    if (!origItem) {
-      ElMessage.error(`商品"${retItem.productName}"不在原入库单中，无法退货`)
-      return false
-    }
-    
-    // 校验退货数量不能超过原订单数量（取绝对值比较）
-    const retQty = Math.abs(retItem.quantity)
-    if (retQty > origItem.quantity) {
-      ElMessage.error(`商品"${retItem.productName}"的退货数量(${retQty})不能超过原入库单数量(${origItem.quantity})`)
-      return false
-    }
-    
-    // 校验退货数量必须大于0
-    if (retQty <= 0) {
-      ElMessage.error(`商品"${retItem.productName}"的退货数量必须大于0`)
+    // 通过 originalItemIndex 找到原入库单中对应的商品行
+    const origIndex = retItem.originalItemIndex
+    if (origIndex !== undefined && origIndex >= 0 && origIndex < originalOrder.items.length) {
+      const origItem = originalOrder.items[origIndex]
+      
+      // 检查商品是否匹配
+      if (origItem.productId !== retItem.productId) {
+        ElMessage.error(`第${i + 1}行商品与原入库单不匹配`)
+        return false
+      }
+      
+      // 检查退货数量不超过原入库单对应行的数量（允许数量为0，表示不退货）
+      if (retQty > origItem.quantity) {
+        ElMessage.error(`商品"${retItem.productName}"的退货数量(${retQty})不能超过原入库单数量(${origItem.quantity})`)
+        return false
+      }
+    } else {
+      // 如果没有 originalItemIndex，就按商品ID查找并累加
+      ElMessage.error(`第${i + 1}行商品无法找到对应的原入库单行`)
       return false
     }
   }
@@ -971,14 +1017,14 @@ const validateReturnItems = (): boolean => {
   return true
 }
 
-// 更新库存（退货时增加库存）
+// 更新库存（退货时增加库存，只处理数量>0的商品）
 const updateInventoryOnReturn = (returnRecord: ReturnRecord, isAdding: boolean) => {
   try {
     const savedInventory = localStorage.getItem('inventory')
     const inventory = savedInventory ? JSON.parse(savedInventory) : {}
 
     returnRecord.items.forEach((item: ReturnItem) => {
-      if (item.productId) {
+      if (item.productId && item.quantity > 0) {
         if (!inventory[item.productId]) {
           inventory[item.productId] = { productId: item.productId, quantity: 0 }
         }
@@ -1027,45 +1073,55 @@ const handleSubmit = async () => {
       formData.voucherNo = generateVoucherNo()
     }
 
-    // 保存到 localStorage
-    const savedReturns = localStorage.getItem('purchaseReturns')
-    const allReturns = savedReturns ? JSON.parse(savedReturns) : []
-    
-    // 检查是否编辑
-    const existingIndex = allReturns.findIndex((r: ReturnRecord) => r.id === formData.id)
-    if (existingIndex >= 0) {
-      // 编辑：先恢复原库存，再更新
-      const oldRecord = allReturns[existingIndex]
-      updateInventoryOnReturn(oldRecord, true) // 恢复原库存
-      allReturns[existingIndex] = { ...formData, id: formData.id }
-    } else {
-      // 新增
-      formData.id = Date.now()
-      formData.createdAt = new Date().toISOString() // 添加精确时间戳
-      allReturns.push(formData)
+    const electron = (window as any).electron
+    if (electron) {
+      // 转换数据格式
+      const dbData = {
+        return_no: formData.voucherNo,
+        original_inbound_no: formData.originalVoucherNo,
+        supplier_id: formData.supplierId,
+        warehouse_id: formData.warehouseId,
+        return_date: formData.voucherDate,
+        total_amount: formData.totalAmount,
+        return_reason: formData.returnReason,
+        remark: formData.remark,
+        items: formData.items
+          .filter((item: any) => item.quantity > 0) // 只保存数量>0的商品
+          .map((item: any) => ({
+            product_id: item.productId,
+            quantity: item.quantity,
+            cost_price: item.unitPrice,
+            remark: item.remark,
+            original_item_index: item.originalItemIndex // 保存原索引，用于重新加载时匹配
+          }))
+      }
+
+      if (formData.id) {
+        // 更新现有单据
+        dbData.id = formData.id
+        await electron.purchaseReturnUpdate(dbData)
+      } else {
+        // 新增单据
+        await electron.purchaseReturnAdd(dbData)
+      }
+
+      ElMessage.success('保存成功')
+      
+      // 检测是否需要重新结算成本
+      await handleDocumentSave(
+        DocumentType.PURCHASE_RETURN,
+        formData.items,
+        formData.voucherDate
+      )
+      
+      dialogVisible.value = false
+      loadReturnsList()
     }
-
-    // 更新库存（减少库存）
-    updateInventoryOnReturn(formData, false)
-
-    localStorage.setItem('purchaseReturns', JSON.stringify(allReturns))
-
-    ElMessage.success('保存成功')
-    
-    // 检测是否需要重新结算成本
-    await handleDocumentSave(
-      DocumentType.PURCHASE_RETURN,
-      formData.items,
-      formData.voucherDate
-    )
-    
-    dialogVisible.value = false
-    loadReturnsList()
   } catch (error: any) {
     if (error.validate) {
       ElMessage.error('请完善表单信息')
     } else {
-      ElMessage.error('保存失败')
+      ElMessage.error('保存失败：' + (error.message || '未知错误'))
     }
   }
 }
@@ -1100,7 +1156,7 @@ const handleOriginalVoucherChange = (voucherNo: string) => {
     formData.invoiceType = inbound.invoiceType || '普票'
     
     // 加载原入库单的商品，同步所有字段包括税率和加计扣除
-    formData.items = inbound.items.map((item: any) => ({
+    formData.items = inbound.items.map((item: any, index: number) => ({
       productId: item.productId,
       productName: item.productName,
       specification: item.specification,
@@ -1113,6 +1169,7 @@ const handleOriginalVoucherChange = (voucherNo: string) => {
       totalAmount: 0,
       deductionAmount: item.deductionAmount || 0,
       allowDeduction: item.allowDeduction || false,
+      originalItemIndex: index, // 保存原入库单中的索引，用于匹配数量
       _lastEdited: 'unitIncl' // 使用含税价作为基准，保持与原入库单一致
     }))
   }
@@ -1167,6 +1224,15 @@ const saveDefaultWarehouse = (warehouseId: number | undefined) => {
     defaultWarehouseId.value = warehouseId
     ElMessage.success('已设置为默认仓库')
   }
+}
+
+// 保存默认经办人
+const saveDefaultOperator = (handlerId: number, handlerName: string) => {
+  localStorage.setItem('defaultHandlerId', handlerId.toString())
+  localStorage.setItem('defaultOperator', handlerName)
+  defaultHandlerId.value = handlerId
+  defaultOperator.value = handlerName
+  ElMessage.success('已设置为默认经办人')
 }
 
 // 商品选择变化
@@ -1357,18 +1423,23 @@ const validateSingleReturnItem = (item: ReturnItem): boolean => {
     return true
   }
   
-  // 查找原订单中是否有这个商品
-  const origItem = originalOrder.items.find((oItem: any) => oItem.productId === item.productId)
-  if (!origItem) {
-    ElMessage.error(`商品"${item.productName}"不在原入库单中，无法退货`)
-    return false
-  }
-  
-  // 校验退货数量不能超过原订单数量（取绝对值比较）
-  const retQty = Math.abs(item.quantity)
-  if (retQty > origItem.quantity) {
-    ElMessage.error(`商品"${item.productName}"的退货数量(${retQty})不能超过原入库单数量(${origItem.quantity})`)
-    return false
+  // 通过 originalItemIndex 找到原入库单中对应的商品行
+  const origIndex = item.originalItemIndex
+  if (origIndex !== undefined && origIndex >= 0 && origIndex < originalOrder.items.length) {
+    const origItem = originalOrder.items[origIndex]
+    
+    // 检查商品是否匹配
+    if (origItem.productId !== item.productId) {
+      ElMessage.error(`商品"${item.productName}"与原入库单不匹配`)
+      return false
+    }
+    
+    // 校验退货数量不能超过原订单对应行的数量（允许数量为0，表示不退货）
+    const retQty = Math.abs(item.quantity)
+    if (retQty > origItem.quantity) {
+      ElMessage.error(`商品"${item.productName}"的退货数量(${retQty})不能超过原入库单数量(${origItem.quantity})`)
+      return false
+    }
   }
   
   return true
@@ -1427,9 +1498,14 @@ const onQuantityChange = (item: ReturnItem) => {
   checkSingleStockAvailability(item)
 }
 
-// 计算单据总额
+// 计算单据总额（只计算数量>0的商品）
 const calculateTotalAmount = () => {
-  formData.totalAmount = formData.items.reduce((sum, item) => sum + item.totalAmount, 0)
+  formData.totalAmount = formData.items.reduce((sum, item) => {
+    if (item.quantity > 0) {
+      return sum + (item.totalAmount || 0)
+    }
+    return sum
+  }, 0)
 }
 
 // 添加商品

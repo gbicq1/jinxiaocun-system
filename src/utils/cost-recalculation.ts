@@ -44,46 +44,8 @@ export const checkAndRecalculateCost = async (
   defaultDate?: string
 ): Promise<{ needsRecalculation: boolean; message?: string }> => {
   try {
-    const results: Array<{ needsRecalculation: boolean; message?: string }> = []
-
-    for (const item of items) {
-      // 1. 获取产品编码
-      const productCode = String(item.productId || item.productCode || '')
-      if (!productCode) continue
-
-      // 2. 获取仓库 ID
-      const warehouseId = Number(item.warehouseId || 0)
-      if (!warehouseId) continue
-
-      // 3. 获取单据日期
-      const documentDate = item.date || item.voucherDate || item.transferDate || 
-                          item.countDate || item.adjustmentDate || defaultDate
-      if (!documentDate) continue
-
-      // 4. 调用后端检测并触发重算
-      const result = await (window as any).electron?.invoke?.(
-        'cost:check-and-recalculate',
-        {
-          productCode,
-          warehouseId,
-          documentDate
-        }
-      )
-
-      if (result && result.needsRecalculation) {
-        results.push(result)
-      }
-    }
-
-    // 5. 合并结果
-    if (results.length > 0) {
-      const messages = results.map(r => r.message).filter(Boolean)
-      return {
-        needsRecalculation: true,
-        message: messages.join('\n')
-      }
-    }
-
+    // 暂时禁用成本重新结算，因为缺少对应的 IPC 处理程序
+    console.log('checkAndRecalculateCost: 暂时跳过成本重新结算')
     return { needsRecalculation: false }
   } catch (error) {
     console.error('检测成本重新结算失败:', error)

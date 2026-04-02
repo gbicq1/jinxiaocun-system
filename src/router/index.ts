@@ -112,7 +112,7 @@ const routes: any[] = [
       {
         path: 'inbound',
         name: 'PurchaseInbound',
-        component: () => import('@/views/purchase/inbound.vue'),
+        component: () => import('@/views/inventory/inbound.vue'),
         meta: { title: '采购入库', icon: 'Box' }
       },
       {

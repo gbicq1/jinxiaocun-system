@@ -460,7 +460,7 @@ const generateVoucherNo = () => {
 const loadOutboundList = async () => {
   try {
     if (window.electron && window.electron.dbQuery) {
-      const result = await window.electron.dbQuery('outbound', 'SELECT * FROM outbound ORDER BY created_at DESC')
+      const result = await window.electron.dbQuery('sales_outbound', 'SELECT * FROM sales_outbound ORDER BY created_at DESC')
       outboundList.value = result
     } else {
       // 尝试多个可能的键名
@@ -597,7 +597,7 @@ const handleDelete = async (row: OutboundRecord) => {
   try {
     await ElMessageBox.confirm('确定要删除该出库单吗？', '提示', { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' })
     if (window.electron && window.electron.dbDelete) {
-      await window.electron.dbDelete('outbound', 'id = ?', [row.id])
+      await window.electron.dbDelete('sales_outbound', 'id = ?', [row.id])
     } else {
       const possibleKeys = ['sales_outbound_records', 'outbound_records', 'salesOutbounds']
       let savedData = null
@@ -946,7 +946,7 @@ const handleSubmit = async () => {
 
     if (formData.id) {
       if (window.electron && window.electron.dbUpdate) {
-        await window.electron.dbUpdate('outbound', formData, 'id = ?', [formData.id])
+        await window.electron.dbUpdate('sales_outbound', formData, 'id = ?', [formData.id])
       } else {
         const possibleKeys = ['sales_outbound_records', 'outbound_records', 'salesOutbounds']
         let savedData = null
@@ -974,7 +974,7 @@ const handleSubmit = async () => {
       formData.id = Date.now()
       formData.createdAt = new Date().toISOString() // 添加精确时间戳
       if (window.electron && window.electron.dbInsert) {
-        await window.electron.dbInsert('outbound', formData)
+        await window.electron.dbInsert('sales_outbound', formData)
       } else {
         const key = 'sales_outbound_records'
         const savedData = localStorage.getItem(key)

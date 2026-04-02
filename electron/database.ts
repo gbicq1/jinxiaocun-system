@@ -14,7 +14,22 @@ export class InventoryDatabase {
   initialize(): boolean {
     try {
       this.db = new Database(this.dbPath)
-      this.createTables()
+      this.db.pragma('foreign_keys = OFF')
+      
+      // 检查数据库是否已经初始化过（通过检查是否存在 products 表）
+      const tableExists = this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='products'").get()
+      
+      if (!tableExists) {
+        // 数据库是新的，创建表并插入基础数据
+        console.log('新数据库，开始创建表...')
+        this.createTables()
+        this.insertDefaultData()
+      } else {
+        // 数据库已存在，只确保表结构正确
+        console.log('数据库已存在，检查并添加缺失字段...')
+        this.createTables() // 使用 IF NOT EXISTS，不会重复创建
+        this.migrateDatabase() // 添加缺失字段
+      }
       
       // 初始化成本结算数据库
       this.costDb = new CostSettlementDatabase(this.db)
@@ -24,6 +39,86 @@ export class InventoryDatabase {
     } catch (error) {
       console.error('数据库初始化失败:', error)
       return false
+    }
+  }
+
+  /**
+   * 删除所有表（用于重置数据库）
+   */
+  private dropAllTables(): void {
+    try {
+      const tables = [
+        'purchase_inbound_items',
+        'purchase_inbound',
+        'sales_outbound_items',
+        'sales_outbound',
+        'purchase_return_items',
+        'purchase_returns',
+        'sales_return_items',
+        'sales_returns',
+        'inventory_transfer_items',
+        'inventory_transfer',
+        'purchase_order_items',
+        'purchase_orders',
+        'purchase_request_items',
+        'purchase_requests',
+        'sales_quote_items',
+        'sales_quotes',
+        'customers',
+        'suppliers',
+        'warehouses',
+        'products',
+        'employees'
+      ]
+      
+      tables.forEach(table => {
+        this.db!.exec(`DROP TABLE IF EXISTS ${table}`)
+      })
+      
+      console.log('所有旧表已删除')
+    } catch (error) {
+      console.error('删除旧表失败:', error)
+    }
+  }
+
+  private migrateDatabase() {
+    try {
+      console.log('开始数据库迁移...')
+      
+      // 检查 purchase_return_items 表是否有 original_item_index 字段
+      const prColumns = this.db!.prepare("PRAGMA table_info(purchase_return_items)").all() as any[]
+      const hasOriginalItemIndex = prColumns.some(col => col.name === 'original_item_index')
+      if (!hasOriginalItemIndex) {
+        console.log('添加 purchase_return_items.original_item_index 字段')
+        this.db!.exec('ALTER TABLE purchase_return_items ADD COLUMN original_item_index INTEGER')
+      }
+      
+      // 检查 sales_return_items 表是否有 original_item_index 字段
+      const srColumns = this.db!.prepare("PRAGMA table_info(sales_return_items)").all() as any[]
+      const hasSrOriginalItemIndex = srColumns.some(col => col.name === 'original_item_index')
+      if (!hasSrOriginalItemIndex) {
+        console.log('添加 sales_return_items.original_item_index 字段')
+        this.db!.exec('ALTER TABLE sales_return_items ADD COLUMN original_item_index INTEGER')
+      }
+      
+      // 检查 sales_outbound 表是否有 customer_id 字段
+      const soColumns = this.db!.prepare("PRAGMA table_info(sales_outbound)").all() as any[]
+      const hasCustomerId = soColumns.some(col => col.name === 'customer_id')
+      if (!hasCustomerId) {
+        console.log('添加 sales_outbound.customer_id 字段')
+        this.db!.exec('ALTER TABLE sales_outbound ADD COLUMN customer_id INTEGER')
+      }
+      
+      // 检查 sales_outbound 表是否有 handler_name 字段
+      const hasHandlerName = soColumns.some(col => col.name === 'handler_name')
+      if (!hasHandlerName) {
+        console.log('添加 sales_outbound.handler_name 字段')
+        this.db!.exec('ALTER TABLE sales_outbound ADD COLUMN handler_name TEXT')
+      }
+      
+      console.log('数据库迁移完成')
+    } catch (error) {
+      console.error('数据库迁移失败:', error)
     }
   }
 
@@ -94,6 +189,23 @@ export class InventoryDatabase {
         address TEXT,
         credit_limit DECIMAL(10,2),
         status INTEGER DEFAULT 1,
+        remark TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `)
+
+    // 员工表
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS employees (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        code VARCHAR(50) UNIQUE NOT NULL,
+        name VARCHAR(200) NOT NULL,
+        position VARCHAR(100),
+        department VARCHAR(100),
+        phone VARCHAR(20),
+        email VARCHAR(100),
+        status VARCHAR(20) DEFAULT 'active',
+        join_date DATE,
         remark TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
@@ -179,14 +291,17 @@ export class InventoryDatabase {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         outbound_no VARCHAR(50) UNIQUE NOT NULL,
         order_id INTEGER,
+        customer_id INTEGER,
         warehouse_id INTEGER,
         outbound_date DATETIME DEFAULT CURRENT_TIMESTAMP,
         total_amount DECIMAL(10,2),
         status VARCHAR(20) DEFAULT 'completed',
         remark TEXT,
+        handler_name TEXT,
         created_by VARCHAR(50),
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (order_id) REFERENCES sales_orders(id),
+        FOREIGN KEY (customer_id) REFERENCES customers(id),
         FOREIGN KEY (warehouse_id) REFERENCES warehouses(id)
       )
     `)
@@ -284,14 +399,19 @@ export class InventoryDatabase {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         inbound_no VARCHAR(50) UNIQUE NOT NULL,
         order_id INTEGER,
+        supplier_id INTEGER,
         warehouse_id INTEGER,
         inbound_date DATETIME DEFAULT CURRENT_TIMESTAMP,
         total_amount DECIMAL(10,2),
+        paid_amount DECIMAL(10,2) DEFAULT 0,
+        invoice_type VARCHAR(20),
+        invoice_issued BOOLEAN DEFAULT 0,
         status VARCHAR(20) DEFAULT 'completed',
         remark TEXT,
         created_by VARCHAR(50),
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (order_id) REFERENCES purchase_orders(id),
+        FOREIGN KEY (supplier_id) REFERENCES suppliers(id),
         FOREIGN KEY (warehouse_id) REFERENCES warehouses(id)
       )
     `)
@@ -303,16 +423,107 @@ export class InventoryDatabase {
         inbound_id INTEGER,
         product_id INTEGER,
         quantity INTEGER,
-        cost_price DECIMAL(10,2),
+        unit_price DECIMAL(10,2),
+        unit_price_ex DECIMAL(10,2),
+        tax_rate DECIMAL(5,2),
+        tax_amount DECIMAL(10,2),
+        total_amount_ex DECIMAL(10,2),
+        total_amount DECIMAL(10,2),
+        allow_deduction BOOLEAN DEFAULT 0,
+        deduction_amount DECIMAL(10,2) DEFAULT 0,
         remark TEXT,
         FOREIGN KEY (inbound_id) REFERENCES purchase_inbound(id),
         FOREIGN KEY (product_id) REFERENCES products(id)
       )
     `)
 
+    // 销售出库明细表
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS sales_outbound_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        outbound_id INTEGER,
+        product_id INTEGER,
+        quantity INTEGER,
+        cost_price DECIMAL(10,2),
+        remark TEXT,
+        FOREIGN KEY (outbound_id) REFERENCES sales_outbound(id),
+        FOREIGN KEY (product_id) REFERENCES products(id)
+      )
+    `)
+
+    // 采购退货表
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS purchase_returns (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        return_no VARCHAR(50) UNIQUE NOT NULL,
+        original_inbound_no VARCHAR(50),
+        supplier_id INTEGER,
+        warehouse_id INTEGER,
+        return_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+        total_amount DECIMAL(10,2),
+        return_reason TEXT,
+        status VARCHAR(20) DEFAULT 'completed',
+        remark TEXT,
+        created_by VARCHAR(50),
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (supplier_id) REFERENCES suppliers(id),
+        FOREIGN KEY (warehouse_id) REFERENCES warehouses(id)
+      )
+    `)
+
+    // 采购退货明细表
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS purchase_return_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        return_id INTEGER,
+        product_id INTEGER,
+        quantity INTEGER,
+        cost_price DECIMAL(10,2),
+        remark TEXT,
+        original_item_index INTEGER,
+        FOREIGN KEY (return_id) REFERENCES purchase_returns(id),
+        FOREIGN KEY (product_id) REFERENCES products(id)
+      )
+    `)
+
+    // 销售退货表
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS sales_returns (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        return_no VARCHAR(50) UNIQUE NOT NULL,
+        original_order_no VARCHAR(50),
+        customer_id INTEGER,
+        warehouse_id INTEGER,
+        return_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+        total_amount DECIMAL(10,2),
+        return_reason TEXT,
+        status VARCHAR(20) DEFAULT 'completed',
+        remark TEXT,
+        created_by VARCHAR(50),
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (customer_id) REFERENCES customers(id),
+        FOREIGN KEY (warehouse_id) REFERENCES warehouses(id)
+      )
+    `)
+
+    // 销售退货明细表
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS sales_return_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        return_id INTEGER,
+        product_id INTEGER,
+        quantity INTEGER,
+        cost_price DECIMAL(10,2),
+        remark TEXT,
+        original_item_index INTEGER,
+        FOREIGN KEY (return_id) REFERENCES sales_returns(id),
+        FOREIGN KEY (product_id) REFERENCES products(id)
+      )
+    `)
+
     // 库存调拨表
     this.db.exec(`
-      CREATE TABLE IF NOT EXISTS stock_transfer (
+      CREATE TABLE IF NOT EXISTS transfer_records (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         transfer_no VARCHAR(50) UNIQUE NOT NULL,
         from_warehouse_id INTEGER,
@@ -329,13 +540,15 @@ export class InventoryDatabase {
 
     // 库存调拨明细表
     this.db.exec(`
-      CREATE TABLE IF NOT EXISTS stock_transfer_items (
+      CREATE TABLE IF NOT EXISTS transfer_record_items (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         transfer_id INTEGER,
         product_id INTEGER,
         quantity INTEGER,
+        cost DECIMAL(10,2) DEFAULT 0,
+        amount DECIMAL(10,2) DEFAULT 0,
         remark TEXT,
-        FOREIGN KEY (transfer_id) REFERENCES stock_transfer(id),
+        FOREIGN KEY (transfer_id) REFERENCES transfer_records(id),
         FOREIGN KEY (product_id) REFERENCES products(id)
       )
     `)
@@ -446,24 +659,18 @@ export class InventoryDatabase {
 
       // 采购入库索引
       this.db!.exec(`
-        CREATE INDEX IF NOT EXISTS idx_inbound_date ON purchase_inbound_records(voucher_date)
+        CREATE INDEX IF NOT EXISTS idx_inbound_date ON purchase_inbound(inbound_date)
       `)
       this.db!.exec(`
-        CREATE INDEX IF NOT EXISTS idx_inbound_warehouse ON purchase_inbound_records(warehouse_id)
-      `)
-      this.db!.exec(`
-        CREATE INDEX IF NOT EXISTS idx_inbound_supplier ON purchase_inbound_records(supplier_id)
+        CREATE INDEX IF NOT EXISTS idx_inbound_warehouse ON purchase_inbound(warehouse_id)
       `)
 
       // 销售出库索引
       this.db!.exec(`
-        CREATE INDEX IF NOT EXISTS idx_outbound_date ON sales_outbound_records(voucher_date)
+        CREATE INDEX IF NOT EXISTS idx_outbound_date ON sales_outbound(outbound_date)
       `)
       this.db!.exec(`
-        CREATE INDEX IF NOT EXISTS idx_outbound_warehouse ON sales_outbound_records(warehouse_id)
-      `)
-      this.db!.exec(`
-        CREATE INDEX IF NOT EXISTS idx_outbound_customer ON sales_outbound_records(customer_id)
+        CREATE INDEX IF NOT EXISTS idx_outbound_warehouse ON sales_outbound(warehouse_id)
       `)
 
       // 库存调拨索引
@@ -482,6 +689,43 @@ export class InventoryDatabase {
       console.log('数据库索引创建完成')
     } catch (error) {
       console.error('创建索引失败:', error)
+    }
+  }
+
+  /**
+   * 插入基础数据（只在第一次创建数据库时执行）
+   */
+  private insertDefaultData(): void {
+    try {
+      // 插入产品（如果不存在）
+      this.db!.exec(`
+        INSERT OR IGNORE INTO products (code, name, category, unit, spec, status)
+        VALUES ('01', '苹果', '水果', '个', '红富士', 1)
+      `)
+
+      // 插入仓库（如果不存在）
+      this.db!.exec(`
+        INSERT OR IGNORE INTO warehouses (code, name, address, status)
+        VALUES 
+          ('01', '农服', '农服仓库', 1),
+          ('02', '驿站', '驿站仓库', 1)
+      `)
+
+      // 插入供应商（如果不存在）
+      this.db!.exec(`
+        INSERT OR IGNORE INTO suppliers (code, name, status)
+        VALUES ('01', '聚珍园', 1)
+      `)
+
+      // 插入客户（如果不存在）
+      this.db!.exec(`
+        INSERT OR IGNORE INTO customers (code, name, status)
+        VALUES ('01', '集团', 1)
+      `)
+      
+      console.log('基础数据已插入')
+    } catch (error) {
+      console.error('插入基础数据失败:', error)
     }
   }
 
@@ -540,7 +784,7 @@ export class InventoryDatabase {
    * 获取所有产品（不分页）
    */
   getAllProducts(): any[] {
-    return this.db!.prepare('SELECT * FROM products WHERE status = 1 ORDER BY code').all()
+    return this.db!.prepare('SELECT * FROM products ORDER BY code').all()
   }
 
   addProduct(product: any): number {
@@ -559,7 +803,7 @@ export class InventoryDatabase {
 
   // 仓库相关方法
   getAllWarehouses(): any[] {
-    return this.db!.prepare('SELECT * FROM warehouses WHERE status = 1 ORDER BY id').all()
+    return this.db!.prepare('SELECT * FROM warehouses ORDER BY id').all()
   }
 
   addWarehouse(warehouse: any): number {
@@ -619,32 +863,190 @@ export class InventoryDatabase {
     let whereClause = where ? `WHERE ${where}` : ''
     const offset = (page - 1) * pageSize
     
-    const countSql = `SELECT COUNT(*) as count FROM purchase_inbound_records ${whereClause}`
-    const total = this.db!.prepare(countSql).get(...(params || [])) as any
+    const countSql = `SELECT COUNT(*) as count FROM purchase_inbound ${whereClause}`
+    const total = whereClause && params && params.length > 0
+      ? this.db!.prepare(countSql).get(...params)
+      : this.db!.prepare(countSql).get()
     
-    const dataSql = `SELECT * FROM purchase_inbound_records ${whereClause} ORDER BY voucher_date DESC LIMIT ? OFFSET ?`
-    const data = this.db!.prepare(dataSql).all(...(params || []), pageSize, offset)
+    const dataSql = `SELECT * FROM purchase_inbound ${whereClause} ORDER BY created_at DESC LIMIT ? OFFSET ?`
+    const data = whereClause && params && params.length > 0
+      ? this.db!.prepare(dataSql).all(...params, pageSize, offset)
+      : this.db!.prepare(dataSql).all(pageSize, offset)
+    
+    // 为每个入库单加载明细数据
+    const enrichedData = data.map((record: any) => {
+      const itemsSql = `SELECT * FROM purchase_inbound_items WHERE inbound_id = ?`
+      const items = this.db!.prepare(itemsSql).all(record.id)
+      
+      // 加载供应商和仓库信息
+      const supplier = this.db!.prepare('SELECT name FROM suppliers WHERE id = ?').get(record.supplier_id) as any
+      const warehouse = this.db!.prepare('SELECT name FROM warehouses WHERE id = ?').get(record.warehouse_id) as any
+      
+      return {
+        id: record.id,
+        voucherNo: record.inbound_no,
+        voucherDate: record.inbound_date,
+        supplierId: record.supplier_id,
+        supplierName: supplier?.name || '',
+        warehouseId: record.warehouse_id,
+        warehouseName: warehouse?.name || '',
+        totalAmount: record.total_amount,
+        paidAmount: record.paid_amount,
+        invoiceType: record.invoice_type,
+        invoiceIssued: record.invoice_issued === 1,
+        status: record.status,
+        remark: record.remark,
+        createdBy: record.created_by,
+        createdAt: record.created_at,
+        items: items.map((item: any) => {
+          // 加载产品信息
+          const product = this.db!.prepare('SELECT name, spec, unit FROM products WHERE id = ?').get(item.product_id) as any
+          return {
+            id: item.id,
+            inboundId: item.inbound_id,
+            productId: item.product_id,
+            productName: product?.name || '',
+            specification: product?.spec || '',
+            unit: product?.unit || '',
+            quantity: item.quantity,
+            unitPrice: item.unit_price,
+            unitPriceEx: item.unit_price_ex,
+            taxRate: item.tax_rate === 0 ? '免税' : item.tax_rate,
+            taxAmount: item.tax_amount,
+            totalAmount: item.total_amount,
+            totalAmountEx: item.total_amount_ex,
+            allowDeduction: item.allow_deduction === 1,
+            deductionAmount: item.deduction_amount
+          }
+        })
+      }
+    })
     
     return {
       total: total.count,
       page,
       pageSize,
-      data
+      data: enrichedData
     }
   }
 
   addInbound(inbound: any): number {
-    return this.insert('purchase_inbound_records', inbound)
+    try {
+      console.log('【Electron 后端】收到入库单数据:', inbound)
+      
+      // 开启事务
+      const transaction = this.db!.transaction(() => {
+        // 提取 items 数据
+        const items = inbound.items || []
+        console.log('【Electron 后端】明细项数量:', items.length)
+        
+        delete inbound.items
+        
+        // 插入主表
+        const id = this.insert('purchase_inbound', inbound)
+        console.log('【Electron 后端】主表插入成功，ID:', id)
+        
+        // 插入明细表
+        if (items.length > 0) {
+          items.forEach((item: any, index: number) => {
+            const itemData = {
+              inbound_id: id,
+              ...item
+            }
+            console.log(`【Electron 后端】插入明细项 ${index + 1}:`, itemData)
+            this.insert('purchase_inbound_items', itemData)
+          })
+          console.log('【Electron 后端】所有明细项插入完成')
+        } else {
+          console.warn('【Electron 后端】没有明细项需要插入')
+        }
+        
+        return id
+      })
+      
+      const id = transaction()
+      console.log('【Electron 后端】事务执行完成，返回 ID:', id)
+      return id
+    } catch (error) {
+      console.error('【Electron 后端】添加入库单失败:', error)
+      throw error
+    }
   }
 
   updateInbound(inbound: any): number {
-    const id = inbound.id
-    delete inbound.id
-    return this.update('purchase_inbound_records', inbound, 'id = ?', [id])
+    try {
+      console.log('【Electron 后端】更新入库单数据:', inbound)
+      
+      // 开启事务
+      const transaction = this.db!.transaction(() => {
+        const id = inbound.id
+        const items = inbound.items || []
+        
+        // 删除原有明细
+        this.db!.prepare('DELETE FROM purchase_inbound_items WHERE inbound_id = ?').run(id)
+        console.log('【Electron 后端】已删除原有明细项')
+        
+        // 提取主表数据，确保不包含 items 字段
+        const mainData: any = {}
+        for (const key in inbound) {
+          if (key !== 'items' && key !== 'id') {
+            mainData[key] = inbound[key]
+          }
+        }
+        
+        // 更新主表
+        this.update('purchase_inbound', mainData, 'id = ?', [id])
+        console.log('【Electron 后端】主表更新成功，ID:', id)
+        
+        // 插入新明细
+        if (items.length > 0) {
+          items.forEach((item: any, index: number) => {
+            const itemData = {
+              inbound_id: id,
+              ...item
+            }
+            console.log(`【Electron 后端】更新明细项 ${index + 1}:`, itemData)
+            this.insert('purchase_inbound_items', itemData)
+          })
+          console.log('【Electron 后端】所有明细项更新完成')
+        } else {
+          console.warn('【Electron 后端】没有明细项需要插入')
+        }
+        
+        return id
+      })
+      
+      const resultId = transaction()
+      console.log('【Electron 后端】事务执行完成，返回 ID:', resultId)
+      return resultId
+    } catch (error) {
+      console.error('【Electron 后端】更新入库单失败:', error)
+      throw error
+    }
   }
 
   deleteInbound(id: number): number {
-    return this.delete('purchase_inbound_records', 'id = ?', [id])
+    try {
+      console.log('【Electron 后端】删除入库单，ID:', id)
+      
+      const transaction = this.db!.transaction(() => {
+        // 先删除明细
+        this.db!.prepare('DELETE FROM purchase_inbound_items WHERE inbound_id = ?').run(id)
+        console.log('【Electron 后端】已删除入库单明细项')
+        
+        // 再删除主表
+        const result = this.delete('purchase_inbound', 'id = ?', [id])
+        console.log('【Electron 后端】主表删除完成')
+        
+        return result
+      })
+      
+      const result = transaction()
+      return result
+    } catch (error) {
+      console.error('【Electron 后端】删除入库单失败:', error)
+      throw error
+    }
   }
 
   // 销售出库相关方法
@@ -652,32 +1054,348 @@ export class InventoryDatabase {
     let whereClause = where ? `WHERE ${where}` : ''
     const offset = (page - 1) * pageSize
     
-    const countSql = `SELECT COUNT(*) as count FROM sales_outbound_records ${whereClause}`
-    const total = this.db!.prepare(countSql).get(...(params || [])) as any
+    const countSql = `SELECT COUNT(*) as count FROM sales_outbound ${whereClause}`
+    const total = whereClause && params && params.length > 0
+      ? this.db!.prepare(countSql).get(...params)
+      : this.db!.prepare(countSql).get()
     
-    const dataSql = `SELECT * FROM sales_outbound_records ${whereClause} ORDER BY voucher_date DESC LIMIT ? OFFSET ?`
-    const data = this.db!.prepare(dataSql).all(...(params || []), pageSize, offset)
+    const dataSql = `SELECT * FROM sales_outbound ${whereClause} ORDER BY outbound_date DESC LIMIT ? OFFSET ?`
+    const data = whereClause && params && params.length > 0
+      ? this.db!.prepare(dataSql).all(...params, pageSize, offset)
+      : this.db!.prepare(dataSql).all(pageSize, offset)
+    
+    // 为每个出库单加载明细数据
+    const enrichedData = data.map((record: any) => {
+      const itemsSql = `SELECT * FROM sales_outbound_items WHERE outbound_id = ?`
+      const items = this.db!.prepare(itemsSql).all(record.id)
+      
+      // 加载客户和仓库信息
+      const customer = this.db!.prepare('SELECT name FROM customers WHERE id = ?').get(record.customer_id) as any
+      const warehouse = this.db!.prepare('SELECT name FROM warehouses WHERE id = ?').get(record.warehouse_id) as any
+      
+      return {
+        id: record.id,
+        voucherNo: record.outbound_no,
+        voucherDate: record.outbound_date,
+        customerId: record.customer_id,
+        customerName: customer?.name || '',
+        warehouseId: record.warehouse_id,
+        warehouseName: warehouse?.name || '',
+        totalAmount: record.total_amount,
+        status: record.status,
+        remark: record.remark,
+        createdBy: record.created_by,
+        createdAt: record.created_at,
+        items: items.map((item: any) => {
+          // 加载产品信息
+          const product = this.db!.prepare('SELECT name, spec, unit FROM products WHERE id = ?').get(item.product_id) as any
+          return {
+            id: item.id,
+            outboundId: item.outbound_id,
+            productId: item.product_id,
+            productName: product?.name || '',
+            specification: product?.spec || '',
+            unit: product?.unit || '',
+            quantity: item.quantity,
+            unitPrice: item.unit_price,
+            unitPriceEx: item.unit_price_ex,
+            taxRate: item.tax_rate,
+            taxAmount: item.tax_amount,
+            totalAmount: item.total_amount,
+            totalAmountEx: item.total_amount_ex
+          }
+        })
+      }
+    })
     
     return {
       total: total.count,
       page,
       pageSize,
-      data
+      data: enrichedData
     }
   }
 
   addOutbound(outbound: any): number {
-    return this.insert('sales_outbound_records', outbound)
+    try {
+      console.log('【Electron 后端】收到出库单数据:', outbound)
+      
+      // 开启事务
+      const transaction = this.db!.transaction(() => {
+        // 提取 items 数据
+        const items = outbound.items || []
+        console.log('【Electron 后端】明细项数量:', items.length)
+        
+        delete outbound.items
+        
+        // 临时删除不存在的字段
+        delete outbound.customer_id
+        delete outbound.handler_name
+        
+        // 插入主表
+        const id = this.insert('sales_outbound', outbound)
+        console.log('【Electron 后端】主表插入成功，ID:', id)
+        
+        // 插入明细表
+        if (items.length > 0) {
+          items.forEach((item: any, index: number) => {
+            const itemData = {
+              outbound_id: id,
+              product_id: item.product_id,
+              quantity: item.quantity,
+              cost_price: item.cost_price || item.unit_price || 0,
+              remark: item.remark || ''
+            }
+            console.log(`【Electron 后端】插入销售出库明细项 ${index + 1}:`, itemData)
+            this.insert('sales_outbound_items', itemData)
+          })
+          console.log('【Electron 后端】所有销售出库明细项插入完成')
+        } else {
+          console.warn('【Electron 后端】没有销售出库明细项需要插入')
+        }
+        
+        return id
+      })
+      
+      const id = transaction()
+      console.log('【Electron 后端】事务执行完成，返回 ID:', id)
+      return id
+    } catch (error) {
+      console.error('【Electron 后端】添加销售出库单失败:', error)
+      throw error
+    }
   }
 
   updateOutbound(outbound: any): number {
     const id = outbound.id
     delete outbound.id
-    return this.update('sales_outbound_records', outbound, 'id = ?', [id])
+    // 临时删除不存在的字段
+    delete outbound.customer_id
+    delete outbound.handler_name
+    return this.update('sales_outbound', outbound, 'id = ?', [id])
   }
 
   deleteOutbound(id: number): number {
-    return this.delete('sales_outbound_records', 'id = ?', [id])
+    return this.delete('sales_outbound', 'id = ?', [id])
+  }
+
+  // 采购退货相关方法
+  addPurchaseReturn(returnData: any): number {
+    try {
+      console.log('【Electron 后端】收到采购退货单数据:', returnData)
+      
+      // 开启事务
+      const transaction = this.db!.transaction(() => {
+        // 提取 items 数据，只保存数量>0的商品
+        const items = (returnData.items || []).filter((item: any) => item.quantity > 0)
+        console.log('【Electron 后端】需要保存的退货明细项数量（数量>0）:', items.length)
+        
+        delete returnData.items
+        
+        // 插入主表
+        const id = this.insert('purchase_returns', returnData)
+        console.log('【Electron 后端】采购退货主表插入成功，ID:', id)
+        
+        // 插入明细表
+        if (items.length > 0) {
+          items.forEach((item: any, index: number) => {
+            const itemData = {
+              return_id: id,
+              product_id: item.product_id,
+              quantity: item.quantity,
+              cost_price: item.cost_price || item.unit_price || 0,
+              remark: item.remark || '',
+              original_item_index: item.original_item_index
+            }
+            console.log(`【Electron 后端】插入采购退货明细项 ${index + 1}:`, itemData)
+            this.insert('purchase_return_items', itemData)
+          })
+          console.log('【Electron 后端】所有采购退货明细项插入完成')
+        } else {
+          console.warn('【Electron 后端】没有采购退货明细项需要插入')
+        }
+        
+        return id
+      })
+      
+      const id = transaction()
+      console.log('【Electron 后端】采购退货事务执行完成，返回 ID:', id)
+      return id
+    } catch (error) {
+      console.error('【Electron 后端】添加采购退货单失败:', error)
+      throw error
+    }
+  }
+
+  getPurchaseReturns(page: number = 1, pageSize: number = 10): any {
+    const offset = (page - 1) * pageSize
+    
+    const countSql = `SELECT COUNT(*) as count FROM purchase_returns`
+    const total = this.db!.prepare(countSql).get() as any
+    
+    const dataSql = `SELECT * FROM purchase_returns ORDER BY created_at DESC LIMIT ? OFFSET ?`
+    const data = this.db!.prepare(dataSql).all(pageSize, offset)
+    
+    // 为每个退货单加载明细数据
+    const enrichedData = data.map((record: any) => {
+      const itemsSql = `SELECT * FROM purchase_return_items WHERE return_id = ?`
+      const items = this.db!.prepare(itemsSql).all(record.id)
+      return {
+        ...record,
+        items
+      }
+    })
+    
+    return {
+      total: total.count,
+      page,
+      pageSize,
+      data: enrichedData
+    }
+  }
+
+  updatePurchaseReturn(returnData: any): number {
+    try {
+      console.log('【Electron 后端】更新采购退货单数据:', returnData)
+      
+      // 开启事务
+      const transaction = this.db!.transaction(() => {
+        const id = returnData.id
+        const items = (returnData.items || []).filter((item: any) => item.quantity > 0) // 只保存数量>0的商品
+        
+        // 删除原有明细
+        this.db!.prepare('DELETE FROM purchase_return_items WHERE return_id = ?').run(id)
+        console.log('【Electron 后端】已删除原有退货明细项')
+        
+        // 提取主表数据，确保不包含 items 字段
+        const mainData: any = {}
+        for (const key in returnData) {
+          if (key !== 'items' && key !== 'id') {
+            mainData[key] = returnData[key]
+          }
+        }
+        
+        // 更新主表
+        this.update('purchase_returns', mainData, 'id = ?', [id])
+        console.log('【Electron 后端】退货主表更新成功，ID:', id)
+        
+        // 插入新明细
+        if (items.length > 0) {
+          items.forEach((item: any, index: number) => {
+            const itemData = {
+              return_id: id,
+              product_id: item.product_id,
+              quantity: item.quantity,
+              cost_price: item.cost_price || item.unit_price || 0,
+              remark: item.remark || '',
+              original_item_index: item.original_item_index
+            }
+            console.log(`【Electron 后端】更新退货明细项 ${index + 1}:`, itemData)
+            this.insert('purchase_return_items', itemData)
+          })
+          console.log('【Electron 后端】所有退货明细项更新完成')
+        } else {
+          console.warn('【Electron 后端】没有退货明细项需要插入')
+        }
+        
+        return id
+      })
+      
+      const resultId = transaction()
+      console.log('【Electron 后端】退货事务执行完成，返回 ID:', resultId)
+      return resultId
+    } catch (error) {
+      console.error('【Electron 后端】更新采购退货单失败:', error)
+      throw error
+    }
+  }
+
+  deletePurchaseReturn(id: number): number {
+    return this.delete('purchase_returns', 'id = ?', [id])
+  }
+
+  // 销售退货相关方法
+  addSalesReturn(returnData: any): number {
+    try {
+      console.log('【Electron 后端】收到销售退货单数据:', returnData)
+      
+      // 开启事务
+      const transaction = this.db!.transaction(() => {
+        // 提取 items 数据
+        const items = returnData.items || []
+        console.log('【Electron 后端】退货明细项数量:', items.length)
+        
+        delete returnData.items
+        
+        // 插入主表
+        const id = this.insert('sales_returns', returnData)
+        console.log('【Electron 后端】销售退货主表插入成功，ID:', id)
+        
+        // 插入明细表
+        if (items.length > 0) {
+          items.forEach((item: any, index: number) => {
+            const itemData = {
+              return_id: id,
+              product_id: item.product_id,
+              quantity: item.quantity,
+              cost_price: item.cost_price || item.unit_price || 0,
+              remark: item.remark || ''
+            }
+            console.log(`【Electron 后端】插入销售退货明细项 ${index + 1}:`, itemData)
+            this.insert('sales_return_items', itemData)
+          })
+          console.log('【Electron 后端】所有销售退货明细项插入完成')
+        } else {
+          console.warn('【Electron 后端】没有销售退货明细项需要插入')
+        }
+        
+        return id
+      })
+      
+      const id = transaction()
+      console.log('【Electron 后端】销售退货事务执行完成，返回 ID:', id)
+      return id
+    } catch (error) {
+      console.error('【Electron 后端】添加销售退货单失败:', error)
+      throw error
+    }
+  }
+
+  getSalesReturns(page: number = 1, pageSize: number = 10): any {
+    const offset = (page - 1) * pageSize
+    
+    const countSql = `SELECT COUNT(*) as count FROM sales_returns`
+    const total = this.db!.prepare(countSql).get() as any
+    
+    const dataSql = `SELECT * FROM sales_returns ORDER BY created_at DESC LIMIT ? OFFSET ?`
+    const data = this.db!.prepare(dataSql).all(pageSize, offset)
+    
+    // 为每个退货单加载明细数据
+    const enrichedData = data.map((record: any) => {
+      const itemsSql = `SELECT * FROM sales_return_items WHERE return_id = ?`
+      const items = this.db!.prepare(itemsSql).all(record.id)
+      return {
+        ...record,
+        items
+      }
+    })
+    
+    return {
+      total: total.count,
+      page,
+      pageSize,
+      data: enrichedData
+    }
+  }
+
+  updateSalesReturn(returnData: any): number {
+    const id = returnData.id
+    delete returnData.id
+    return this.update('sales_returns', returnData, 'id = ?', [id])
+  }
+
+  deleteSalesReturn(id: number): number {
+    return this.delete('sales_returns', 'id = ?', [id])
   }
 
   // 库存调拨相关方法
@@ -691,16 +1409,58 @@ export class InventoryDatabase {
     const dataSql = `SELECT * FROM transfer_records ${whereClause} ORDER BY transfer_date DESC LIMIT ? OFFSET ?`
     const data = this.db!.prepare(dataSql).all(...(params || []), pageSize, offset)
     
+    // 为每个调拨单加载明细数据
+    const enrichedData = data.map((record: any) => {
+      const itemsSql = `SELECT * FROM transfer_record_items WHERE transfer_id = ?`
+      const items = this.db!.prepare(itemsSql).all(record.id)
+      return {
+        ...record,
+        items
+      }
+    })
+    
     return {
       total: total.count,
       page,
       pageSize,
-      data
+      data: enrichedData
     }
   }
 
   addTransfer(transfer: any): number {
-    return this.insert('transfer_records', transfer)
+    try {
+      // 开启事务
+      const transaction = this.db!.transaction(() => {
+        // 提取 items 数据
+        const items = transfer.items || []
+        delete transfer.items
+        
+        // 插入主表
+        const id = this.insert('transfer_records', transfer)
+        
+        // 插入明细表
+        if (items.length > 0) {
+          items.forEach((item: any) => {
+            const itemData = {
+              transfer_id: id,
+              product_id: item.product_id,
+              quantity: item.quantity,
+              cost: item.cost || 0,
+              amount: item.amount || 0,
+              remark: item.remark || ''
+            }
+            this.insert('transfer_record_items', itemData)
+          })
+        }
+        
+        return id
+      })
+      
+      return transaction()
+    } catch (error) {
+      console.error('添加调拨单失败:', error)
+      throw error
+    }
   }
 
   updateTransfer(transfer: any): number {
@@ -730,6 +1490,61 @@ export class InventoryDatabase {
     
     const sql = `SELECT * FROM inventory_balance ${whereClause} ORDER BY warehouse_id, product_code`
     return this.db!.prepare(sql).all(...params)
+  }
+
+  // 获取单个产品在单个仓库的实时库存
+  getProductStock(productId: number, warehouseId: number): number {
+    let stock = 0
+
+    // 1. 加入库单
+    const inboundItems = this.db!.prepare(`
+      SELECT ii.* 
+      FROM purchase_inbound_items ii
+      JOIN purchase_inbound pi ON ii.inbound_id = pi.id
+      WHERE ii.product_id = ? AND pi.warehouse_id = ?
+    `).all(productId, warehouseId) as any[]
+
+    inboundItems.forEach(item => {
+      stock += item.quantity
+    })
+
+    // 2. 加销售退货单
+    const salesReturnItems = this.db!.prepare(`
+      SELECT sri.* 
+      FROM sales_return_items sri
+      JOIN sales_returns sr ON sri.return_id = sr.id
+      WHERE sri.product_id = ? AND sr.warehouse_id = ?
+    `).all(productId, warehouseId) as any[]
+
+    salesReturnItems.forEach(item => {
+      stock += item.quantity
+    })
+
+    // 3. 减销售出库单
+    const outboundItems = this.db!.prepare(`
+      SELECT soi.* 
+      FROM sales_outbound_items soi
+      JOIN sales_outbound so ON soi.outbound_id = so.id
+      WHERE soi.product_id = ? AND so.warehouse_id = ?
+    `).all(productId, warehouseId) as any[]
+
+    outboundItems.forEach(item => {
+      stock -= item.quantity
+    })
+
+    // 4. 减采购退货单
+    const purchaseReturnItems = this.db!.prepare(`
+      SELECT pri.* 
+      FROM purchase_return_items pri
+      JOIN purchase_returns pr ON pri.return_id = pr.id
+      WHERE pri.product_id = ? AND pr.warehouse_id = ?
+    `).all(productId, warehouseId) as any[]
+
+    purchaseReturnItems.forEach(item => {
+      stock -= item.quantity
+    })
+
+    return stock
   }
 
   close() {

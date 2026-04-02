@@ -106,6 +106,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
+import { dbQuery, dbInsert, dbUpdate, dbDelete } from '@/utils/db'
 
 interface Employee {
   id?: number
@@ -145,13 +146,15 @@ const rules = reactive<FormRules>({
   department: [{ required: true, message: '请输入部门', trigger: 'blur' }]
 })
 
-const loadEmployees = () => {
-  const saved = localStorage.getItem('employees')
-  employees.value = saved ? JSON.parse(saved) : []
-}
-
-const saveEmployees = () => {
-  localStorage.setItem('employees', JSON.stringify(employees.value))
+const loadEmployees = async () => {
+  try {
+    const result = await dbQuery('SELECT * FROM employees ORDER BY created_at DESC')
+    employees.value = result
+  } catch (error: any) {
+    console.error('加载员工列表失败:', error)
+    ElMessage.error('加载员工列表失败：' + error.message)
+    employees.value = []
+  }
 }
 
 const handleAdd = () => {
@@ -187,33 +190,36 @@ const handleDelete = async (row: Employee) => {
       type: 'warning'
     })
 
-    employees.value = employees.value.filter(e => e.id !== row.id)
-    saveEmployees()
+    await dbDelete('employees', 'id = ?', [row.id])
     ElMessage.success('删除成功')
-  } catch {
-    ElMessage.info('已取消删除')
+    loadEmployees()
+  } catch (error: any) {
+    if (error !== 'cancel') {
+      console.error('删除失败:', error)
+      ElMessage.error('删除失败：' + error.message)
+    }
   }
 }
 
-const handleSubmit = () => {
-  formRef.value?.validate(async (valid) => {
-    if (!valid) return
+const handleSubmit = async () => {
+  try {
+    await formRef.value?.validate()
 
     if (isEditMode.value && formData.id) {
-      const idx = employees.value.findIndex(e => e.id === formData.id)
-      if (idx !== -1) {
-        employees.value[idx] = { ...formData }
-      }
+      // 更新
+      await dbUpdate('employees', formData, 'id = ?', [formData.id])
+      ElMessage.success('编辑成功')
     } else {
-      formData.id = Date.now()
-      employees.value.push({ ...formData })
+      // 新增
+      await dbInsert('employees', formData)
+      ElMessage.success('新增成功')
     }
 
-    saveEmployees()
-    ElMessage.success(isEditMode.value ? '编辑成功' : '新增成功')
     dialogVisible.value = false
     loadEmployees()
-  })
+  } catch (error: any) {
+    console.error('提交失败:', error)
+  }
 }
 
 onMounted(() => {

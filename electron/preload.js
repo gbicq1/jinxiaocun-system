@@ -2,13 +2,15 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const electron_1 = require("electron");
 
+console.log('preload.js 开始执行')
+
 // 暴露安全的 IPC 通道给渲染进程
 electron_1.contextBridge.exposeInMainWorld('electron', {
   // 数据库初始化
   initDatabase: () => electron_1.ipcRenderer.invoke('db-init'),
   
   // 数据库基本操作
-  dbQuery: (sql, params = []) => electron_1.ipcRenderer.invoke('db-query', sql, params),
+  dbQuery: (tableOrSql, sqlOrParams, params) => electron_1.ipcRenderer.invoke('db-query', tableOrSql, sqlOrParams, params),
   dbInsert: (table, data) => electron_1.ipcRenderer.invoke('db-insert', table, data),
   dbUpdate: (table, data, where, whereParams) => electron_1.ipcRenderer.invoke('db-update', table, data, where, whereParams),
   dbDelete: (table, where, whereParams) => electron_1.ipcRenderer.invoke('db-delete', table, where, whereParams),
@@ -56,9 +58,29 @@ electron_1.contextBridge.exposeInMainWorld('electron', {
   transferUpdate: (transfer) => electron_1.ipcRenderer.invoke('transfer-update', transfer),
   transferDelete: (id) => electron_1.ipcRenderer.invoke('transfer-delete', id),
   
+  // 采购退货
+  purchaseReturnList: (page, pageSize) => electron_1.ipcRenderer.invoke('purchase-return-list', page, pageSize),
+  purchaseReturnAdd: (returnData) => electron_1.ipcRenderer.invoke('purchase-return-add', returnData),
+  purchaseReturnUpdate: (returnData) => electron_1.ipcRenderer.invoke('purchase-return-update', returnData),
+  purchaseReturnDelete: (id) => electron_1.ipcRenderer.invoke('purchase-return-delete', id),
+  
+  // 销售退货
+  salesReturnList: (page, pageSize) => electron_1.ipcRenderer.invoke('sales-return-list', page, pageSize),
+  salesReturnAdd: (returnData) => electron_1.ipcRenderer.invoke('sales-return-add', returnData),
+  salesReturnUpdate: (returnData) => electron_1.ipcRenderer.invoke('sales-return-update', returnData),
+  salesReturnDelete: (id) => electron_1.ipcRenderer.invoke('sales-return-delete', id),
+  
   // 库存查询
   inventoryQuery: (warehouseId, productCode) => electron_1.ipcRenderer.invoke('inventory-query', warehouseId, productCode),
   
+  // 获取单个产品的实时库存
+  productStock: (productId, warehouseId) => electron_1.ipcRenderer.invoke('product-stock', productId, warehouseId),
+  
   // 成本结算查询
-  costSettlementQuery: (year, month, productCode, warehouseId) => electron_1.ipcRenderer.invoke('cost-settlement-query', year, month, productCode, warehouseId)
-});
+  costSettlementQuery: (year, month, productCode, warehouseId) => electron_1.ipcRenderer.invoke('cost-settlement-query', year, month, productCode, warehouseId),
+  
+  // IPC 直接访问（用于 db-ipc.ts）
+  ipcRenderer: electron_1.ipcRenderer
+})
+
+console.log('window.electron 已暴露')

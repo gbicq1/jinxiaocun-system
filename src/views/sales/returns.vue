@@ -470,6 +470,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Printer, Download, Search } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import { handleDocumentSave, DocumentType } from '@/utils/cost-recalculation'
+import { dbQuery } from '@/utils/db'
 
 // 类型定义
 interface ReturnItem {
@@ -598,41 +599,17 @@ const selectableProducts = computed(() => {
 // 加载退货单列表
 const loadReturnsList = async () => {
   try {
-    const saved = localStorage.getItem('salesReturns')
-    if (saved) {
-      let all = JSON.parse(saved)
-      let needsUpdate = false
-      
-      // 检查并更新旧数据（计算含税总金额）
-      for (let i = 0; i < all.length; i++) {
-        const ret = all[i]
-        if (ret.totalInc == null && ret.items && ret.items.length > 0) {
-          ret.totalInc = ret.items.reduce((sum: number, item: any) => sum + (item.totalInc || 0), 0)
-          needsUpdate = true
-        }
-      }
-      
-      // 如果有更新，保存回 localStorage
-      if (needsUpdate) {
-        localStorage.setItem('salesReturns', JSON.stringify(all))
-      }
-      
-      // 按日期和时间戳正序排序
-      all.sort((a: any, b: any) => {
-        const dateA = new Date(a.voucherDate || a.date || '1970-01-01').getTime()
-        const dateB = new Date(b.voucherDate || b.date || '1970-01-01').getTime()
-        if (dateA !== dateB) {
-          return dateA - dateB
-        }
-        const timeA = a.createdAt || a._timestamp || a.voucherDate || '1970-01-01'
-        const timeB = b.createdAt || b._timestamp || b.voucherDate || '1970-01-01'
-        return new Date(timeA).getTime() - new Date(timeB).getTime()
-      })
-      
-      const start = (currentPage.value - 1) * pageSize.value
-      const end = start + pageSize.value
-      returnsList.value = all.slice(start, end)
-      total.value = all.length
+    const electron = (window as any).electron
+    if (electron) {
+      const result = await electron.salesReturnList(currentPage.value, pageSize.value)
+      returnsList.value = result.data.map((item: any) => ({
+        ...item,
+        voucherNo: item.return_no,
+        voucherDate: item.return_date,
+        totalAmount: item.total_amount,
+        returnReason: item.return_reason
+      }))
+      total.value = result.total
     } else {
       returnsList.value = []
       total.value = 0
@@ -669,22 +646,15 @@ const loadOrderList = async () => {
 // 加载商品列表
 const loadProducts = async () => {
   try {
-    const savedProducts = localStorage.getItem('products')
-    if (savedProducts) {
-      const allProducts = JSON.parse(savedProducts)
-      products.value = allProducts
-        .filter((p: any) => (p.status as any) === 1 || (p.status as any) === true)
-        .map((p: any) => ({
-          id: p.id,
-          code: p.code || p.productCode || '',
-          name: p.name || p.productName || '',
-          specification: p.specification || p.spec || '',
-          unit: p.unit || '',
-          costPrice: p.costPrice || p.cost || 0
-        }))
-    } else {
-      products.value = []
-    }
+    const result = await dbQuery('SELECT * FROM products WHERE status = 1 ORDER BY code')
+    products.value = result.map((p: any) => ({
+      id: p.id,
+      code: p.code,
+      name: p.name,
+      specification: p.spec || p.specification || '',
+      unit: p.unit || '',
+      costPrice: p.costPrice || 0
+    }))
   } catch (error) {
     console.error('加载商品列表失败:', error)
     products.value = []
@@ -694,8 +664,8 @@ const loadProducts = async () => {
 // 加载客户列表
 const loadCustomers = async () => {
   try {
-    const saved = localStorage.getItem('customers')
-    customers.value = saved ? JSON.parse(saved) : []
+    const result = await dbQuery('SELECT * FROM customers WHERE status = 1 ORDER BY name')
+    customers.value = result
   } catch (error) {
     console.error('加载客户列表失败:', error)
     customers.value = []
@@ -705,79 +675,25 @@ const loadCustomers = async () => {
 // 加载仓库列表
 const loadWarehouses = async () => {
   try {
-    const savedWarehouses = localStorage.getItem('warehouses')
-    if (savedWarehouses) {
-      const allWarehouses = JSON.parse(savedWarehouses)
-      warehouses.value = allWarehouses.filter((w: Warehouse) => w.status === 1)
-    } else {
-      warehouses.value = []
-    }
+    const result = await dbQuery('SELECT * FROM warehouses WHERE status = 1 ORDER BY name')
+    warehouses.value = result
   } catch (error) {
     console.error('加载仓库列表失败:', error)
     warehouses.value = []
   }
 }
 
-// 加载系统用户（用于经办人下拉），兼容多种存储键与字段
-const normalizeUser = (u: any) => ({ id: u.id ?? u.userId ?? u.uid ?? Date.now(), name: u.name || u.realname || u.realName || u.employeeName || u.fullName || u.username || u.userName || '' })
+// 加载系统用户（用于经办人下拉）
 const loadUsers = async () => {
   try {
-    // 优先从 employees 键加载员工数据
-    const employeeKeys = ['employees', 'employee_list', 'staff', 'system_users']
-    let found: any[] = []
-    
-    for (const k of employeeKeys) {
-      const raw = localStorage.getItem(k)
-      if (raw) {
-        try {
-          const parsed = JSON.parse(raw)
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            // 检查是否是员工数据（包含员工特有字段）
-            if (parsed[0].employeeName || parsed[0].realname || parsed[0].realName || parsed[0].status || parsed[0].department) {
-              // 过滤在职员工
-              found = parsed.filter((e: any) => 
-                (e.status as any) === 'active' || 
-                (e.status as any) === 1 || 
-                (e.status as any) === true ||
-                (e.status as any) === '在职' ||
-                !e.status  // 如果没有 status 字段，默认在职
-              )
-              break
-            }
-          }
-        } catch { continue }
-      }
-    }
-
-    users.value = (found || []).map(normalizeUser)
-    console.log('加载的员工数据:', users.value)
-
-    // 回退：使用当前登录用户作为单条选项
-    if ((!users.value || users.value.length === 0) && localStorage.getItem('currentUser')) {
-      try {
-        const cur = JSON.parse(localStorage.getItem('currentUser')!)
-        users.value = [normalizeUser(cur)]
-      } catch {
-        users.value = []
-      }
-    }
-    
-    // 加载默认经办人
-    const savedDefaultHandler = localStorage.getItem('defaultHandlerId')
-    if (savedDefaultHandler) {
-      defaultHandlerId.value = parseInt(savedDefaultHandler)
-      console.log('默认经办人 ID:', defaultHandlerId.value)
-    }
+    const result = await dbQuery("SELECT * FROM employees WHERE status = 'active' OR status = 1 ORDER BY name")
+    users.value = result.map((e: any) => ({
+      id: e.id,
+      name: e.name
+    }))
   } catch (error) {
-    console.error('加载系统用户失败:', error)
+    console.error('加载员工列表失败:', error)
     users.value = []
-  }
-  
-  // 加载默认仓库
-  const savedDefaultWarehouse = localStorage.getItem('defaultWarehouseId')
-  if (savedDefaultWarehouse) {
-    defaultWarehouseId.value = parseInt(savedDefaultWarehouse)
-    console.log('默认仓库 ID:', defaultWarehouseId.value)
   }
 }
 
@@ -870,15 +786,9 @@ const handleDelete = async (row: ReturnRecord) => {
       type: 'warning'
     })
 
-    const saved = localStorage.getItem('salesReturns')
-    if (saved) {
-      const all = JSON.parse(saved)
-      const filtered = all.filter((r: ReturnRecord) => r.id !== row.id)
-      localStorage.setItem('salesReturns', JSON.stringify(filtered))
-
-      // 更新库存（增加回库存）
-      updateInventoryOnReturn(row, true)
-
+    const electron = (window as any).electron
+    if (electron) {
+      await electron.salesReturnDelete(row.id)
       ElMessage.success('删除成功')
       loadReturnsList()
     }
@@ -924,38 +834,6 @@ const handleSubmit = async () => {
       return
     }
 
-    // 如果选择了原订单，校验退货商品
-    if (formData.originalOrderNo) {
-      const originalOrder = orderList.value.find(item => item.voucherNo === formData.originalOrderNo)
-      if (originalOrder) {
-        // 校验每一个退货商品
-        for (let i = 0; i < formData.items.length; i++) {
-          const retItem = formData.items[i]
-          
-          // 查找原订单中是否有这个商品
-          const origItem = originalOrder.items.find((item: any) => item.productId === retItem.productId)
-          
-          if (!origItem) {
-            ElMessage.error(`商品"${retItem.productName}"不在原出库单中，无法退货`)
-            return
-          }
-          
-          // 校验退货数量不能超过原订单数量（取绝对值比较）
-          const retQty = Math.abs(retItem.quantity)
-          if (retQty > origItem.quantity) {
-            ElMessage.error(`商品"${retItem.productName}"的退货数量(${retQty})不能超过原出库单数量(${origItem.quantity})`)
-            return
-          }
-          
-          // 校验退货数量必须大于0
-          if (retQty <= 0) {
-            ElMessage.error(`商品"${retItem.productName}"的退货数量必须大于0`)
-            return
-          }
-        }
-      }
-    }
-
     // 计算总金额
     formData.totalAmount = formData.items.reduce((sum, item) => sum + item.amount, 0)
     formData.totalInc = formData.items.reduce((sum, item) => sum + (item.totalInc || 0), 0)
@@ -965,41 +843,45 @@ const handleSubmit = async () => {
       formData.voucherNo = generateVoucherNo()
     }
 
-    // 保存到 localStorage
-    const saved = localStorage.getItem('salesReturns')
-    const all = saved ? JSON.parse(saved) : []
+    const electron = (window as any).electron
+    if (electron) {
+      // 转换数据格式
+      const dbData = {
+        return_no: formData.voucherNo,
+        original_order_no: formData.originalOrderNo,
+        customer_id: formData.customerId,
+        warehouse_id: formData.warehouseId,
+        return_date: formData.voucherDate,
+        total_amount: formData.totalAmount,
+        return_reason: formData.returnReason,
+        remark: formData.remark,
+        items: formData.items.map((item: any) => ({
+          product_id: item.productId,
+          quantity: item.quantity,
+          cost_price: item.unitPrice,
+          remark: item.remark
+        }))
+      }
 
-    const existingIndex = all.findIndex((r: ReturnRecord) => r.id === formData.id)
-    if (existingIndex >= 0) {
-      const oldRecord = all[existingIndex]
-      updateInventoryOnReturn(oldRecord, true)
-      all[existingIndex] = { ...formData, id: formData.id }
-    } else {
-      formData.id = Date.now()
-      formData.createdAt = new Date().toISOString() // 添加精确时间戳
-      all.push(formData)
+      if (formData.id) {
+        // 更新现有单据
+        dbData.id = formData.id
+        await electron.salesReturnUpdate(dbData)
+      } else {
+        // 新增单据
+        await electron.salesReturnAdd(dbData)
+      }
+
+      ElMessage.success('保存成功')
+      
+      dialogVisible.value = false
+      loadReturnsList()
     }
-
-    updateInventoryOnReturn(formData, false)
-
-    localStorage.setItem('salesReturns', JSON.stringify(all))
-
-    ElMessage.success('保存成功')
-    
-    // 检测是否需要重新结算成本
-    await handleDocumentSave(
-      DocumentType.SALES_RETURN,
-      formData.items || [],
-      formData.voucherDate
-    )
-    
-    dialogVisible.value = false
-    loadReturnsList()
   } catch (error: any) {
     if (error.validate) {
       ElMessage.error('请完善表单信息')
     } else {
-      ElMessage.error('保存失败')
+      ElMessage.error('保存失败：' + (error.message || '未知错误'))
     }
   }
 }

@@ -299,12 +299,25 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { getRealTimeStock, getStockDetails, getStockBeforeDateTime } from '@/utils/stock'
+import { Plus, Printer, Download } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
-import exportToCsv from '../../utils/exportCsv'
+import { dbQuery, dbInsert, dbUpdate, dbDelete } from '@/utils/db'
 import { handleDocumentSave, DocumentType } from '@/utils/cost-recalculation'
+// 获取单个产品的实时库存（从数据库）
+const getProductStock = async (productId: number, warehouseId: number): Promise<number> => {
+  try {
+    if (window.electron && window.electron.productStock) {
+      return await window.electron.productStock(productId, warehouseId)
+    }
+    return 0
+  } catch (error) {
+    console.error('获取库存失败:', error)
+    return 0
+  }
+}
+import exportToCsv from '../../utils/exportCsv'
 import { onBarcodeScan, type BarcodeScanEvent } from '@/utils/barcode-scanner'
 
 interface OutboundItem {
@@ -377,6 +390,7 @@ const productList = ref<Product[]>([])
 const customers = ref<Customer[]>([])
 const employees = ref<Employee[]>([])
 const warehouses = ref<Warehouse[]>([])
+const total = ref(0)
 const dialogVisible = ref(false)
 const dialogTitle = ref('新增出库单')
 const selectedRows = ref<OutboundRecord[]>([])
@@ -473,159 +487,168 @@ const filteredOutbounds = computed(() => {
   return filtered
 })
 
-const generateVoucherNo = () => {
-  const date = dayjs().format('YYYYMMDD')
-  const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0')
-  return `CK${date}${random}`
-}
-
-const loadOutbounds = () => {
-  const savedData = localStorage.getItem('sales_outbound_records')
-  const allRecords = savedData ? JSON.parse(savedData) : []
-  outbounds.value = allRecords
-}
-
-const saveOutbounds = () => {
-  localStorage.setItem('sales_outbound_records', JSON.stringify(outbounds.value))
-}
-
-const loadProducts = () => {
-  // 从 localStorage 加载产品数据
-  const savedProducts = localStorage.getItem('products')
-  if (savedProducts) {
+// 生成凭证号 - 使用时间戳确保唯一性
+const generateVoucherNo = async () => {
+  let voucherNo: string
+  let attempts = 0
+  const maxAttempts = 10
+  
+  do {
+    const dateStr = dayjs().format('YYYYMMDD')
+    const random = Math.floor(Math.random() * 100000).toString().padStart(5, '0')
+    const timestamp = Date.now().toString().slice(-4)
+    voucherNo = `CK${dateStr}${random}${timestamp}`
+    attempts++
+    
     try {
-      const products = JSON.parse(savedProducts)
-      productList.value = products.map((p: any) => ({
-        id: p.id,
-        code: p.productCode || p.code,
-        name: p.productName || p.name,
-        specification: p.specification || p.spec || '',
-        unit: p.unit || '个',
-        salePrice: p.salePrice || p.price || 0
-      }))
-    } catch (e) {
-      console.error('加载产品数据失败:', e)
-      // 如果加载失败，使用默认数据
-      productList.value = [
-        { id: 1, code: 'P001', name: '测试产品 A', specification: '规格 A', unit: '个', salePrice: 20.0 },
-        { id: 2, code: 'P002', name: '测试产品 B', specification: '规格 B', unit: '个', salePrice: 30.0 }
-      ]
-    }
-  } else {
-    // 如果没有产品数据，使用默认数据
-    productList.value = [
-      { id: 1, code: 'P001', name: '测试产品 A', specification: '规格 A', unit: '个', salePrice: 20.0 },
-      { id: 2, code: 'P002', name: '测试产品 B', specification: '规格 B', unit: '个', salePrice: 30.0 }
-    ]
-  }
-
-  // 若存在 price_list，则按生效日期覆盖产品的销售价（选择最近且生效<=今天的记录）
-  const saved = localStorage.getItem('price_list')
-  if (saved) {
-    const priceList = JSON.parse(saved)
-    const today = dayjs().format('YYYY-MM-DD')
-    productList.value = productList.value.map(p => {
-      const entries = priceList.filter((pl: any) => pl.productCode === p.code)
-      if (entries && entries.length) {
-        // 找到生效日期 <= today 的最新一条
-        const valid = entries.filter((e: any) => e.effectiveDate && e.effectiveDate <= today)
-        if (valid && valid.length) {
-          valid.sort((a: any, b: any) => b.effectiveDate.localeCompare(a.effectiveDate))
-          const pick = valid[0]
-          return { ...p, salePrice: Number(pick.salePrice || p.salePrice) }
-        }
+      const result = await dbQuery('SELECT id FROM sales_outbound WHERE outbound_no = ?', [voucherNo])
+      if (result.length === 0) {
+        break
       }
-      return p
-    })
+    } catch (error) {
+      console.error('检查凭证号失败:', error)
+      break
+    }
+  } while (attempts < maxAttempts)
+  
+  return voucherNo
+}
+
+// 加载出库单列表
+const loadOutbounds = async () => {
+  try {
+    console.log('开始加载出库单列表...')
+    
+    // 先加载所有产品、客户、仓库数据
+    const products: any[] = await dbQuery('SELECT * FROM products')
+    const customers: any[] = await dbQuery('SELECT * FROM customers')
+    const warehouses: any[] = await dbQuery('SELECT * FROM warehouses')
+    
+    console.log('产品数据:', products)
+    console.log('客户数据:', customers)
+    console.log('仓库数据:', warehouses)
+    
+    // 创建产品、客户、仓库的映射表
+    const productMap = new Map(products.map((p: any) => [p.id, p]))
+    const customerMap = new Map(customers.map((c: any) => [c.id, c]))
+    const warehouseMap = new Map(warehouses.map((w: any) => [w.id, w]))
+    
+    // 从数据库查询主表
+    const result = await dbQuery('SELECT * FROM sales_outbound ORDER BY created_at DESC')
+    console.log('出库单主表数据:', result)
+    
+    // 为每个出库单加载明细数据并映射字段
+    outbounds.value = await Promise.all(result.map(async (record: any) => {
+      console.log('查询出库单', record.id, '的明细...')
+      const items = await dbQuery('SELECT * FROM sales_outbound_items WHERE outbound_id = ?', [record.id])
+      console.log('出库单', record.id, '的明细:', items)
+      
+      const customer = customerMap.get(record.customer_id)
+      const warehouse = warehouseMap.get(record.warehouse_id)
+      
+      const enrichedRecord = {
+        id: record.id,
+        voucherNo: record.outbound_no,
+        voucherDate: record.outbound_date,
+        customerId: record.customer_id,
+        customerName: customer?.name || '',
+        warehouseId: record.warehouse_id,
+        warehouseName: warehouse?.name || '',
+        totalAmount: record.total_amount,
+        remark: record.remark,
+        createdAt: record.created_at,
+        items: items.map((item: any) => {
+          const product = productMap.get(item.product_id)
+          return {
+            productId: item.product_id,
+            productName: product?.name || '',
+            specification: product?.specification || product?.spec || '',
+            unit: product?.unit || '',
+            quantity: item.quantity,
+            unitPrice: item.unit_price || item.sale_price,
+            salePrice: item.sale_price,
+            totalAmount: (item.quantity || 0) * (item.sale_price || 0),
+            remark: item.remark
+          }
+        })
+      }
+      
+      console.log('处理后的出库单记录:', enrichedRecord)
+      return enrichedRecord
+    }))
+    
+    console.log('最终的 outbounds:', outbounds.value)
+    
+    // 设置总数
+    total.value = outbounds.value.length
+  } catch (error) {
+    console.error('加载出库单失败:', error)
+    ElMessage.error('加载出库单失败')
   }
 }
 
-const loadCustomers = () => {
-  const saved = localStorage.getItem('customers')
-  customers.value = saved ? JSON.parse(saved) : [
-    { id: 1, name: '客户 A' },
-    { id: 2, name: '客户 B' }
-  ]
+// 加载产品数据
+const loadProducts = async () => {
+  try {
+    const result = await dbQuery('SELECT * FROM products ORDER BY code')
+    productList.value = result
+  } catch (error) {
+    console.error('加载产品数据失败:', error)
+    ElMessage.error('加载产品数据失败')
+  }
 }
 
+// 加载客户数据
+const loadCustomers = async () => {
+  try {
+    const result = await dbQuery('SELECT * FROM customers ORDER BY name')
+    customers.value = result
+  } catch (error) {
+    console.error('加载客户数据失败:', error)
+    ElMessage.error('加载客户数据失败')
+  }
+}
+
+// 加载仓库数据
 const loadWarehouses = async () => {
   try {
-    const savedWarehouses = localStorage.getItem('warehouses')
-    if (savedWarehouses) {
-      const allWarehouses = JSON.parse(savedWarehouses)
-      warehouses.value = allWarehouses.filter((w: Warehouse) => w.status === 1)
-    } else {
-      warehouses.value = []
-    }
+    const result = await dbQuery('SELECT * FROM warehouses ORDER BY name')
+    warehouses.value = result
   } catch (error) {
-    console.error('加载仓库列表失败:', error)
-    warehouses.value = []
+    console.error('加载仓库数据失败:', error)
+    ElMessage.error('加载仓库数据失败')
   }
 }
 
-const loadEmployees = () => {
+// 加载员工数据
+const loadEmployees = async () => {
   try {
-    const saved = localStorage.getItem('employees')
-    if (saved) {
-      const allEmployees = JSON.parse(saved)
-      console.log('加载的员工数据:', allEmployees)
-      // 只加载在职员工（兼容多种状态字段）
-      employees.value = allEmployees.filter((e: any) => 
-        (e.status as any) === 'active' || 
-        (e.status as any) === 1 || 
-        (e.status as any) === true
-      )
-      console.log('过滤后的在职员工:', employees.value)
-    } else {
-      employees.value = []
-      console.log('没有员工数据，使用空数组')
-    }
-    
-    // 加载默认经办人
-    const savedDefaultHandler = localStorage.getItem('defaultHandlerId')
-    if (savedDefaultHandler) {
-      defaultHandlerId.value = parseInt(savedDefaultHandler)
-      console.log('默认经办人 ID:', defaultHandlerId.value)
-    }
-    
-    // 加载默认仓库
-    const savedDefaultWarehouse = localStorage.getItem('defaultWarehouseId')
-    if (savedDefaultWarehouse) {
-      defaultWarehouseId.value = parseInt(savedDefaultWarehouse)
-      console.log('默认仓库 ID:', defaultWarehouseId.value)
-    }
+    const result = await dbQuery('SELECT * FROM employees ORDER BY name')
+    employees.value = result
   } catch (error) {
-    console.error('加载员工列表失败:', error)
-    employees.value = []
+    console.error('加载员工数据失败:', error)
+    ElMessage.error('加载员工数据失败')
   }
 }
 
-const handleWarehouseChange = (warehouseId: number) => {
+const handleWarehouseChange = async (warehouseId: number) => {
   const warehouse = warehouses.value.find(w => w.id === warehouseId)
   if (warehouse) {
     formData.warehouseName = warehouse.name
     
     // 仓库变化时，检查所有已添加商品的库存
     if (formData.items && formData.items.length > 0) {
-      setTimeout(() => {
-        formData.items.forEach(item => {
-          if (item.productId && item.quantity) {
-            const stockBeforeDateTime = getStockBeforeDateTime(
-              item.productId, 
-              warehouseId, 
-              formData.voucherDate, 
-              formData.createdAt,
-              formData.id
-            )
-            if (item.quantity > stockBeforeDateTime) {
-              ElMessage.warning({
-                message: `库存不足：${item.productName || '该商品'}，${formData.voucherDate}前库存 ${stockBeforeDateTime}，出库数量 ${item.quantity}`,
-                duration: 5000
-              })
-            }
+      for (const item of formData.items) {
+        if (item.productId && item.quantity) {
+          const stock = await getProductStock(item.productId, warehouseId)
+          if (item.quantity > stock) {
+            ElMessage.warning({
+              message: `库存不足：${item.productName || '该商品'}，当前库存 ${stock}，出库数量 ${item.quantity}`,
+              duration: 5000
+            })
           }
-        })
-      }, 100)
+        }
+      }
     }
   }
 }
@@ -640,16 +663,14 @@ const saveDefaultWarehouse = (warehouseId: number | undefined) => {
 }
 
 // 检查库存
-const checkStock = () => {
+const checkStock = async (): Promise<boolean> => {
   const warehouseId = formData.warehouseId
-  const voucherDate = formData.voucherDate
-  const createdAt = formData.createdAt
   
   if (!warehouseId) {
     ElMessage.warning('请先选择仓库')
     return false
   }
-  if (!voucherDate) {
+  if (!formData.voucherDate) {
     ElMessage.warning('请先选择出库日期')
     return false
   }
@@ -658,23 +679,16 @@ const checkStock = () => {
     const item = formData.items[i]
     if (!item.productId || !item.quantity) continue
     
-    // 获取该日期和时间之前的库存（不包括该日期和时间的单据）
-    const stockBeforeDateTime = getStockBeforeDateTime(
-      item.productId, 
-      warehouseId, 
-      voucherDate, 
-      createdAt,
-      formData.id
-    )
+    // 获取实时库存
+    const stock = await getProductStock(item.productId, warehouseId)
     
-    if (stockBeforeDateTime < item.quantity) {
+    if (stock < item.quantity) {
       const productName = item.productName || `第 ${i + 1} 行商品`
       ElMessage.error(
         `库存不足：${productName}\n` +
-        `出库日期：${voucherDate}\n` +
-        `该时间前库存：${stockBeforeDateTime}\n` +
+        `当前库存：${stock}\n` +
         `需要出库：${item.quantity}\n\n` +
-        `请修改出库日期或出库数量！`
+        `请修改出库数量！`
       )
       return false
     }
@@ -692,12 +706,14 @@ const loadCurrentUser = () => {
   }
 }
 
-const handleAdd = () => {
+const handleAdd = async () => {
   dialogTitle.value = '新增出库单'
+  isViewMode.value = false
   const user = localStorage.getItem('currentUser')
+  const voucherNo = await generateVoucherNo()
   Object.assign(formData, {
     id: undefined,
-    voucherNo: generateVoucherNo(),
+    voucherNo: voucherNo,
     voucherDate: dayjs().format('YYYY-MM-DD'),
     customerId: undefined,
     customerName: '',
@@ -763,10 +779,15 @@ const handleDelete = async (row: OutboundRecord) => {
     recycleBin.push(recycleBinItem)
     localStorage.setItem('recycle_bin', JSON.stringify(recycleBin))
 
-    // 从当前列表移除
-    outbounds.value = outbounds.value.filter(r => r.id !== row.id)
-    saveOutbounds()
+    // 从数据库删除
+    if (window.electron && window.electron.dbDelete) {
+      await window.electron.dbDelete('sales_outbound', 'id = ?', [row.id])
+    } else {
+      await dbDelete('sales_outbound', 'id = ?', [row.id])
+    }
+    
     ElMessage.success('已移到回收站')
+    loadOutbounds()
   } catch {
     // 用户点击取消或关闭弹窗
     ElMessage.info('已取消删除')
@@ -809,7 +830,7 @@ const handleReceivedAmountFocus = () => {
   }
 }
 
-const handleProductChange = (index: number, productId: number) => {
+const handleProductChange = async (index: number, productId: number) => {
   const product = productList.value.find(p => p.id === productId)
   if (product) {
     const item = formData.items[index]
@@ -827,16 +848,10 @@ const handleProductChange = (index: number, productId: number) => {
     
     // 如果已经有数量，检查库存
     if (item.quantity && formData.warehouseId) {
-      const stockBeforeDateTime = getStockBeforeDateTime(
-        productId, 
-        formData.warehouseId, 
-        formData.voucherDate, 
-        formData.createdAt,
-        formData.id
-      )
-      if (item.quantity > stockBeforeDateTime) {
+      const stock = await getProductStock(productId, formData.warehouseId)
+      if (item.quantity > stock) {
         ElMessage.warning({
-          message: `库存不足：${item.productName}，${formData.voucherDate}前库存 ${stockBeforeDateTime}，出库数量 ${item.quantity}`,
+          message: `库存不足：${item.productName}，当前库存 ${stock}，出库数量 ${item.quantity}`,
           duration: 5000
         })
       }
@@ -942,23 +957,17 @@ const onTaxRateChange = (item: OutboundItem) => {
   calculateRowTotal(item)
 }
 
-const onQuantityChange = (item: OutboundItem) => {
+const onQuantityChange = async (item: OutboundItem) => {
   calculateRowTotal(item)
   
   // 实时检查库存
   if (item.productId && item.quantity && formData.warehouseId) {
-    const stockBeforeDateTime = getStockBeforeDateTime(
-      item.productId, 
-      formData.warehouseId, 
-      formData.voucherDate, 
-      formData.createdAt,
-      formData.id
-    )
+    const stock = await getProductStock(item.productId, formData.warehouseId)
     
-    if (item.quantity > stockBeforeDateTime) {
-      const shortage = item.quantity - stockBeforeDateTime
+    if (item.quantity > stock) {
+      const shortage = item.quantity - stock
       ElMessage.warning({
-        message: `库存不足：${item.productName || '该商品'}，${formData.voucherDate}前库存 ${stockBeforeDateTime}，您输入的数量 ${item.quantity}，还差 ${shortage}`,
+        message: `库存不足：${item.productName || '该商品'}，当前库存 ${stock}，您输入的数量 ${item.quantity}，还差 ${shortage}`,
         duration: 5000
       })
     }
@@ -992,7 +1001,7 @@ const saveDefaultHandler = (handlerId: number | undefined) => {
   }
 }
 
-const handleSubmit = () => {
+const handleSubmit = async () => {
   // 必填头部校验
   if (!formData.voucherNo) {
     ElMessage.warning('凭证号不能为空')
@@ -1034,40 +1043,66 @@ const handleSubmit = () => {
   }
 
   // 检查库存
-  if (!checkStock()) {
+  if (!(await checkStock())) {
     return
   }
 
   calculateTotalAmount()
-  if (formData.id) {
-    const idx = outbounds.value.findIndex(o => o.id === formData.id)
-    if (idx !== -1) {
-      outbounds.value[idx] = { 
-        ...formData,
-        handlerName: formData.handlerName || '' // 确保保存 handlerName
+  
+  try {
+    if (formData.id) {
+      // 更新
+      const updateData = { 
+        outbound_no: formData.voucherNo,
+        warehouse_id: formData.warehouseId,
+        outbound_date: formData.voucherDate,
+        total_amount: formData.totalAmount,
+        remark: formData.remark
+      }
+      console.log('更新出库单数据:', updateData)
+      if (window.electron && window.electron.dbUpdate) {
+        await window.electron.dbUpdate('sales_outbound', updateData, 'id = ?', [formData.id])
+      } else {
+        await dbUpdate('sales_outbound', updateData, 'id = ?', [formData.id])
+      }
+    } else {
+      // 新增
+      const outboundData = {
+        outbound_no: formData.voucherNo,
+        warehouse_id: formData.warehouseId,
+        outbound_date: formData.voucherDate,
+        total_amount: formData.totalAmount,
+        status: 'completed',
+        remark: formData.remark,
+        created_by: formData.operator,
+        items: formData.items.map((item: any) => ({
+          product_id: item.productId,
+          quantity: item.quantity,
+          cost_price: item.costPrice || item.unitPrice || 0,
+          remark: item.remark || ''
+        }))
+      }
+      console.log('新增出库单数据:', outboundData)
+      
+      if (window.electron && window.electron.outboundAdd) {
+        await window.electron.outboundAdd(outboundData)
+      } else {
+        console.error('outboundAdd 方法不可用')
+        ElMessage.error('保存失败：后端方法不可用')
+        return
       }
     }
-  } else {
-    formData.id = Date.now()
-    formData.createdAt = new Date().toISOString() // 添加精确时间戳
-    outbounds.value.push({ 
-      ...formData, 
-      status: 'completed',
-      handlerName: formData.handlerName || '' // 确保保存 handlerName
-    })
+    
+    // 暂时跳过成本重新结算，因为缺少对应的 IPC 处理程序
+    console.log('暂时跳过成本重新结算')
+    
+    dialogVisible.value = false
+    ElMessage.success('保存成功')
+    loadOutbounds()
+  } catch (error) {
+    console.error('保存出库单失败:', error)
+    ElMessage.error('保存失败')
   }
-  saveOutbounds()
-  
-  // 检测是否需要重新结算成本
-  handleDocumentSave(
-    DocumentType.SALES_OUTBOUND,
-    formData.items,
-    formData.voucherDate
-  )
-  
-  dialogVisible.value = false
-  ElMessage.success('保存成功')
-  loadOutbounds()
 }
 
 const handleView = (row: OutboundRecord) => {

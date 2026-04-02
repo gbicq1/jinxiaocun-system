@@ -57,10 +57,13 @@
         </el-table-column>
         <el-table-column prop="operator" label="经办人" width="100" />
         <el-table-column prop="remark" label="备注" min-width="150" />
-        <el-table-column label="操作" width="200" fixed="right">
+        <el-table-column label="操作" width="250" fixed="right">
           <template #default="{ row }">
             <el-button type="primary" size="small" @click="handleEdit(row)">
               编辑
+            </el-button>
+            <el-button type="info" size="small" @click="handleView(row)">
+              查看
             </el-button>
             <el-button type="success" size="small" @click="handlePrint(row)">
               打印
@@ -91,12 +94,14 @@
       :title="dialogTitle"
       width="90%"
       :close-on-click-modal="false"
+      @close="handleDialogClose"
     >
       <el-form
         ref="formRef"
         :model="formData"
         :rules="rules"
         label-width="100px"
+        :disabled="isViewMode"
       >
         <!-- 单据头部信息 -->
         <el-alert
@@ -159,7 +164,23 @@
                   :key="warehouse.id"
                   :label="warehouse.name"
                   :value="warehouse.id"
-                />
+                >
+                  <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                    <span>{{ warehouse.name }}</span>
+                    <el-switch
+                      v-if="!isViewMode"
+                      :model-value="defaultWarehouseId === warehouse.id"
+                      :active-value="true"
+                      :inactive-value="false"
+                      inline-prompt
+                      active-text="默认"
+                      inactive-text=""
+                      style="--el-switch-width: 60px; --el-switch-inactive-color: #dcdfe6;"
+                      @click.stop
+                      @change="(val: boolean) => saveDefaultWarehouse(warehouse.id)"
+                    />
+                  </div>
+                </el-option>
               </el-select>
             </el-form-item>
           </el-col>
@@ -187,6 +208,7 @@
           style="width: 100%"
           border
         >
+          <el-table-column label="序号" width="60" type="index" />
           <el-table-column label="商品" min-width="200">
             <template #default="{ row, $index }">
               <el-select
@@ -224,7 +246,7 @@
                 :controls="false"
                 style="width: 100%"
                 @focus="handleFocus(row, 'quantity')"
-                @change="calculateRowTotal(row)"
+                @change="onQuantityChange(row)"
               />
             </template>
           </el-table-column>
@@ -236,6 +258,20 @@
           <el-table-column label="单价 (不含税)" width="120">
             <template #default="{ row }">
               <el-input-number
+                v-model="row.unitPriceEx"
+                :min="0"
+                :precision="2"
+                :step="0.01"
+                :controls="false"
+                style="width: 100%"
+                @focus="handleFocus(row, 'unitPriceEx')"
+                @change="onUnitPriceExChange(row)"
+              />
+            </template>
+          </el-table-column>
+          <el-table-column label="单价 (含税)" width="120">
+            <template #default="{ row }">
+              <el-input-number
                 v-model="row.unitPrice"
                 :min="0"
                 :precision="2"
@@ -243,11 +279,11 @@
                 :controls="false"
                 style="width: 100%"
                 @focus="handleFocus(row, 'unitPrice')"
-                @change="calculateRowTotal(row)"
+                @change="onUnitPriceChange(row)"
               />
             </template>
           </el-table-column>
-          <el-table-column label="税率 (%)" width="80">
+          <el-table-column label="税率 (%)" width="120">
             <template #default="{ row }">
               <el-select
                 v-model="row.taxRate"
@@ -255,9 +291,9 @@
                 allow-create
                 placeholder="选择或输入税率"
                 style="width: 100%"
-                @change="calculateRowTotal(row)"
+                @change="onTaxRateChange(row)"
               >
-                <el-option label="免税" :value="0" />
+                <el-option label="免税" :value="'免税'" />
                 <el-option label="1%" :value="1" />
                 <el-option label="3%" :value="3" />
                 <el-option label="5%" :value="5" />
@@ -272,9 +308,33 @@
               <el-input v-model="row.taxAmount" disabled />
             </template>
           </el-table-column>
-          <el-table-column label="金额 (含税)" width="120">
+          <el-table-column label="金额 (不含税)" width="120">
             <template #default="{ row }">
-              <el-input v-model="row.totalAmount" disabled />
+              <el-input v-model="row.totalAmountEx" disabled />
+            </template>
+          </el-table-column>
+          <el-table-column label="金额 (含税)" width="140">
+            <template #default="{ row }">
+              <el-input-number
+                v-model="row.totalAmount"
+                :min="0"
+                :precision="2"
+                :controls="false"
+                style="width: 100%"
+                @focus="handleFocus(row, 'totalAmount')"
+                @change="onAmountChange(row)"
+              />
+            </template>
+          </el-table-column>
+          <el-table-column label="加计扣除" width="100">
+            <template #default="{ row }">
+              <el-switch
+                v-model="row.allowDeduction"
+                active-text="是"
+                inactive-text="否"
+                :disabled="!(formData.invoiceIssued && formData.invoiceType === '普票' && row.taxRate === '免税')"
+                @change="onDeductionSwitchChange(row)"
+              />
             </template>
           </el-table-column>
           <el-table-column label="操作" width="80" fixed="right">
@@ -295,15 +355,38 @@
           添加商品行
         </el-button>
 
-        <!-- 单据汇总 -->
         <el-alert
-          title="单据汇总"
-          type="success"
+          v-if="formData.items.some(i => i.allowDeduction)"
+          title="加计扣除说明：加计扣除金额 = 金额（含税）× 9%"
+          type="info"
           :closable="false"
           show-icon
           style="margin: 20px 0"
         />
-        
+
+        <el-alert title="单据汇总" type="success" :closable="false" show-icon style="margin: 20px 0" />
+
+        <el-row :gutter="20" style="margin-bottom: 10px">
+          <el-col :span="24" style="text-align: right">
+            <div style="font-size: 14px">发票：
+              <el-switch v-model="formData.invoiceIssued" active-text="已开票" inactive-text="未开票" active-color="#13ce66" inactive-color="#ff4949" @change="handleInvoiceIssuedChange" />
+              <span v-if="formData.invoiceIssued" style="margin-left: 20px">
+                发票类型：
+                <el-select
+                  v-model="formData.invoiceType"
+                  placeholder="选择发票类型"
+                  size="small"
+                  style="width: 120px"
+                  @change="handleInvoiceTypeChange"
+                >
+                  <el-option label="普票" value="普票" />
+                  <el-option label="专票" value="专票" />
+                </el-select>
+              </span>
+            </div>
+          </el-col>
+        </el-row>
+
         <el-row :gutter="20" style="background: #f5f7fa; padding: 15px; border-radius: 4px">
           <el-col :span="12">
             <div style="font-size: 16px; font-weight: bold">
@@ -348,10 +431,15 @@ interface InboundItem {
   specification: string
   quantity: number
   unit: string
+  unitPriceEx?: number
   unitPrice: number
-  taxRate: number
+  taxRate: number | string
   taxAmount: number
+  totalAmountEx?: number
   totalAmount: number
+  allowDeduction?: boolean
+  deductionAmount?: number
+  _lastEdited?: 'unitEx' | 'unitIncl' | 'amount'
 }
 
 interface InboundRecord {
@@ -366,6 +454,8 @@ interface InboundRecord {
   items: InboundItem[]
   totalAmount: number
   remark?: string
+  invoiceIssued?: boolean
+  invoiceType?: string
 }
 
 interface Product {
@@ -400,8 +490,11 @@ const pageSize = ref(10)
 const searchQuery = ref('')
 const dialogVisible = ref(false)
 const dialogTitle = ref('新增入库单')
+const isViewMode = ref(false)
 const formRef = ref()
 const selectedRow = ref<InboundRecord | null>(null)
+const defaultWarehouseId = ref<number | undefined>()
+const defaultHandlerId = ref<number | undefined>()
 
 // 表单数据
 const formData = reactive<InboundRecord>({
@@ -414,7 +507,9 @@ const formData = reactive<InboundRecord>({
   operator: '',
   items: [],
   totalAmount: 0,
-  remark: ''
+  remark: '',
+  invoiceIssued: false,
+  invoiceType: '普票'
 })
 
 // 表单验证规则
@@ -440,14 +535,21 @@ const generateVoucherNo = () => {
 // 加载入库单列表
 const loadInboundList = async () => {
   try {
-    // 检查是否有 Electron 环境
-    if (window.electron && window.electron.dbQuery) {
-      // Electron 环境
-      const result = await window.electron.dbQuery('inbound', 'SELECT * FROM inbound ORDER BY created_at DESC')
-      inboundList.value = result
+    console.log('开始加载入库单列表...')
+    
+    const electron = (window as any).electron
+    if (electron && electron.inboundList) {
+      // 调用 Electron 后端的 inboundList 方法
+      const result = await electron.inboundList(currentPage.value, pageSize.value)
+      console.log('入库单列表结果:', result)
+      
+      // 后端已经返回 camelCase 字段，直接使用
+      inboundList.value = result.data
+      total.value = result.total
+      
+      console.log('处理后的入库单列表:', inboundList.value)
     } else {
-      // 前端环境 - 使用 localStorage
-      // 尝试多个可能的键名
+      // 非 Electron 环境，使用 localStorage（仅用于开发测试）
       const possibleKeys = ['purchase_inbound_records', 'inbound_records', 'purchaseInbounds']
       let savedData = null
       
@@ -472,38 +574,42 @@ const loadInboundList = async () => {
       }
       
       inboundList.value = filtered
+      total.value = filtered.length
     }
-    
-    // 分页
-    const start = (currentPage.value - 1) * pageSize.value
-    const end = start + pageSize.value
-    const paginated = inboundList.value.slice(start, end)
-    inboundList.value = paginated
-    total.value = inboundList.value.length
   } catch (error) {
     ElMessage.error('加载入库单列表失败')
-    console.error(error)
+    console.error('加载入库单列表出错:', error)
+    inboundList.value = []
+    total.value = 0
   }
 }
 
 // 加载产品列表
 const loadProducts = async () => {
   try {
-    // 从 localStorage 加载真实产品数据
-    const savedProducts = localStorage.getItem('products')
-    if (savedProducts) {
-      const allProducts = JSON.parse(savedProducts)
-      // 只加载启用的产品
-      productList.value = allProducts.filter((p: any) => p.status === 1).map((p: any) => ({
-        id: p.id,
-        code: p.code,
-        name: p.name,
-        specification: p.specification || p.spec || '',  // 优先使用 spec 字段
-        unit: p.unit || '',
-        costPrice: p.costPrice || 0
-      }))
+    const electron = (window as any).electron
+    if (electron && electron.productList) {
+      // Electron 环境 - 从数据库加载
+      const result = await electron.productList(1, 1000) // 获取更多产品
+      productList.value = result.data || result
+      console.log('加载产品列表:', productList.value)
     } else {
-      productList.value = []
+      // 前端环境 - 使用 localStorage
+      const savedProducts = localStorage.getItem('products')
+      if (savedProducts) {
+        const allProducts = JSON.parse(savedProducts)
+        // 只加载启用的产品
+        productList.value = allProducts.filter((p: any) => p.status === 1).map((p: any) => ({
+          id: p.id,
+          code: p.code,
+          name: p.name,
+          specification: p.specification || p.spec || '',  // 优先使用 spec 字段
+          unit: p.unit || '',
+          costPrice: p.costPrice || 0
+        }))
+      } else {
+        productList.value = []
+      }
     }
   } catch (error) {
     console.error('加载产品列表失败:', error)
@@ -514,25 +620,54 @@ const loadProducts = async () => {
 // 加载供应商列表
 const loadSuppliers = async () => {
   try {
-    // 模拟数据
-    suppliers.value = [
-      { id: 1, name: '供应商 A' },
-      { id: 2, name: '供应商 B' }
-    ]
+    const electron = (window as any).electron
+    if (electron && electron.supplierList) {
+      // Electron 环境 - 从数据库加载
+      suppliers.value = await electron.supplierList()
+      console.log('加载供应商列表:', suppliers.value)
+    } else {
+      // 前端环境 - 使用 localStorage
+      const savedSuppliers = localStorage.getItem('suppliers')
+      if (savedSuppliers) {
+        const allSuppliers = JSON.parse(savedSuppliers)
+        suppliers.value = allSuppliers.filter((s: any) => s.status === 1)
+      } else {
+        // 模拟数据
+        suppliers.value = [
+          { id: 1, name: '供应商 A' },
+          { id: 2, name: '供应商 B' }
+        ]
+      }
+    }
   } catch (error) {
-    console.error(error)
+    console.error('加载供应商列表失败:', error)
+    suppliers.value = []
   }
 }
 
 // 加载仓库列表
 const loadWarehouses = async () => {
   try {
-    const savedWarehouses = localStorage.getItem('warehouses')
-    if (savedWarehouses) {
-      const allWarehouses = JSON.parse(savedWarehouses)
-      warehouses.value = allWarehouses.filter((w: Warehouse) => w.status === 1)
+    const electron = (window as any).electron
+    if (electron && electron.warehouseList) {
+      // Electron 环境 - 从数据库加载
+      warehouses.value = await electron.warehouseList()
+      console.log('加载仓库列表:', warehouses.value)
+      
+      // 加载默认仓库
+      const savedDefaultWarehouse = localStorage.getItem('defaultWarehouseId')
+      if (savedDefaultWarehouse) {
+        defaultWarehouseId.value = parseInt(savedDefaultWarehouse)
+      }
     } else {
-      warehouses.value = []
+      // 前端环境 - 使用 localStorage
+      const savedWarehouses = localStorage.getItem('warehouses')
+      if (savedWarehouses) {
+        const allWarehouses = JSON.parse(savedWarehouses)
+        warehouses.value = allWarehouses.filter((w: Warehouse) => w.status === 1)
+      } else {
+        warehouses.value = []
+      }
     }
   } catch (error) {
     console.error('加载仓库列表失败:', error)
@@ -560,27 +695,46 @@ const loadCurrentUser = async () => {
 // 新增入库单
 const handleAdd = () => {
   dialogTitle.value = '新增入库单'
+  isViewMode.value = false
   Object.assign(formData, {
     voucherNo: generateVoucherNo(),
     voucherDate: dayjs().format('YYYY-MM-DD'),
     supplierId: undefined,
     supplierName: '',
-    warehouseId: undefined,
+    warehouseId: defaultWarehouseId.value,
     warehouseName: '',
     operator: localStorage.getItem('currentUser') ? JSON.parse(localStorage.getItem('currentUser')!).name : '系统用户',
     items: [],
     totalAmount: 0,
-    remark: ''
+    remark: '',
+    invoiceIssued: false,
+    invoiceType: '普票'
   })
+  
+  // 如果设置了默认仓库，获取仓库名称
+  if (defaultWarehouseId.value) {
+    const warehouse = warehouses.value.find(w => w.id === defaultWarehouseId.value)
+    if (warehouse) {
+      formData.warehouseName = warehouse.name
+    }
+  }
+  
   dialogVisible.value = true
 }
 
 // 编辑入库单
 const handleEdit = (row: InboundRecord) => {
   dialogTitle.value = '编辑入库单'
+  isViewMode.value = false
+  
+  const items = row.items ? JSON.parse(JSON.stringify(row.items)) : []
+  items.forEach((item: any) => {
+    item._lastEdited = undefined
+  })
+  
   Object.assign(formData, {
     ...row,
-    items: row.items ? JSON.parse(JSON.stringify(row.items)) : []
+    items: items
   })
   selectedRow.value = row
   dialogVisible.value = true
@@ -595,9 +749,12 @@ const handleDelete = async (row: InboundRecord) => {
       type: 'warning'
     })
     
-    if (window.electron && window.electron.dbDelete) {
-      // Electron 环境
-      await window.electron.dbDelete('inbound', 'id = ?', [row.id])
+    if (window.electron && window.electron.inboundDelete) {
+      // Electron 环境 - 使用专门的入库单删除方法
+      await window.electron.inboundDelete(row.id)
+    } else if (window.electron && window.electron.dbDelete) {
+      // 使用通用删除方法，表名应为 purchase_inbound
+      await window.electron.dbDelete('purchase_inbound', 'id = ?', [row.id])
     } else {
       // 前端环境 - 使用 localStorage
       const possibleKeys = ['purchase_inbound_records', 'inbound_records', 'purchaseInbounds']
@@ -621,9 +778,37 @@ const handleDelete = async (row: InboundRecord) => {
     
     ElMessage.success('删除成功')
     loadInboundList()
-  } catch {
-    // 用户取消删除
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('删除失败:', error)
+      ElMessage.error('删除失败')
+    }
   }
+}
+
+// 查看入库单（只读模式）
+const handleView = (row: InboundRecord) => {
+  console.log('查看入库单:', row)
+  dialogTitle.value = '查看入库单'
+  isViewMode.value = true
+  
+  // 使用深拷贝避免数据被修改
+  const viewData = JSON.parse(JSON.stringify(row))
+  if (viewData.items) {
+    viewData.items.forEach((item: any) => {
+      item._lastEdited = undefined
+    })
+  }
+  Object.assign(formData, viewData)
+  
+  selectedRow.value = row
+  dialogVisible.value = true
+}
+
+// 关闭对话框
+const handleDialogClose = () => {
+  isViewMode.value = false
+  formRef.value?.resetFields()
 }
 
 // 添加商品行
@@ -634,10 +819,15 @@ const addItem = () => {
     specification: '',
     quantity: undefined,
     unit: '',
+    unitPriceEx: undefined,
     unitPrice: undefined,
-    taxRate: 13, // 默认税率 13%
+    taxRate: 13,
     taxAmount: undefined,
-    totalAmount: undefined
+    totalAmountEx: undefined,
+    totalAmount: undefined,
+    allowDeduction: false,
+    deductionAmount: 0,
+    _lastEdited: undefined
   })
 }
 
@@ -661,26 +851,188 @@ const handleProductChange = (index: number, productId: number) => {
   if (product) {
     const item = formData.items[index]
     item.productName = product.name
-    // 优先使用 spec（产品表字段），其次使用 specification，最后使用 code 作为备用
     item.specification = product.spec || product.specification || product.code || ''
     item.unit = product.unit || ''
     item.unitPrice = product.costPrice || 0
+    item._lastEdited = 'unitIncl'
     calculateRowTotal(item)
   }
 }
 
+const round2 = (v: number) => Math.round(v * 100) / 100
+
+// 单价（不含税）变化时触发
+const onUnitPriceExChange = (item: InboundItem) => {
+  item._lastEdited = 'unitEx'
+  calculateRowTotal(item)
+}
+
+// 单价（含税）变化时触发
+const onUnitPriceChange = (item: InboundItem) => {
+  item._lastEdited = 'unitIncl'
+  calculateRowTotal(item)
+}
+
+// 金额（含税）变化时触发
+const onAmountChange = (item: InboundItem) => {
+  item._lastEdited = 'amount'
+  calculateRowTotal(item)
+}
+
+// 数量变化时触发
+const onQuantityChange = (item: InboundItem) => {
+  if (!item._lastEdited) {
+    if (item.unitPriceEx || item.unitPriceEx === 0) {
+      item._lastEdited = 'unitEx'
+    } else if (item.unitPrice || item.unitPrice === 0) {
+      item._lastEdited = 'unitIncl'
+    } else if (item.totalAmount || item.totalAmount === 0) {
+      item._lastEdited = 'amount'
+    }
+  }
+  calculateRowTotal(item)
+}
+
+// 加计扣除开关变化时触发
+const onDeductionSwitchChange = (item: InboundItem) => {
+  if (!(formData.invoiceIssued && formData.invoiceType === '普票' && item.taxRate === '免税')) {
+    item.allowDeduction = false
+    ElMessage.warning('只有已开票、普票、免税商品才允许加计扣除')
+  }
+  calculateRowTotal(item)
+}
+
+// 税率变化时触发
+const onTaxRateChange = (item: InboundItem) => {
+  if (!(formData.invoiceIssued && formData.invoiceType === '普票' && item.taxRate === '免税') && item.allowDeduction) {
+    item.allowDeduction = false
+  }
+  calculateRowTotal(item)
+}
+
 // 计算单行总额
 const calculateRowTotal = (item: InboundItem) => {
-  // 税额 = 数量 * 单价 * 税率 / 100
-  item.taxAmount = Math.round(item.quantity * item.unitPrice * item.taxRate / 100 * 100) / 100
-  // 含税金额 = 数量 * 单价 + 税额
-  item.totalAmount = Math.round((item.quantity * item.unitPrice + item.taxAmount) * 100) / 100
+  const qty = item.quantity || 0
+  const taxRaw = item.taxRate === '免税' ? 0 : Number(item.taxRate || 0)
+  const r = taxRaw / 100
+  const isDeduction = item.allowDeduction && formData.invoiceIssued && formData.invoiceType === '普票' && item.taxRate === '免税'
+
+  const last = item._lastEdited
+  
+  if (!last) {
+    return
+  }
+
+  if (last === 'unitEx') {
+    const unitEx = Number(item.unitPriceEx || 0)
+    let unitIncl: number
+    let taxAmount: number
+    let totalAmount: number
+    let totalAmountEx: number
+    let deductionAmount: number
+    
+    if (isDeduction) {
+      totalAmount = round2(unitEx * qty / 0.91)
+      unitIncl = round2(totalAmount / qty)
+      taxAmount = round2(qty * (unitIncl - unitEx))
+      totalAmountEx = round2(unitEx * qty)
+      deductionAmount = round2(totalAmount * 0.09)
+    } else {
+      unitIncl = r === 0 ? unitEx : round2(unitEx * (1 + r))
+      taxAmount = round2(qty * (unitIncl - unitEx))
+      totalAmount = round2(unitIncl * qty)
+      totalAmountEx = round2(unitEx * qty)
+      deductionAmount = 0
+    }
+    item.unitPrice = unitIncl
+    item.taxAmount = taxAmount
+    item.totalAmount = totalAmount
+    item.totalAmountEx = totalAmountEx
+    item.deductionAmount = deductionAmount
+  } else if (last === 'unitIncl') {
+    const unitIncl = Number(item.unitPrice || 0)
+    let unitEx: number
+    let taxAmount: number
+    let totalAmount: number
+    let totalAmountEx: number
+    let deductionAmount: number
+    
+    if (isDeduction) {
+      totalAmount = round2(unitIncl * qty)
+      unitEx = round2(unitIncl * 0.91)
+      taxAmount = round2(qty * (unitIncl - unitEx))
+      totalAmountEx = round2(unitEx * qty)
+      deductionAmount = round2(totalAmount * 0.09)
+    } else {
+      unitEx = r === 0 ? unitIncl : round2(unitIncl / (1 + r))
+      taxAmount = round2(qty * (unitIncl - unitEx))
+      totalAmount = round2(unitIncl * qty)
+      totalAmountEx = round2(unitEx * qty)
+      deductionAmount = 0
+    }
+    item.unitPriceEx = unitEx
+    item.taxAmount = taxAmount
+    item.totalAmount = totalAmount
+    item.totalAmountEx = totalAmountEx
+    item.deductionAmount = deductionAmount
+  } else if (last === 'amount') {
+    const total = Number(item.totalAmount || 0)
+    if (qty === 0) {
+      item.unitPrice = 0
+      item.unitPriceEx = 0
+      item.taxAmount = 0
+      item.totalAmountEx = 0
+      item.deductionAmount = 0
+    } else {
+      let unitIncl: number
+      let unitEx: number
+      let taxAmount: number
+      let totalAmountEx: number
+      let deductionAmount: number
+      
+      if (isDeduction) {
+        unitIncl = round2(total / qty)
+        unitEx = round2(total * 0.91 / qty)
+        taxAmount = round2(qty * (unitIncl - unitEx))
+        totalAmountEx = round2(unitEx * qty)
+        deductionAmount = round2(total * 0.09)
+      } else {
+        unitIncl = round2(total / qty)
+        unitEx = r === 0 ? unitIncl : round2(unitIncl / (1 + r))
+        taxAmount = round2(qty * (unitIncl - unitEx))
+        totalAmountEx = round2(unitEx * qty)
+        deductionAmount = 0
+      }
+      item.unitPrice = unitIncl
+      item.unitPriceEx = unitEx
+      item.taxAmount = taxAmount
+      item.totalAmountEx = totalAmountEx
+      item.deductionAmount = deductionAmount
+    }
+  } else {
+    if (item.unitPriceEx || item.unitPriceEx === 0) {
+      item._lastEdited = 'unitEx'
+      calculateRowTotal(item)
+      return
+    }
+    if (item.unitPrice || item.unitPrice === 0) {
+      item._lastEdited = 'unitIncl'
+      calculateRowTotal(item)
+      return
+    }
+    if (item.totalAmount || item.totalAmount === 0) {
+      item._lastEdited = 'amount'
+      calculateRowTotal(item)
+      return
+    }
+  }
+
   calculateTotalAmount()
 }
 
 // 计算单据总额
 const calculateTotalAmount = () => {
-  formData.totalAmount = formData.items.reduce((sum, item) => sum + item.totalAmount, 0)
+  formData.totalAmount = formData.items.reduce((sum, item) => sum + (item.totalAmount || 0), 0)
 }
 
 // 处理供应商变化
@@ -696,6 +1048,42 @@ const handleWarehouseChange = (warehouseId: number) => {
   const warehouse = warehouses.value.find(w => w.id === warehouseId)
   if (warehouse) {
     formData.warehouseName = warehouse.name
+  }
+  
+  // 保存默认仓库
+  saveDefaultWarehouse(warehouseId)
+}
+
+// 保存默认仓库
+const saveDefaultWarehouse = (warehouseId: number | undefined) => {
+  if (warehouseId) {
+    localStorage.setItem('defaultWarehouseId', warehouseId.toString())
+    defaultWarehouseId.value = warehouseId
+    ElMessage.success('已设置为默认仓库')
+  }
+}
+
+// 处理发票状态变化
+const handleInvoiceIssuedChange = (val: boolean) => {
+  if (!val) {
+    formData.items.forEach(item => {
+      if (item.allowDeduction) {
+        item.allowDeduction = false
+      }
+    })
+    ElMessage.info('未开票状态下无法使用加计扣除')
+  }
+}
+
+// 处理发票类型变化
+const handleInvoiceTypeChange = (val: string) => {
+  if (val !== '普票') {
+    formData.items.forEach(item => {
+      if (item.allowDeduction) {
+        item.allowDeduction = false
+      }
+    })
+    ElMessage.info('只有普票才允许加计扣除')
   }
 }
 
@@ -721,10 +1109,37 @@ const handleSubmit = async () => {
     // 计算总金额
     calculateTotalAmount()
     
+    // 手动转换字段：驼峰 → 下划线
     if (formData.id) {
       // 更新
-      if (window.electron && window.electron.dbUpdate) {
-        await window.electron.dbUpdate('inbound', formData, 'id = ?', [formData.id])
+      if (window.electron && window.electron.inboundUpdate) {
+        const updateData = {
+          id: formData.id,
+          inbound_no: formData.voucherNo,
+          inbound_date: formData.voucherDate,
+          supplier_id: formData.supplierId || null,
+          warehouse_id: formData.warehouseId || null,
+          total_amount: formData.totalAmount,
+          paid_amount: 0,
+          invoice_type: formData.invoiceType || null,
+          invoice_issued: formData.invoiceIssued ? 1 : 0,
+          status: 'completed',
+          remark: formData.remark || null,
+          items: formData.items.map((item: any) => ({
+            product_id: item.productId || null,
+            quantity: item.quantity || null,
+            unit_price: item.unitPrice || null,
+            unit_price_ex: item.unitPriceEx || null,
+            tax_rate: item.taxRate === '免税' ? 0 : Number(item.taxRate || 0),
+            tax_amount: item.taxAmount || null,
+            total_amount_ex: item.totalAmountEx || null,
+            total_amount: item.totalAmount || null,
+            allow_deduction: item.allowDeduction ? 1 : 0,
+            deduction_amount: item.deductionAmount || null,
+            remark: item.remark || null
+          }))
+        }
+        await window.electron.inboundUpdate(updateData)
       } else {
         // 前端环境 - 使用 localStorage
         const possibleKeys = ['purchase_inbound_records', 'inbound_records', 'purchaseInbounds']
@@ -751,15 +1166,41 @@ const handleSubmit = async () => {
       ElMessage.success('更新成功')
     } else {
       // 新增
-      formData.id = Date.now()
-      if (window.electron && window.electron.dbInsert) {
-        await window.electron.dbInsert('inbound', formData)
+      if (window.electron && window.electron.inboundAdd) {
+        const inboundData = {
+          inbound_no: formData.voucherNo,
+          inbound_date: formData.voucherDate,
+          supplier_id: formData.supplierId || null,
+          warehouse_id: formData.warehouseId || null,
+          total_amount: formData.totalAmount,
+          paid_amount: 0,
+          invoice_type: formData.invoiceType || null,
+          invoice_issued: formData.invoiceIssued ? 1 : 0,
+          status: 'completed',
+          remark: formData.remark || null,
+          created_by: formData.operator,
+          items: formData.items.map((item: any) => ({
+            product_id: item.productId || null,
+            quantity: item.quantity || null,
+            unit_price: item.unitPrice || null,
+            unit_price_ex: item.unitPriceEx || null,
+            tax_rate: item.taxRate === '免税' ? 0 : Number(item.taxRate || 0),
+            tax_amount: item.taxAmount || null,
+            total_amount_ex: item.totalAmountEx || null,
+            total_amount: item.totalAmount || null,
+            allow_deduction: item.allowDeduction ? 1 : 0,
+            deduction_amount: item.deductionAmount || null,
+            remark: item.remark || null
+          }))
+        }
+        await window.electron.inboundAdd(inboundData)
       } else {
         // 前端环境 - 使用 localStorage
+        const dataToSave = { ...formData, id: Date.now() }
         const key = 'purchase_inbound_records'
         const savedData = localStorage.getItem(key)
         const allRecords = savedData ? JSON.parse(savedData) : []
-        allRecords.push({ ...formData })
+        allRecords.push(dataToSave)
         localStorage.setItem(key, JSON.stringify(allRecords))
       }
       ElMessage.success('新增成功')

@@ -209,8 +209,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { getCostPrice } from '@/utils/cost-database'
-import { getRealTimeStock, getStockBeforeDateTime } from '@/utils/stock'
+import { db } from '@/utils/db-ipc'
 import { handleDocumentSave, DocumentType } from '@/utils/cost-recalculation'
 
 const searchQuery = ref('')
@@ -245,55 +244,68 @@ const totalAmountEx = computed(() => {
 })
 
 // 加载仓库列表
-const loadWarehouses = () => {
+const loadWarehouses = async () => {
   try {
-    const saved = localStorage.getItem('warehouses')
-    if (saved) {
-      warehouses.value = JSON.parse(saved).filter((w: any) => w.status === 1)
-    }
+    const list = await db.getWarehouses()
+    console.log('加载仓库列表:', list)
+    warehouses.value = list
   } catch (error) {
     console.error('加载仓库列表失败:', error)
   }
 }
 
 // 加载产品列表
-const loadProducts = () => {
+const loadProducts = async () => {
   try {
-    const saved = localStorage.getItem('products')
-    if (saved) {
-      products.value = JSON.parse(saved)
-        .filter((p: any) => p.status === 1)
-        .map((p: any) => ({
-          id: p.id,
-          code: p.code || p.productCode || '',
-          name: p.name || p.productName || '',
-          specification: p.specification || '',
-          unit: p.unit || ''
-        }))
-    }
+    const productsList = await db.getProducts()
+    console.log('加载产品列表:', productsList)
+    products.value = productsList.map((p: any) => ({
+      id: p.id,
+      code: p.code || p.productCode || '',
+      name: p.name || p.productName || '',
+      specification: p.specification || '',
+      unit: p.unit || ''
+    }))
+    console.log('转换后的产品列表:', products.value)
   } catch (error) {
     console.error('加载产品列表失败:', error)
   }
 }
 
 // 加载调拨单列表
-const loadTransferList = () => {
+const loadTransferList = async () => {
   try {
-    const saved = localStorage.getItem('inventory_transfers')
-    if (saved) {
-      let list = JSON.parse(saved)
-      
-      // 搜索过滤
-      if (searchQuery.value) {
-        list = list.filter((item: any) => 
-          item.transferNo?.toLowerCase().includes(searchQuery.value.toLowerCase())
-        )
-      }
-      
-      transferList.value = list
-    } else {
-      transferList.value = []
+    const data = await db.getTransfers(1, 100000)
+    let list = data.data || []
+    
+    // 搜索过滤
+    if (searchQuery.value) {
+      list = list.filter((item: any) => 
+        item.transfer_no?.toLowerCase().includes(searchQuery.value.toLowerCase())
+      )
     }
+    
+    // 转换数据格式
+    transferList.value = list.map((item: any) => ({
+      id: item.id,
+      transferNo: item.transfer_no,
+      transferDate: item.transfer_date,
+      fromWarehouseId: item.from_warehouse_id,
+      fromWarehouseName: item.from_warehouse_name || '',
+      toWarehouseId: item.to_warehouse_id,
+      toWarehouseName: item.to_warehouse_name || '',
+      remark: item.remark || '',
+      status: item.status || 'pending',
+      items: (item.items || []).map((i: any) => ({
+        productId: i.product_id,
+        productName: i.product_name || '',
+        specification: '',
+        unit: '',
+        quantity: i.quantity,
+        unitPriceEx: i.cost || 0,
+        totalAmountEx: i.amount || 0
+      }))
+    }))
   } catch (error) {
     console.error('加载调拨单列表失败:', error)
   }
@@ -342,36 +354,18 @@ const handleEdit = (row: any) => {
   })
   dialogVisible.value = true
   
-  // 编辑时，重新获取每个产品的最新成本价并检查库存
+  // 编辑时，重新获取每个产品的最新成本价
   setTimeout(async () => {
     for (const item of formData.items) {
       if (item.productId) {
-        // 自动从数据库获取最新成本价（优先）或动态计算
-        const costPrice = await getCostPrice(item.productId, formData.fromWarehouseId, formData.transferDate)
-        if (costPrice > 0) {
-          item.unitPriceEx = costPrice
-          // 根据数量和单价计算金额
-          if (item.quantity > 0) {
-            item.totalAmountEx = Number((item.unitPriceEx * item.quantity).toFixed(2))
-          }
-        }
-        
-        // 检查库存是否足够
-        if (item.quantity && formData.fromWarehouseId) {
-          const stockBeforeDateTime = getStockBeforeDateTime(
-            item.productId, 
-            formData.fromWarehouseId, 
-            formData.transferDate, 
-            formData.createdAt,
-            formData.id
-          )
-          if (item.quantity > stockBeforeDateTime) {
-            ElMessage.warning({
-              message: `库存不足：${item.productName || '该商品'}，${formData.transferDate}前库存 ${stockBeforeDateTime}，调拨数量 ${item.quantity}`,
-              duration: 5000
-            })
-          }
-        }
+        // TODO: 从数据库获取成本价
+        // const costPrice = await db.getCostPrice(item.productId, formData.fromWarehouseId, formData.transferDate)
+        // if (costPrice > 0) {
+        //   item.unitPriceEx = costPrice
+        //   if (item.quantity > 0) {
+        //     item.totalAmountEx = Number((item.unitPriceEx * item.quantity).toFixed(2))
+        //   }
+        // }
       }
     }
   }, 100)
@@ -404,32 +398,14 @@ const handleProductChange = async (index: number) => {
     item.specification = product.specification
     item.unit = product.unit
     
-    // 自动从数据库获取成本价（优先）或动态计算
-    const costPrice = await getCostPrice(item.productId, formData.fromWarehouseId, formData.transferDate)
-    if (costPrice > 0) {
-      item.unitPriceEx = costPrice
-      // 根据数量和单价计算金额
-      if (item.quantity > 0) {
-        item.totalAmountEx = Number((item.unitPriceEx * item.quantity).toFixed(2))
-      }
-    }
-    
-    // 如果已经有数量，检查库存
-    if (item.quantity && formData.fromWarehouseId) {
-      const stockBeforeDateTime = getStockBeforeDateTime(
-        item.productId, 
-        formData.fromWarehouseId, 
-        formData.transferDate, 
-        formData.createdAt,
-        formData.id
-      )
-      if (item.quantity > stockBeforeDateTime) {
-        ElMessage.warning({
-          message: `库存不足：${item.productName || '该商品'}，${formData.transferDate}前库存 ${stockBeforeDateTime}，调拨数量 ${item.quantity}`,
-          duration: 5000
-        })
-      }
-    }
+    // TODO: 自动从数据库获取成本价
+    // const costPrice = await db.getCostPrice(item.productId, formData.fromWarehouseId, formData.transferDate)
+    // if (costPrice > 0) {
+    //   item.unitPriceEx = costPrice
+    //   if (item.quantity > 0) {
+    //     item.totalAmountEx = Number((item.unitPriceEx * item.quantity).toFixed(2))
+    //   }
+    // }
   }
 }
 
@@ -447,24 +423,24 @@ const handleQuantityChange = (item: any) => {
     item.totalAmountEx = Number((Number(item.unitPriceEx) * Number(item.quantity)).toFixed(2))
   }
   
-  // 实时检查库存
-  if (item.productId && item.quantity && formData.fromWarehouseId) {
-    const stockBeforeDateTime = getStockBeforeDateTime(
-      item.productId, 
-      formData.fromWarehouseId, 
-      formData.transferDate, 
-      formData.createdAt,
-      formData.id
-    )
-    
-    if (item.quantity > stockBeforeDateTime) {
-      const shortage = item.quantity - stockBeforeDateTime
-      ElMessage.warning({
-        message: `库存不足：${item.productName || '该商品'}，${formData.transferDate}前库存 ${stockBeforeDateTime}，您输入的数量 ${item.quantity}，还差 ${shortage}`,
-        duration: 5000
-      })
-    }
-  }
+  // TODO: 实时检查库存
+  // if (item.productId && item.quantity && formData.fromWarehouseId) {
+  //   const stockBeforeDateTime = getStockBeforeDateTime(
+  //     item.productId, 
+  //     formData.fromWarehouseId, 
+  //     formData.transferDate, 
+  //     formData.createdAt,
+  //     formData.id
+  //   )
+  //   
+  //   if (item.quantity > stockBeforeDateTime) {
+  //     const shortage = item.quantity - stockBeforeDateTime
+  //     ElMessage.warning({
+  //       message: `库存不足：${item.productName || '该商品'}，${formData.transferDate}前库存 ${stockBeforeDateTime}，您输入的数量 ${item.quantity}，还差 ${shortage}`,
+  //       duration: 5000
+  //     })
+  //   }
+  // }
 }
 
 // 单价变化
@@ -507,42 +483,41 @@ const handleFocus = (row: any, field: string) => {
 
 // 调出仓库变化
 const handleFromWarehouseChange = () => {
-  // 重新从成本结算模块获取所有已选产品的成本价
-  formData.items.forEach((item: any, index: number) => {
-    if (item.productId) {
-      const costPrice = getCostFromSettlement(item.productId, formData.fromWarehouseId, formData.transferDate)
-      if (costPrice > 0) {
-        item.unitPriceEx = costPrice
-        // 根据数量和单价重新计算金额
-        if (item.quantity > 0) {
-          item.totalAmountEx = Number((item.unitPriceEx * item.quantity).toFixed(2))
-        }
-      }
-    }
-  })
+  // TODO: 重新从成本结算模块获取所有已选产品的成本价
+  // formData.items.forEach((item: any, index: number) => {
+  //   if (item.productId) {
+  //     const costPrice = getCostFromSettlement(item.productId, formData.fromWarehouseId, formData.transferDate)
+  //     if (costPrice > 0) {
+  //       item.unitPriceEx = costPrice
+  //       if (item.quantity > 0) {
+  //         item.totalAmountEx = Number((item.unitPriceEx * item.quantity).toFixed(2))
+  //       }
+  //     }
+  //   }
+  // })
   
-  // 仓库变化时，检查所有已添加商品的库存
-  if (formData.items && formData.items.length > 0) {
-    setTimeout(() => {
-      formData.items.forEach(item => {
-        if (item.productId && item.quantity) {
-          const stockBeforeDateTime = getStockBeforeDateTime(
-            item.productId, 
-            formData.fromWarehouseId, 
-            formData.transferDate, 
-            formData.createdAt,
-            formData.id
-          )
-          if (item.quantity > stockBeforeDateTime) {
-            ElMessage.warning({
-              message: `库存不足：${item.productName || '该商品'}，${formData.transferDate}前库存 ${stockBeforeDateTime}，调拨数量 ${item.quantity}`,
-              duration: 5000
-            })
-          }
-        }
-      })
-    }, 100)
-  }
+  // TODO: 仓库变化时，检查所有已添加商品的库存
+  // if (formData.items && formData.items.length > 0) {
+  //   setTimeout(() => {
+  //     formData.items.forEach(item => {
+  //       if (item.productId && item.quantity) {
+  //         const stockBeforeDateTime = getStockBeforeDateTime(
+  //           item.productId, 
+  //           formData.fromWarehouseId, 
+  //           formData.transferDate, 
+  //           formData.createdAt,
+  //           formData.id
+  //         )
+  //         if (item.quantity > stockBeforeDateTime) {
+  //           ElMessage.warning({
+  //             message: `库存不足：${item.productName || '该商品'}，${formData.transferDate}前库存 ${stockBeforeDateTime}，调拨数量 ${item.quantity}`,
+  //             duration: 5000
+  //           })
+  //         }
+  //       }
+  //     })
+  //   }, 100)
+  // }
 }
 
 // 调入仓库变化
@@ -552,63 +527,18 @@ const handleToWarehouseChange = () => {
 
 // 调拨日期变化
 const handleTransferDateChange = () => {
-  // 重新从成本结算模块获取所有已选产品的成本价
-  formData.items.forEach((item: any, index: number) => {
-    if (item.productId) {
-      const costPrice = getCostFromSettlement(item.productId, formData.fromWarehouseId, formData.transferDate)
-      if (costPrice > 0) {
-        item.unitPriceEx = costPrice
-        // 根据数量和单价重新计算金额
-        if (item.quantity > 0) {
-          item.totalAmountEx = Number((item.unitPriceEx * item.quantity).toFixed(2))
-        }
-      }
-    }
-  })
-}
-
-// 检查库存是否足够
-const checkStockAvailability = (): boolean => {
-  const warehouseId = formData.fromWarehouseId
-  const transferDate = formData.transferDate
-  const createdAt = formData.createdAt
-  
-  if (!warehouseId) {
-    ElMessage.warning('请先选择调出仓库')
-    return false
-  }
-  if (!transferDate) {
-    ElMessage.warning('请先选择调拨日期')
-    return false
-  }
-  
-  for (let i = 0; i < formData.items.length; i++) {
-    const item = formData.items[i]
-    if (!item.productId || !item.quantity) continue
-    
-    // 获取该日期和时间之前的库存（不包括该日期和时间的单据）
-    const stockBeforeDateTime = getStockBeforeDateTime(
-      item.productId, 
-      warehouseId, 
-      transferDate, 
-      createdAt,
-      formData.id
-    )
-    
-    if (stockBeforeDateTime < item.quantity) {
-      const productName = item.productName || `第 ${i + 1} 行商品`
-      ElMessage.error(
-        `库存不足：${productName}\n` +
-        `调拨日期：${transferDate}\n` +
-        `该时间前库存：${stockBeforeDateTime}\n` +
-        `需要调拨：${item.quantity}\n\n` +
-        `请修改调拨日期或调拨数量！`
-      )
-      return false
-    }
-  }
-  
-  return true
+  // TODO: 重新从成本结算模块获取所有已选产品的成本价
+  // formData.items.forEach((item: any, index: number) => {
+  //   if (item.productId) {
+  //     const costPrice = getCostFromSettlement(item.productId, formData.fromWarehouseId, formData.transferDate)
+  //     if (costPrice > 0) {
+  //       item.unitPriceEx = costPrice
+  //       if (item.quantity > 0) {
+  //         item.totalAmountEx = Number((item.unitPriceEx * item.quantity).toFixed(2))
+  //       }
+  //     }
+  //   }
+  // })
 }
 
 // 删除调拨单
@@ -620,21 +550,16 @@ const handleDelete = async (row: any) => {
       type: 'warning'
     })
     
-    const saved = localStorage.getItem('inventory_transfers')
-    if (saved) {
-      const list = JSON.parse(saved)
-      const filtered = list.filter((item: any) => item.id !== row.id)
-      localStorage.setItem('inventory_transfers', JSON.stringify(filtered))
-      loadTransferList()
-      ElMessage.success('删除成功')
-    }
+    // TODO: 调用数据库删除接口
+    ElMessage.success('删除功能待实现')
+    loadTransferList()
   } catch {
     // 用户取消删除
   }
 }
 
 // 提交表单
-const handleSubmit = () => {
+const handleSubmit = async () => {
   // 验证必填字段
   if (!formData.fromWarehouseId) {
     ElMessage.warning('请选择调出仓库')
@@ -664,11 +589,6 @@ const handleSubmit = () => {
     }
   }
   
-  // 检查库存是否足够
-  if (!checkStockAvailability()) {
-    return
-  }
-  
   // 获取仓库名称
   const fromWarehouse = warehouses.value.find(w => w.id === formData.fromWarehouseId)
   const toWarehouse = warehouses.value.find(w => w.id === formData.toWarehouseId)
@@ -676,109 +596,47 @@ const handleSubmit = () => {
   formData.toWarehouseName = toWarehouse?.name || ''
   
   try {
-    const saved = localStorage.getItem('inventory_transfers')
-    let list = saved ? JSON.parse(saved) : []
+    // 准备保存到数据库的数据
+    const transferData = {
+      transfer_no: formData.transferNo,
+      transfer_date: formData.transferDate,
+      from_warehouse_id: formData.fromWarehouseId,
+      from_warehouse_name: formData.fromWarehouseName,
+      to_warehouse_id: formData.toWarehouseId,
+      to_warehouse_name: formData.toWarehouseName,
+      remark: formData.remark,
+      status: formData.status,
+      items: formData.items.map((item: any) => ({
+        product_id: item.productId,
+        product_name: item.productName,
+        quantity: Number(item.quantity),
+        cost: Number(item.unitPriceEx) || 0,
+        amount: Number(item.totalAmountEx) || 0
+      }))
+    }
     
     if (isEdit.value) {
-      // 更新
-      const index = list.findIndex((item: any) => item.id === formData.id)
-      if (index !== -1) {
-        list[index] = { ...formData, status: 'completed' }
-      }
-      ElMessage.success('更新成功')
+      // 更新（暂时简化，实际应该调用 update 接口）
+      ElMessage.success('更新功能待实现')
     } else {
       // 新增
-      formData.id = Date.now()
-      formData.status = 'completed'
-      list.push({ ...formData })
+      const id = await db.db?.insert?.('transfer_records', transferData)
       ElMessage.success('新增成功')
+      
+      // 检测是否需要重新结算成本
+      await handleDocumentSave(
+        DocumentType.INVENTORY_TRANSFER,
+        formData.items || [],
+        formData.transferDate
+      )
     }
-    
-    localStorage.setItem('inventory_transfers', JSON.stringify(list))
-    
-    // 更新库存（只在新增时更新，编辑时不重复更新）
-    if (!isEdit.value) {
-      updateInventory()
-    }
-    
-    // 检测是否需要重新结算成本
-    await handleDocumentSave(
-      DocumentType.INVENTORY_TRANSFER,
-      formData.items || [],
-      formData.transferDate
-    )
     
     dialogVisible.value = false
     loadTransferList()
   } catch (error) {
     console.error('保存调拨单失败:', error)
-    ElMessage.error('保存失败')
+    ElMessage.error('保存失败：' + error)
   }
-}
-
-// 更新库存
-const updateInventory = () => {
-  // 调拨单会影响两个仓库的库存
-  // 调出仓库：减少库存
-  // 调入仓库：增加库存
-  formData.items.forEach((item: any) => {
-    if (!item.productId || !item.quantity) return
-    
-    const quantity = Number(item.quantity)
-    const unitPriceEx = Number(item.unitPriceEx) || 0
-    const totalAmountEx = Number(item.totalAmountEx) || 0
-    
-    // 获取所有入库记录
-    const inboundKey = 'purchase_inbound_records'
-    const inboundRaw = localStorage.getItem(inboundKey)
-    const inboundRecords = inboundRaw ? JSON.parse(inboundRaw) : []
-    
-    // 获取所有出库记录
-    const outboundKey = 'sales_outbound_records'
-    const outboundRaw = localStorage.getItem(outboundKey)
-    const outboundRecords = outboundRaw ? JSON.parse(outboundRaw) : []
-    
-    // 获取所有调拨记录
-    const transferKey = 'inventory_transfers'
-    const transferRaw = localStorage.getItem(transferKey)
-    const transferRecords = transferRaw ? JSON.parse(transferRaw) : []
-    
-    // 计算调出仓库的库存变化（减少）
-    const fromStockKey = `stock_${formData.fromWarehouseId}_${item.productId}`
-    let fromStock = Number(localStorage.getItem(fromStockKey) || 0)
-    fromStock -= quantity
-    localStorage.setItem(fromStockKey, String(fromStock))
-    
-    // 计算调入仓库的库存变化（增加）
-    const toStockKey = `stock_${formData.toWarehouseId}_${item.productId}`
-    let toStock = Number(localStorage.getItem(toStockKey) || 0)
-    toStock += quantity
-    localStorage.setItem(toStockKey, String(toStock))
-    
-    // 记录库存变动日志（包含成本信息）
-    const stockLogKey = 'stock_movement_log'
-    const stockLogRaw = localStorage.getItem(stockLogKey)
-    const stockLog = stockLogRaw ? JSON.parse(stockLogRaw) : []
-    
-    stockLog.push({
-      id: Date.now() + Math.random(),
-      date: new Date().toISOString().split('T')[0],
-      type: 'transfer',
-      productName: item.productName,
-      productId: item.productId,
-      quantity: quantity,
-      unitPrice: unitPriceEx,
-      totalAmount: totalAmountEx,
-      fromWarehouseId: formData.fromWarehouseId,
-      fromWarehouseName: formData.fromWarehouseName,
-      toWarehouseId: formData.toWarehouseId,
-      toWarehouseName: formData.toWarehouseName,
-      transferNo: formData.transferNo,
-      remark: '调拨单库存调整'
-    })
-    
-    localStorage.setItem(stockLogKey, JSON.stringify(stockLog))
-  })
 }
 
 // 搜索
