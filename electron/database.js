@@ -13,12 +13,8 @@ class InventoryDatabase {
     }
     initialize() {
         try {
-            this.db = new better_sqlite3_1.default(this.dbPath, { timeout: 5000 });
+            this.db = new better_sqlite3_1.default(this.dbPath);
             this.db.pragma('foreign_keys = OFF');
-            this.db.pragma('journal_mode = DELETE'); // 禁用 WAL 模式，避免锁定
-            
-            console.log('数据库连接成功');
-            
             // 检查数据库是否已经初始化过（通过检查是否存在 products 表）
             const tableExists = this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='products'").get();
             if (!tableExists) {
@@ -29,13 +25,13 @@ class InventoryDatabase {
             }
             else {
                 // 数据库已存在，只确保表结构正确
-                console.log('数据库已存在');
+                console.log('数据库已存在，检查并添加缺失字段...');
                 this.createTables(); // 使用 IF NOT EXISTS，不会重复创建
+                this.migrateDatabase(); // 添加缺失字段
             }
             // 初始化成本结算数据库
             this.costDb = new database_cost_1.CostSettlementDatabase(this.db);
             this.costDb.initialize();
-            console.log('数据库初始化完成');
             return true;
         }
         catch (error) {
@@ -88,43 +84,28 @@ class InventoryDatabase {
             const hasOriginalItemIndex = prColumns.some(col => col.name === 'original_item_index');
             if (!hasOriginalItemIndex) {
                 console.log('添加 purchase_return_items.original_item_index 字段');
-                try {
-                    this.db.exec('ALTER TABLE purchase_return_items ADD COLUMN original_item_index INTEGER');
-                } catch (e) {
-                    console.log('字段可能已存在，跳过:', e.message);
-                }
+                this.db.exec('ALTER TABLE purchase_return_items ADD COLUMN original_item_index INTEGER');
             }
             // 检查 sales_return_items 表是否有 original_item_index 字段
             const srColumns = this.db.prepare("PRAGMA table_info(sales_return_items)").all();
             const hasSrOriginalItemIndex = srColumns.some(col => col.name === 'original_item_index');
             if (!hasSrOriginalItemIndex) {
                 console.log('添加 sales_return_items.original_item_index 字段');
-                try {
-                    this.db.exec('ALTER TABLE sales_return_items ADD COLUMN original_item_index INTEGER');
-                } catch (e) {
-                    console.log('字段可能已存在，跳过:', e.message);
-                }
+                this.db.exec('ALTER TABLE sales_return_items ADD COLUMN original_item_index INTEGER');
             }
-            // 检查并添加 sales_outbound 的 customer_id 字段
-            console.log('强制检查并添加 sales_outbound.customer_id...');
-            try {
+            // 检查 sales_outbound 表是否有 customer_id 字段
+            const soColumns = this.db.prepare("PRAGMA table_info(sales_outbound)").all();
+            const hasCustomerId = soColumns.some(col => col.name === 'customer_id');
+            if (!hasCustomerId) {
+                console.log('添加 sales_outbound.customer_id 字段');
                 this.db.exec('ALTER TABLE sales_outbound ADD COLUMN customer_id INTEGER');
-                console.log('✅ customer_id 字段添加成功');
-            } catch (e) {
-                console.log('customer_id 可能已存在，跳过:', e.message);
             }
-            // 检查并添加 sales_outbound 的 handler_name 字段
-            console.log('强制检查并添加 sales_outbound.handler_name...');
-            try {
+            // 检查 sales_outbound 表是否有 handler_name 字段
+            const hasHandlerName = soColumns.some(col => col.name === 'handler_name');
+            if (!hasHandlerName) {
+                console.log('添加 sales_outbound.handler_name 字段');
                 this.db.exec('ALTER TABLE sales_outbound ADD COLUMN handler_name TEXT');
-                console.log('✅ handler_name 字段添加成功');
-            } catch (e) {
-                console.log('handler_name 可能已存在，跳过:', e.message);
             }
-            // 再次验证
-            const finalColumns = this.db.prepare("PRAGMA table_info(sales_outbound)").all();
-            console.log('最终 sales_outbound 表的列:');
-            finalColumns.forEach(col => console.log('  -', col.name));
             console.log('数据库迁移完成');
         }
         catch (error) {
@@ -435,7 +416,15 @@ class InventoryDatabase {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         outbound_id INTEGER,
         product_id INTEGER,
+        product_name TEXT,
+        specification TEXT,
+        unit TEXT,
         quantity INTEGER,
+        unit_price DECIMAL(10,2),
+        sale_price DECIMAL(10,2),
+        tax_rate DECIMAL(5,2),
+        tax_amount DECIMAL(10,2),
+        total_amount DECIMAL(10,2),
         cost_price DECIMAL(10,2),
         remark TEXT,
         FOREIGN KEY (outbound_id) REFERENCES sales_outbound(id),
@@ -1033,36 +1022,45 @@ class InventoryDatabase {
     addOutbound(outbound) {
         try {
             console.log('【Electron 后端】收到出库单数据:', outbound);
-            // 提取 items 数据
-            const items = outbound.items || [];
-            console.log('【Electron 后端】明细项数量:', items.length);
-            delete outbound.items;
-            // 临时删除不存在的字段
-            delete outbound.customer_id;
-            delete outbound.handler_name;
-            // 插入主表
-            console.log('【Electron 后端】准备插入主表...');
-            const id = this.insert('sales_outbound', outbound);
-            console.log('【Electron 后端】主表插入成功，ID:', id);
-            // 插入明细表
-            if (items.length > 0) {
-                items.forEach((item, index) => {
-                    const itemData = {
-                        outbound_id: id,
-                        product_id: item.product_id,
-                        quantity: item.quantity,
-                        cost_price: item.cost_price || item.unit_price || 0,
-                        remark: item.remark || ''
-                    };
-                    console.log(`【Electron 后端】插入销售出库明细项 ${index + 1}:`, itemData);
-                    this.insert('sales_outbound_items', itemData);
-                });
-                console.log('【Electron 后端】所有销售出库明细项插入完成');
-            }
-            else {
-                console.warn('【Electron 后端】没有销售出库明细项需要插入');
-            }
-            console.log('【Electron 后端】返回 ID:', id);
+            // 开启事务
+            const transaction = this.db.transaction(() => {
+                // 提取 items 数据
+                const items = outbound.items || [];
+                console.log('【Electron 后端】明细项数量:', items.length);
+                delete outbound.items;
+                // 插入主表
+                const id = this.insert('sales_outbound', outbound);
+                console.log('【Electron 后端】主表插入成功，ID:', id);
+                // 插入明细表
+                if (items.length > 0) {
+                    items.forEach((item, index) => {
+                        const itemData = {
+                            outbound_id: id,
+                            product_id: item.product_id,
+                            product_name: item.product_name || '',
+                            specification: item.specification || '',
+                            unit: item.unit || '',
+                            quantity: item.quantity,
+                            unit_price: item.unit_price || 0,
+                            sale_price: item.sale_price || 0,
+                            tax_rate: item.tax_rate || 0,
+                            tax_amount: item.tax_amount || 0,
+                            total_amount: item.total_amount || 0,
+                            cost_price: item.cost_price || 0,
+                            remark: item.remark || ''
+                        };
+                        console.log(`【Electron 后端】插入销售出库明细项 ${index + 1}:`, itemData);
+                        this.insert('sales_outbound_items', itemData);
+                    });
+                    console.log('【Electron 后端】所有销售出库明细项插入完成');
+                }
+                else {
+                    console.warn('【Electron 后端】没有销售出库明细项需要插入');
+                }
+                return id;
+            });
+            const id = transaction();
+            console.log('【Electron 后端】事务执行完成，返回 ID:', id);
             return id;
         }
         catch (error) {
@@ -1073,9 +1071,6 @@ class InventoryDatabase {
     updateOutbound(outbound) {
         const id = outbound.id;
         delete outbound.id;
-        // 临时删除不存在的字段
-        delete outbound.customer_id;
-        delete outbound.handler_name;
         return this.update('sales_outbound', outbound, 'id = ?', [id]);
     }
     deleteOutbound(id) {

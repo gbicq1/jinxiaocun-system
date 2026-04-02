@@ -312,7 +312,15 @@ export class InventoryDatabase {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         outbound_id INTEGER,
         product_id INTEGER,
+        product_name TEXT,
+        specification TEXT,
+        unit TEXT,
         quantity INTEGER,
+        unit_price DECIMAL(10,2),
+        sale_price DECIMAL(10,2),
+        tax_rate DECIMAL(5,2),
+        tax_amount DECIMAL(10,2),
+        total_amount DECIMAL(10,2),
         cost_price DECIMAL(10,2),
         remark TEXT,
         FOREIGN KEY (outbound_id) REFERENCES sales_outbound(id),
@@ -1128,10 +1136,6 @@ export class InventoryDatabase {
         
         delete outbound.items
         
-        // 临时删除不存在的字段
-        delete outbound.customer_id
-        delete outbound.handler_name
-        
         // 插入主表
         const id = this.insert('sales_outbound', outbound)
         console.log('【Electron 后端】主表插入成功，ID:', id)
@@ -1142,8 +1146,16 @@ export class InventoryDatabase {
             const itemData = {
               outbound_id: id,
               product_id: item.product_id,
+              product_name: item.product_name || '',
+              specification: item.specification || '',
+              unit: item.unit || '',
               quantity: item.quantity,
-              cost_price: item.cost_price || item.unit_price || 0,
+              unit_price: item.unit_price || 0,
+              sale_price: item.sale_price || 0,
+              tax_rate: item.tax_rate || 0,
+              tax_amount: item.tax_amount || 0,
+              total_amount: item.total_amount || 0,
+              cost_price: item.cost_price || 0,
               remark: item.remark || ''
             }
             console.log(`【Electron 后端】插入销售出库明细项 ${index + 1}:`, itemData)
@@ -1169,9 +1181,6 @@ export class InventoryDatabase {
   updateOutbound(outbound: any): number {
     const id = outbound.id
     delete outbound.id
-    // 临时删除不存在的字段
-    delete outbound.customer_id
-    delete outbound.handler_name
     return this.update('sales_outbound', outbound, 'id = ?', [id])
   }
 

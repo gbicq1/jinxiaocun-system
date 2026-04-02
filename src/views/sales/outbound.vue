@@ -97,7 +97,7 @@
         </el-table-column>
         <el-table-column prop="totalAmount" label="总金额" width="120">
           <template #default="{ row }">
-            {{ row.totalAmount.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
+            {{ (row.totalAmount || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
           </template>
         </el-table-column>
         <el-table-column prop="status" label="状态" width="100">
@@ -324,14 +324,15 @@ interface OutboundItem {
   productId?: number
   productName: string
   specification: string
-  quantity: number
+  quantity?: number
   unit: string
-  unitPrice: number
+  unitPrice?: number
   unitPriceEx?: number
   taxRate: number | string
-  taxAmount: number
-  totalAmount: number
+  taxAmount?: number
+  totalAmount?: number
   _lastEdited?: 'unitEx' | 'unitIncl' | 'amount'
+  remark?: string
 }
 
 interface OutboundRecord {
@@ -346,11 +347,12 @@ interface OutboundRecord {
   handlerId?: number
   handlerName?: string
   items: OutboundItem[]
-  totalAmount: number
+  totalAmount?: number
   receivedAmount?: number
   invoiceIssued?: boolean
   status: string
   remark?: string
+  createdAt?: string
 }
 
 interface Product {
@@ -445,7 +447,7 @@ const rules = {
   ]
 }
 
-const totalAmount = computed(() => formData.items.reduce((sum, item) => sum + item.totalAmount, 0))
+const totalAmount = computed(() => formData.items.reduce((sum, item) => sum + (item.totalAmount || 0), 0))
 
 // 过滤后的出库记录
 const filteredOutbounds = computed(() => {
@@ -554,21 +556,25 @@ const loadOutbounds = async () => {
         customerName: customer?.name || '',
         warehouseId: record.warehouse_id,
         warehouseName: warehouse?.name || '',
-        totalAmount: record.total_amount,
+        totalAmount: record.total_amount || 0,
         remark: record.remark,
+        handlerName: record.handler_name || '',
         createdAt: record.created_at,
         items: items.map((item: any) => {
           const product = productMap.get(item.product_id)
           return {
             productId: item.product_id,
-            productName: product?.name || '',
-            specification: product?.specification || product?.spec || '',
-            unit: product?.unit || '',
-            quantity: item.quantity,
-            unitPrice: item.unit_price || item.sale_price,
-            salePrice: item.sale_price,
-            totalAmount: (item.quantity || 0) * (item.sale_price || 0),
-            remark: item.remark
+            productName: item.product_name || (product?.name || ''),
+            specification: item.specification || (product?.spec || product?.specification || ''),
+            unit: item.unit || (product?.unit || ''),
+            quantity: item.quantity || 0,
+            unitPriceEx: item.unit_price || 0,
+            unitPrice: item.sale_price || 0,
+            taxRate: item.tax_rate === 0 ? '免税' : (item.tax_rate || 13),
+            taxAmount: item.tax_amount || 0,
+            totalAmount: item.total_amount || 0,
+            costPrice: item.cost_price || 0,
+            remark: item.remark || ''
           }
         })
       }
@@ -819,14 +825,14 @@ const removeItem = (index: number) => {
 const handleFocus = (row: any, field: string) => {
   const value = row[field]
   if (value === 0 || value === '0') {
-    row[field] = ''
+    row[field] = undefined
   }
 }
 
 // 处理已收款聚焦事件
 const handleReceivedAmountFocus = () => {
   if (formData.receivedAmount === 0 || formData.receivedAmount === '0') {
-    formData.receivedAmount = '' as any
+    formData.receivedAmount = undefined
   }
 }
 
@@ -838,8 +844,8 @@ const handleProductChange = async (index: number, productId: number) => {
     // 优先使用 spec（产品表字段），其次使用 specification，最后使用 code 作为备用
     item.specification = product.spec || product.specification || product.code || ''
     item.unit = product.unit || ''
-    // 如果产品有售价则使用，否则保持为空
-    item.unitPriceEx = product.salePrice && product.salePrice > 0 ? product.salePrice : ('' as any)
+    // 如果产品有售价则使用，否则保持为 undefined
+    item.unitPriceEx = product.salePrice && product.salePrice > 0 ? product.salePrice : undefined
     item._lastEdited = 'unitEx'
     // 只有当有价格时才计算总额
     if (item.unitPriceEx && item.unitPriceEx !== '') {
@@ -975,7 +981,7 @@ const onQuantityChange = async (item: OutboundItem) => {
 }
 
 const calculateTotalAmount = () => {
-  formData.totalAmount = formData.items.reduce((sum, item) => sum + item.totalAmount, 0)
+  formData.totalAmount = formData.items.reduce((sum, item) => sum + (item.totalAmount || 0), 0)
 }
 
 const handleCustomerChange = (customerId: number) => {
@@ -1054,10 +1060,12 @@ const handleSubmit = async () => {
       // 更新
       const updateData = { 
         outbound_no: formData.voucherNo,
+        customer_id: formData.customerId,
         warehouse_id: formData.warehouseId,
         outbound_date: formData.voucherDate,
         total_amount: formData.totalAmount,
-        remark: formData.remark
+        remark: formData.remark,
+        handler_name: formData.handlerName
       }
       console.log('更新出库单数据:', updateData)
       if (window.electron && window.electron.dbUpdate) {
@@ -1065,19 +1073,36 @@ const handleSubmit = async () => {
       } else {
         await dbUpdate('sales_outbound', updateData, 'id = ?', [formData.id])
       }
+      
+      // 更新明细数据
+      for (const item of formData.items) {
+        // 这里需要调用后端 API 来更新明细，暂时跳过
+        console.log('需要更新明细:', item)
+      }
     } else {
       // 新增
       const outboundData = {
         outbound_no: formData.voucherNo,
+        order_id: null,
+        customer_id: formData.customerId,
         warehouse_id: formData.warehouseId,
         outbound_date: formData.voucherDate,
         total_amount: formData.totalAmount,
         status: 'completed',
         remark: formData.remark,
+        handler_name: formData.handlerName,
         created_by: formData.operator,
         items: formData.items.map((item: any) => ({
           product_id: item.productId,
+          product_name: item.productName,
+          specification: item.specification,
+          unit: item.unit,
           quantity: item.quantity,
+          unit_price: item.unitPriceEx || 0,
+          sale_price: item.unitPrice || 0,
+          tax_rate: item.taxRate === '免税' ? 0 : (item.taxRate || 0),
+          tax_amount: item.taxAmount || 0,
+          total_amount: item.totalAmount || 0,
           cost_price: item.costPrice || item.unitPrice || 0,
           remark: item.remark || ''
         }))
@@ -1108,7 +1133,12 @@ const handleSubmit = async () => {
 const handleView = (row: OutboundRecord) => {
   dialogTitle.value = '查看出库单'
   isViewMode.value = true
-  Object.assign(formData, { ...row, items: row.items ? JSON.parse(JSON.stringify(row.items)) : [] })
+  Object.assign(formData, {
+    ...row,
+    totalAmount: row.totalAmount || 0,
+    receivedAmount: row.receivedAmount || 0,
+    items: row.items ? JSON.parse(JSON.stringify(row.items)) : []
+  })
   selectedRows.value = [row]
   dialogVisible.value = true
 }
@@ -1116,7 +1146,12 @@ const handleView = (row: OutboundRecord) => {
 const handleEdit = (row: OutboundRecord) => {
   dialogTitle.value = '编辑出库单'
   isViewMode.value = false
-  Object.assign(formData, { ...row, items: row.items ? JSON.parse(JSON.stringify(row.items)) : [] })
+  Object.assign(formData, {
+    ...row,
+    totalAmount: row.totalAmount || 0,
+    receivedAmount: row.receivedAmount || 0,
+    items: row.items ? JSON.parse(JSON.stringify(row.items)) : []
+  })
   selectedRows.value = [row]
   dialogVisible.value = true
 }
@@ -1151,13 +1186,13 @@ const printOutboundForm = (row: OutboundRecord & { handlerName?: string }) => {
         <td>${index + 1}</td>
         <td>${item.productName}</td>
         <td>${item.specification}</td>
-        <td>${item.quantity}</td>
+        <td>${item.quantity || 0}</td>
         <td>${item.unit}</td>
         <td>${(item.unitPriceEx ?? item.unitPrice ?? 0).toFixed(2)}</td>
         <td>${(item.unitPrice ?? 0).toFixed(2)}</td>
         <td>${item.taxRate}%</td>
-        <td>${item.taxAmount.toFixed(2)}</td>
-        <td>${item.totalAmount.toFixed(2)}</td>
+        <td>${(item.taxAmount ?? 0).toFixed(2)}</td>
+        <td>${(item.totalAmount ?? 0).toFixed(2)}</td>
       </tr>
     `).join('')
 
@@ -1209,7 +1244,7 @@ const printOutboundForm = (row: OutboundRecord & { handlerName?: string }) => {
             ${itemsHtml}
           </tbody>
         </table>
-        <div style="text-align: right; font-weight: bold;">总金额：${row.totalAmount.toFixed(2)}</div>
+        <div style="text-align: right; font-weight: bold;">总金额：${(row.totalAmount ?? 0).toFixed(2)}</div>
         <div style="margin-top: 10px; border: 1px solid #000; padding: 8px; text-align: left;">备注：${row.remark || '-'}</div>
         <div style="margin-top: 15px; display: flex; justify-content: space-between; align-items: center;">
           <div>操作员：${row.operator}  &nbsp;&nbsp;&nbsp;&nbsp; 经办人：${row.handlerName || '-'}</div>
@@ -1245,8 +1280,8 @@ const printBatchOutboundForms = (rows: (OutboundRecord & { handlerName?: string 
           <td>${(item.unitPriceEx ?? item.unitPrice ?? 0).toFixed(2)}</td>
           <td>${(item.unitPrice ?? 0).toFixed(2)}</td>
           <td>${item.taxRate}%</td>
-          <td>${item.taxAmount.toFixed(2)}</td>
-          <td>${item.totalAmount.toFixed(2)}</td>
+          <td>${(item.taxAmount ?? 0).toFixed(2)}</td>
+          <td>${(item.totalAmount ?? 0).toFixed(2)}</td>
         </tr>
       `).join('')
 
@@ -1282,7 +1317,7 @@ const printBatchOutboundForms = (rows: (OutboundRecord & { handlerName?: string 
             ${itemsHtml}
           </tbody>
         </table>
-        <div style="text-align: right; font-weight: bold;">总金额：${row.totalAmount.toFixed(2)}</div>
+        <div style="text-align: right; font-weight: bold;">总金额：${(row.totalAmount ?? 0).toFixed(2)}</div>
         <div style="margin-top: 10px; border: 1px solid #000; padding: 8px; text-align: left;">备注：${row.remark || '-'}</div>
         <div style="margin-top: 15px; display: flex; justify-content: space-between; align-items: center;">
           <div>操作员：${row.operator}  &nbsp;&nbsp;&nbsp;&nbsp; 经办人：${row.handlerName || '-'}</div>
