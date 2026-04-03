@@ -1,9 +1,11 @@
 /**
  * 月度成本自动结转服务
  * 负责计算和保存每月的成本结算数据
+ * 所有数据从数据库读取，不使用 localStorage
  */
 
 import { CostSettlementDatabase } from './database-cost'
+import Database from 'better-sqlite3'
 
 /**
  * 库存单据类型
@@ -22,16 +24,15 @@ interface InventoryRecord {
  */
 export class MonthlyCostSettlementService {
   private costDb: CostSettlementDatabase
+  private mainDb: Database.Database
 
-  constructor(costDb: CostSettlementDatabase) {
+  constructor(costDb: CostSettlementDatabase, mainDb: Database.Database) {
     this.costDb = costDb
+    this.mainDb = mainDb
   }
 
   /**
    * 计算并结转指定月份的成本
-   * @param year 年度
-   * @param month 月份
-   * @param lock 是否锁定（锁定后不允许修改）
    */
   settleMonth(year: number, month: number, lock: boolean = true): { success: boolean; count: number; error?: string } {
     try {
@@ -110,14 +111,17 @@ export class MonthlyCostSettlementService {
     year: number,
     month: number
   ) {
+    // 将 productCode 转换为 productId（数字）
+    const productId = Number(productCode)
+    
     // 1. 获取上月期末数据（作为本期期初）
     const openingData = this.getOpeningData(productCode, warehouseId, year, month)
 
     // 2. 获取本月入库数据
-    const inboundData = this.getInboundData(productCode, warehouseId, year, month)
+    const inboundData = this.getInboundData(productId, warehouseId, year, month)
 
     // 3. 获取本月出库数据
-    const outboundData = this.getOutboundData(productCode, warehouseId, year, month)
+    const outboundData = this.getOutboundData(productId, warehouseId, year, month)
 
     // 4. 计算期末数据
     const closingQty = openingData.qty + inboundData.qty - outboundData.qty
@@ -148,7 +152,7 @@ export class MonthlyCostSettlementService {
   /**
    * 获取期初数据（上月期末）
    */
-  private getOpeningData(productCode: string, warehouseId: number, year: number, month: number): { qty: number; cost: number } | null {
+  private getOpeningData(productCode: string, warehouseId: number, year: number, month: number): { qty: number; cost: number } {
     // 计算上月
     let prevYear = year
     let prevMonth = month - 1
@@ -167,103 +171,82 @@ export class MonthlyCostSettlementService {
       }
     }
 
-    // 如果上月没有结算，尝试获取上上月（递归）
-    if (prevMonth !== 1) {
-      return this.getOpeningData(productCode, warehouseId, prevYear, prevMonth)
-    }
-
-    // 如果是 1 月，说明是年度初始化，返回 0
+    // 如果上月没有结算，返回 0（说明是年度初始化）
     return { qty: 0, cost: 0 }
   }
 
   /**
-   * 获取本月入库数据
+   * 获取本月入库数据（从数据库读取）
    */
-  private getInboundData(productCode: string, warehouseId: number, year: number, month: number) {
-    const monthStart = new Date(year, month - 1, 1)
-    const monthEnd = new Date(year, month, 0, 23, 59, 59, 999)
+  private getInboundData(productId: number, warehouseId: number, year: number, month: number) {
+    const monthStart = `${year}-${String(month).padStart(2, '0')}-01`
+    const monthEnd = `${year}-${String(month + 1).padStart(2, '0')}-01`
+
+    // 查询采购入库单明细
+    const sql = `
+      SELECT ii.quantity, ii.total_amount_ex, ii.total_amount
+      FROM purchase_inbound_items ii
+      JOIN purchase_inbound pi ON ii.inbound_id = pi.id
+      WHERE pi.warehouse_id = ?
+        AND pi.inbound_date >= ?
+        AND pi.inbound_date < ?
+        AND ii.product_id = ?
+    `
+
+    const items = this.mainDb.prepare(sql).all(
+      warehouseId,
+      monthStart,
+      monthEnd,
+      productId
+    ) as any[]
 
     let totalQty = 0
     let totalCost = 0
 
-    // 从 localStorage 获取采购入库单
-    const inboundKeys = ['purchase_inbound_records', 'purchaseInbounds', 'inbound_records', 'inbounds']
-    for (const key of inboundKeys) {
-      const raw = localStorage.getItem(key)
-      if (!raw) continue
-
-      const records = JSON.parse(raw)
-      if (!Array.isArray(records)) continue
-
-      for (const rec of records) {
-        const recDate = new Date(rec.voucherDate || rec.date || rec.createdAt)
-        if (recDate < monthStart || recDate > monthEnd) continue
-        if (Number(rec.warehouseId) !== Number(warehouseId)) continue
-
-        const items = rec.items || rec.products || rec.details
-        if (!Array.isArray(items)) continue
-
-        for (const item of items) {
-          if (String(item.productId) !== String(productCode) && 
-              String(item.productCode) !== String(productCode)) continue
-
-          const qty = Number(item.quantity || 0)
-          const amount = Number(item.totalAmountEx || item.totalAmount || item.amount || 0)
-          totalQty += qty
-          totalCost += amount
-        }
-      }
-    }
+    items.forEach(item => {
+      totalQty += Number(item.quantity || 0)
+      totalCost += Number(item.total_amount || item.total_amount_ex || 0)
+    })
 
     return { qty: totalQty, cost: totalCost }
   }
 
   /**
-   * 获取本月出库数据
+   * 获取本月出库数据（从数据库读取）
    */
-  private getOutboundData(productCode: string, warehouseId: number, year: number, month: number) {
-    const monthStart = new Date(year, month - 1, 1)
-    const monthEnd = new Date(year, month, 0, 23, 59, 59, 999)
+  private getOutboundData(productId: number, warehouseId: number, year: number, month: number) {
+    const monthStart = `${year}-${String(month).padStart(2, '0')}-01`
+    const monthEnd = `${year}-${String(month + 1).padStart(2, '0')}-01`
+
+    // 查询销售出库单明细
+    const sql = `
+      SELECT soi.quantity
+      FROM sales_outbound_items soi
+      JOIN sales_outbound so ON soi.outbound_id = so.id
+      WHERE so.warehouse_id = ?
+        AND so.outbound_date >= ?
+        AND so.outbound_date < ?
+        AND soi.product_id = ?
+    `
+
+    const items = this.mainDb.prepare(sql).all(
+      warehouseId,
+      monthStart,
+      monthEnd,
+      productId
+    ) as any[]
 
     let totalQty = 0
-    let totalCost = 0
+    items.forEach(item => {
+      totalQty += Number(item.quantity || 0)
+    })
 
-    // 从 localStorage 获取销售出库单
-    const outboundKeys = ['sales_outbound_records', 'outbound_records', 'outbounds', 'delivery_records']
-    for (const key of outboundKeys) {
-      const raw = localStorage.getItem(key)
-      if (!raw) continue
-
-      const records = JSON.parse(raw)
-      if (!Array.isArray(records)) continue
-
-      for (const rec of records) {
-        const recDate = new Date(rec.voucherDate || rec.date || rec.createdAt)
-        if (recDate < monthStart || recDate > monthEnd) continue
-        if (Number(rec.warehouseId) !== Number(warehouseId)) continue
-
-        const items = rec.items || rec.products || rec.details
-        if (!Array.isArray(items)) continue
-
-        for (const item of items) {
-          if (String(item.productId) !== String(productCode) && 
-              String(item.productCode) !== String(productCode)) continue
-
-          const qty = Number(item.quantity || 0)
-          totalQty += qty
-          // 出库成本在计算时使用期初或入库的加权平均价
-          // 这里简化处理，实际应该在计算时动态确定
-        }
-      }
-    }
-
-    // 出库成本需要基于期初和本期入库的加权平均价计算
-    // 这里先返回 0，实际成本在 calculateSettlement 中统一计算
+    // 出库成本在 calculateSettlement 中统一计算
     return { qty: totalQty, cost: 0 }
   }
 
   /**
-   * 获取所有产品和仓库组合
+   * 获取所有产品和仓库组合（从数据库读取）
    */
   private getAllProductWarehouseCombinations() {
     const combinations: Array<{
@@ -273,74 +256,69 @@ export class MonthlyCostSettlementService {
       warehouseName: string
     }> = []
 
-    // 获取所有产品
-    const productsRaw = localStorage.getItem('products')
-    if (!productsRaw) return combinations
+    // 从数据库查询所有产品
+    const products = this.mainDb.prepare('SELECT id, code, name FROM products WHERE status = 1').all() as any[]
 
-    const products = JSON.parse(productsRaw)
-    if (!Array.isArray(products)) return combinations
+    // 从数据库查询所有仓库
+    const warehouses = this.mainDb.prepare('SELECT id, name FROM warehouses WHERE status = 1').all() as any[]
 
-    // 获取所有仓库
-    const warehousesRaw = localStorage.getItem('warehouses')
-    const warehouses = warehousesRaw ? JSON.parse(warehousesRaw) : []
-
-    // 获取所有出入库记录，找出有业务往来的产品仓库组合
-    const usedCombinations = new Set<string>()
-
-    const allKeys = [
-      'purchase_inbound_records', 'purchaseInbounds', 'inbound_records', 'inbounds',
-      'sales_outbound_records', 'outbound_records', 'outbounds', 'delivery_records',
-      'transfer_records', 'transfers'
-    ]
-
-    for (const key of allKeys) {
-      const raw = localStorage.getItem(key)
-      if (!raw) continue
-
-      const records = JSON.parse(raw)
-      if (!Array.isArray(records)) continue
-
-      for (const rec of records) {
-        const warehouseId = rec.warehouseId
-        if (!warehouseId) continue
-
-        const items = rec.items || rec.products || rec.details
-        if (!Array.isArray(items)) continue
-
-        for (const item of items) {
-          const productCode = item.productId || item.productCode
-          if (!productCode) continue
-
-          const comboKey = `${productCode}-${warehouseId}`
-          if (!usedCombinations.has(comboKey)) {
-            usedCombinations.add(comboKey)
-
-            const product = products.find((p: any) => 
-              String(p.id) === String(productCode) || String(p.code) === String(productCode)
-            )
-            const warehouse = warehouses.find((w: any) => 
-              String(w.id) === String(warehouseId)
-            )
-
-            if (product && warehouse) {
-              combinations.push({
-                productCode: String(productCode),
-                productName: product.name || '',
-                warehouseId: Number(warehouseId),
-                warehouseName: warehouse.name || ''
-              })
-            }
-          }
-        }
-      }
+    if (products.length === 0 || warehouses.length === 0) {
+      return combinations
     }
+
+    // 查询所有有业务往来的产品仓库组合
+    const sql = `
+      SELECT DISTINCT product_id, warehouse_id
+      FROM (
+        SELECT product_id, warehouse_id FROM purchase_inbound_items ii
+        JOIN purchase_inbound pi ON ii.inbound_id = pi.id
+        UNION
+        SELECT product_id, warehouse_id FROM sales_outbound_items soi
+        JOIN sales_outbound so ON soi.outbound_id = so.id
+        UNION
+        SELECT product_id, from_warehouse_id as warehouse_id FROM transfer_record_items iti
+        JOIN transfer_records it ON iti.transfer_id = it.id
+        UNION
+        SELECT product_id, to_warehouse_id as warehouse_id FROM transfer_record_items iti
+        JOIN transfer_records it ON iti.transfer_id = it.id
+      )
+    `
+
+    const usedCombinations = this.mainDb.prepare(sql).all() as any[]
+    const comboSet = new Set<string>()
+
+    usedCombinations.forEach(combo => {
+      const productId = combo.product_id
+      const warehouseId = combo.warehouse_id
+      
+      if (!productId || !warehouseId) return
+
+      const comboKey = `${productId}-${warehouseId}`
+      if (comboSet.has(comboKey)) return
+      
+      comboSet.add(comboKey)
+
+      // 查找产品和仓库信息
+      const product = products.find(p => 
+        String(p.id) === String(productId)
+      )
+      const warehouse = warehouses.find(w => String(w.id) === String(warehouseId))
+
+      if (product && warehouse) {
+        combinations.push({
+          productCode: String(product.id),
+          productName: product.name || '',
+          warehouseId: Number(warehouseId),
+          warehouseName: warehouse.name || ''
+        })
+      }
+    })
 
     return combinations
   }
 
   /**
    * 重新结算从指定月份到当前的所有月份
-   * 用于处理历史单据新增或修改的情况
    */
   recalculateFromMonth(year: number, month: number): { success: boolean; message: string } {
     try {
@@ -390,13 +368,12 @@ export class MonthlyCostSettlementService {
 
   /**
    * 自动补全所有历史月份的结算数据
-   * 从系统第一个有业务的月份开始，逐月结算到上月
    */
   autoCompleteHistory(): { success: boolean; message: string; settledMonths: number } {
     try {
       console.log('开始自动补全历史月份结算数据...')
 
-      // 1. 获取系统最早的单据日期
+      // 获取系统最早的单据日期
       const firstDocumentDate = this.getFirstDocumentDate()
       if (!firstDocumentDate) {
         console.log('没有找到任何业务单据，跳过自动补全')
@@ -406,7 +383,7 @@ export class MonthlyCostSettlementService {
       const firstYear = firstDocumentDate.getFullYear()
       const firstMonth = firstDocumentDate.getMonth() + 1
 
-      // 2. 计算到上月的所有月份
+      // 计算到上月的所有月份
       const now = new Date()
       const currentYear = now.getFullYear()
       const currentMonth = now.getMonth() + 1
@@ -420,7 +397,7 @@ export class MonthlyCostSettlementService {
 
       console.log(`从 ${firstYear}年${firstMonth}月 到 ${prevYear}年${prevMonth}月`)
 
-      // 3. 逐月检查并结算
+      // 逐月检查并结算
       let y = firstYear
       let m = firstMonth
       let settledCount = 0
@@ -460,13 +437,13 @@ export class MonthlyCostSettlementService {
   }
 
   /**
-   * 获取系统最早的单据日期
+   * 获取系统最早的单据日期（从数据库读取）
    */
   private getFirstDocumentDate(): Date | null {
     try {
       const allDates: Date[] = []
       
-      // 从数据库查询所有单据表的最早日期
+      // 查询所有单据表的最早日期
       const tables = [
         { name: 'purchase_inbound', dateField: 'inbound_date' },
         { name: 'sales_outbound', dateField: 'outbound_date' },
@@ -475,13 +452,12 @@ export class MonthlyCostSettlementService {
       
       for (const table of tables) {
         try {
-          const result = (this.costDb as any).db?.query(
-            `SELECT MIN(${table.dateField}) as min_date FROM ${table.name}`,
-            []
-          )
+          const result = this.mainDb.prepare(
+            `SELECT MIN(${table.dateField}) as min_date FROM ${table.name}`
+          ).get() as any
           
-          if (result && result.length > 0 && result[0].min_date) {
-            const date = new Date(result[0].min_date)
+          if (result && result.min_date) {
+            const date = new Date(result.min_date)
             if (!isNaN(date.getTime())) {
               allDates.push(date)
             }
@@ -502,8 +478,7 @@ export class MonthlyCostSettlementService {
   }
 
   /**
-   * 检测指定产品仓库在指定日期之后是否有新单据
-   * 如果有，则触发从该月份开始的重新结算
+   * 检测是否需要重新结算
    */
   checkAndRecalculateIfNeeded(
     productCode: string,
@@ -517,7 +492,6 @@ export class MonthlyCostSettlementService {
 
       console.log(`检查是否需要重新结算：产品 ${productCode}, 仓库 ${warehouseId}, 日期 ${documentDate}`)
 
-      // 检查该月份之后的所有月份是否已结算
       const now = new Date()
       const currentYear = now.getFullYear()
       const currentMonth = now.getMonth() + 1
@@ -532,7 +506,6 @@ export class MonthlyCostSettlementService {
         console.log(`  ${y}年${m}月：已结算=${isSettled}`)
 
         if (isSettled) {
-          // 如果已结算，说明可能需要重新计算
           hasUnlockedMonth = true
           break
         }

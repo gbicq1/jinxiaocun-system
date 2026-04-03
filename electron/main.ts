@@ -1,13 +1,15 @@
-import { app, BrowserWindow, ipcMain, Menu } from 'electron'
+import { app, BrowserWindow, ipcMain, Menu, dialog } from 'electron'
 import { resolve } from 'path'
 import { InventoryDatabase } from './database'
 import { CostSettlementHandler } from './cost-settlement-handler'
 import { ScheduledTaskService } from './scheduled-task-service'
+import { DatabaseBackup } from './database-backup'
 
 let mainWindow: BrowserWindow | null = null
 let db: InventoryDatabase
 let costHandler: CostSettlementHandler
 let scheduledTaskService: ScheduledTaskService
+let databaseBackup: DatabaseBackup
 
 function createWindow() {
   console.log('创建窗口，preload 路径:', resolve(__dirname, 'preload.js'))
@@ -112,6 +114,18 @@ function initDatabase() {
   db.initialize()
   console.log('数据库初始化完成:', dbPath)
   
+  // 初始化数据库备份服务
+  databaseBackup = new DatabaseBackup(dbPath)
+  
+  // 启动时自动备份数据库
+  const backupPath = databaseBackup.autoBackup()
+  if (backupPath) {
+    console.log('启动时自动备份完成:', backupPath)
+  }
+  
+  // 清理旧备份（保留最近 10 个）
+  databaseBackup.cleanupOldBackups(10)
+  
   // 初始化成本结算处理器
   if (db.costDb) {
     costHandler = new CostSettlementHandler(db.costDb, mainWindow!)
@@ -120,7 +134,7 @@ function initDatabase() {
   }
   
   // 初始化定时任务服务
-  scheduledTaskService = new ScheduledTaskService(db.costDb, mainWindow!)
+  scheduledTaskService = new ScheduledTaskService(db.costDb, mainWindow!, db.db!)
   scheduledTaskService.start()
   console.log('定时任务服务已启动')
 }
@@ -391,6 +405,69 @@ function setupIpcHandlers() {
       throw new Error('成本结算数据库未初始化')
     }
     return db.costDb.getSettlements(year, month, productCode, warehouseId)
+  })
+
+  // 数据库备份管理
+  ipcMain.handle('db-backup-manual', async () => {
+    const result = await databaseBackup.manualBackup()
+    if (result.success) {
+      dialog.showMessageBox(mainWindow!, {
+        type: 'info',
+        title: '备份成功',
+        message: `数据库已成功备份到：\n${result.path}`
+      })
+    } else if (result.error) {
+      dialog.showMessageBox(mainWindow!, {
+        type: 'error',
+        title: '备份失败',
+        message: `备份失败：${result.error}`
+      })
+    }
+    return result
+  })
+
+  ipcMain.handle('db-backup-restore', async () => {
+    const result = await databaseBackup.restoreBackup()
+    if (result.success) {
+      dialog.showMessageBox(mainWindow!, {
+        type: 'info',
+        title: '恢复成功',
+        message: '数据库已成功恢复，请重启系统以应用更改。'
+      })
+    } else if (result.error) {
+      dialog.showMessageBox(mainWindow!, {
+        type: 'error',
+        title: '恢复失败',
+        message: `恢复失败：${result.error}`
+      })
+    }
+    return result
+  })
+
+  ipcMain.handle('db-backup-list', async () => {
+    return databaseBackup.getBackupList()
+  })
+
+  ipcMain.handle('db-export', async () => {
+    const result = await databaseBackup.exportDatabase()
+    if (result.success) {
+      dialog.showMessageBox(mainWindow!, {
+        type: 'info',
+        title: '导出成功',
+        message: `数据库已成功导出到：\n${result.path}\n\n您可以将此文件复制到其他电脑使用。`
+      })
+    } else if (result.error) {
+      dialog.showMessageBox(mainWindow!, {
+        type: 'error',
+        title: '导出失败',
+        message: `导出失败：${result.error}`
+      })
+    }
+    return result
+  })
+
+  ipcMain.handle('db-info', async () => {
+    return databaseBackup.getDatabaseInfo()
   })
 
   console.log('IPC 处理器设置完成')

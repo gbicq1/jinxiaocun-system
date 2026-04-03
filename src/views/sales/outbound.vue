@@ -284,7 +284,7 @@
 
         <el-row :gutter="20" style="background: #f5f7fa; padding: 15px; border-radius: 4px">
           <el-col :span="12"><div style="font-size: 16px; font-weight: bold">商品行数：{{ formData.items?.length || 0 }}</div></el-col>
-          <el-col :span="12" style="text-align: right"><div style="font-size: 18px; font-weight: bold; color: #f56c6c">合计金额：{{ totalAmount.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}</div></el-col>
+          <el-col :span="12" style="text-align: right"><div style="font-size: 18px; font-weight: bold; color: #f56c6c">合计金额：{{ (totalAmount || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}</div></el-col>
         </el-row>
 
         <el-form-item label="备注" prop="remark"><el-input v-model="formData.remark" type="textarea" :rows="3" placeholder="请输入备注" /></el-form-item>
@@ -324,15 +324,14 @@ interface OutboundItem {
   productId?: number
   productName: string
   specification: string
-  quantity?: number
+  quantity: number
   unit: string
-  unitPrice?: number
+  unitPrice: number
   unitPriceEx?: number
   taxRate: number | string
-  taxAmount?: number
-  totalAmount?: number
+  taxAmount: number
+  totalAmount: number
   _lastEdited?: 'unitEx' | 'unitIncl' | 'amount'
-  remark?: string
 }
 
 interface OutboundRecord {
@@ -347,12 +346,11 @@ interface OutboundRecord {
   handlerId?: number
   handlerName?: string
   items: OutboundItem[]
-  totalAmount?: number
+  totalAmount: number
   receivedAmount?: number
   invoiceIssued?: boolean
   status: string
   remark?: string
-  createdAt?: string
 }
 
 interface Product {
@@ -447,34 +445,39 @@ const rules = {
   ]
 }
 
-const totalAmount = computed(() => formData.items.reduce((sum, item) => sum + (item.totalAmount || 0), 0))
+const totalAmount = computed(() => formData.items.reduce((sum, item) => sum + item.totalAmount, 0))
 
 // 过滤后的出库记录
 const filteredOutbounds = computed(() => {
-  let filtered = outbounds.value
+  // 创建副本，避免修改原数组
+  const sourceArray = outbounds.value || []
+  let filtered = [...sourceArray]
 
   // 日期范围过滤
-  if (queryForm.dateRange && queryForm.dateRange.length === 2) {
+  if (queryForm.dateRange && Array.isArray(queryForm.dateRange) && queryForm.dateRange.length === 2) {
     const [startDate, endDate] = queryForm.dateRange
-    filtered = filtered.filter(record => {
-      return record.voucherDate >= startDate && record.voucherDate <= endDate
-    })
+    if (startDate && endDate) {
+      filtered = filtered.filter(record => {
+        if (!record.voucherDate) return false
+        return record.voucherDate >= startDate && record.voucherDate <= endDate
+      })
+    }
   }
 
   // 客户过滤
-  if (queryForm.customerId) {
+  if (queryForm.customerId !== undefined && queryForm.customerId !== null) {
     filtered = filtered.filter(record => record.customerId === queryForm.customerId)
   }
 
   // 金额范围过滤
-  if (typeof queryForm.minAmount === 'number') {
-    filtered = filtered.filter(record => record.totalAmount >= queryForm.minAmount!)
+  if (typeof queryForm.minAmount === 'number' && !isNaN(queryForm.minAmount)) {
+    filtered = filtered.filter(record => record.totalAmount >= queryForm.minAmount)
   }
-  if (typeof queryForm.maxAmount === 'number') {
-    filtered = filtered.filter(record => record.totalAmount <= queryForm.maxAmount!)
+  if (typeof queryForm.maxAmount === 'number' && !isNaN(queryForm.maxAmount)) {
+    filtered = filtered.filter(record => record.totalAmount <= queryForm.maxAmount)
   }
 
-  // 按日期和时间戳正序排序
+  // 按日期和时间戳正序排序（对副本排序）
   filtered.sort((a: any, b: any) => {
     const dateA = new Date(a.voucherDate || a.date || '1970-01-01').getTime()
     const dateB = new Date(b.voucherDate || b.date || '1970-01-01').getTime()
@@ -521,75 +524,31 @@ const loadOutbounds = async () => {
   try {
     console.log('开始加载出库单列表...')
     
-    // 先加载所有产品、客户、仓库数据
-    const products: any[] = await dbQuery('SELECT * FROM products')
-    const customers: any[] = await dbQuery('SELECT * FROM customers')
-    const warehouses: any[] = await dbQuery('SELECT * FROM warehouses')
-    
-    console.log('产品数据:', products)
-    console.log('客户数据:', customers)
-    console.log('仓库数据:', warehouses)
-    
-    // 创建产品、客户、仓库的映射表
-    const productMap = new Map(products.map((p: any) => [p.id, p]))
-    const customerMap = new Map(customers.map((c: any) => [c.id, c]))
-    const warehouseMap = new Map(warehouses.map((w: any) => [w.id, w]))
-    
-    // 从数据库查询主表
-    const result = await dbQuery('SELECT * FROM sales_outbound ORDER BY created_at DESC')
-    console.log('出库单主表数据:', result)
-    
-    // 为每个出库单加载明细数据并映射字段
-    outbounds.value = await Promise.all(result.map(async (record: any) => {
-      console.log('查询出库单', record.id, '的明细...')
-      const items = await dbQuery('SELECT * FROM sales_outbound_items WHERE outbound_id = ?', [record.id])
-      console.log('出库单', record.id, '的明细:', items)
+    const electron = (window as any).electron
+    if (electron && electron.outboundList) {
+      // 调用 Electron 后端的 outboundList 方法
+      const result = await electron.outboundList(1, 1000) // 获取所有数据
+      console.log('出库单列表结果:', result)
       
-      const customer = customerMap.get(record.customer_id)
-      const warehouse = warehouseMap.get(record.warehouse_id)
+      // 后端已经返回 camelCase 字段，直接使用
+      outbounds.value = result.data || result
+      total.value = result.total || result.length
       
-      const enrichedRecord = {
-        id: record.id,
-        voucherNo: record.outbound_no,
-        voucherDate: record.outbound_date,
-        customerId: record.customer_id,
-        customerName: customer?.name || '',
-        warehouseId: record.warehouse_id,
-        warehouseName: warehouse?.name || '',
-        totalAmount: record.total_amount || 0,
-        remark: record.remark,
-        handlerName: record.handler_name || '',
-        createdAt: record.created_at,
-        items: items.map((item: any) => {
-          const product = productMap.get(item.product_id)
-          return {
-            productId: item.product_id,
-            productName: item.product_name || (product?.name || ''),
-            specification: item.specification || (product?.spec || product?.specification || ''),
-            unit: item.unit || (product?.unit || ''),
-            quantity: item.quantity || 0,
-            unitPriceEx: item.unit_price || 0,
-            unitPrice: item.sale_price || 0,
-            taxRate: item.tax_rate === 0 ? '免税' : (item.tax_rate || 13),
-            taxAmount: item.tax_amount || 0,
-            totalAmount: item.total_amount || 0,
-            costPrice: item.cost_price || 0,
-            remark: item.remark || ''
-          }
-        })
+      console.log('处理后的出库单列表:', outbounds.value)
+      if (outbounds.value && outbounds.value.length > 0) {
+        console.log('第一条出库单数据:', outbounds.value[0])
       }
-      
-      console.log('处理后的出库单记录:', enrichedRecord)
-      return enrichedRecord
-    }))
-    
-    console.log('最终的 outbounds:', outbounds.value)
-    
-    // 设置总数
-    total.value = outbounds.value.length
+    } else {
+      console.error('outboundList 方法不可用')
+      ElMessage.error('加载失败：后端方法不可用')
+      outbounds.value = []
+      total.value = 0
+    }
   } catch (error) {
-    console.error('加载出库单失败:', error)
-    ElMessage.error('加载出库单失败')
+    console.error('加载出库单列表失败:', error)
+    ElMessage.error('加载出库单列表失败')
+    outbounds.value = []
+    total.value = 0
   }
 }
 
@@ -825,14 +784,14 @@ const removeItem = (index: number) => {
 const handleFocus = (row: any, field: string) => {
   const value = row[field]
   if (value === 0 || value === '0') {
-    row[field] = undefined
+    row[field] = ''
   }
 }
 
 // 处理已收款聚焦事件
 const handleReceivedAmountFocus = () => {
   if (formData.receivedAmount === 0 || formData.receivedAmount === '0') {
-    formData.receivedAmount = undefined
+    formData.receivedAmount = '' as any
   }
 }
 
@@ -844,8 +803,8 @@ const handleProductChange = async (index: number, productId: number) => {
     // 优先使用 spec（产品表字段），其次使用 specification，最后使用 code 作为备用
     item.specification = product.spec || product.specification || product.code || ''
     item.unit = product.unit || ''
-    // 如果产品有售价则使用，否则保持为 undefined
-    item.unitPriceEx = product.salePrice && product.salePrice > 0 ? product.salePrice : undefined
+    // 如果产品有售价则使用，否则保持为空
+    item.unitPriceEx = product.salePrice && product.salePrice > 0 ? product.salePrice : ('' as any)
     item._lastEdited = 'unitEx'
     // 只有当有价格时才计算总额
     if (item.unitPriceEx && item.unitPriceEx !== '') {
@@ -981,7 +940,7 @@ const onQuantityChange = async (item: OutboundItem) => {
 }
 
 const calculateTotalAmount = () => {
-  formData.totalAmount = formData.items.reduce((sum, item) => sum + (item.totalAmount || 0), 0)
+  formData.totalAmount = formData.items.reduce((sum, item) => sum + item.totalAmount, 0)
 }
 
 const handleCustomerChange = (customerId: number) => {
@@ -1058,32 +1017,31 @@ const handleSubmit = async () => {
   try {
     if (formData.id) {
       // 更新
-      const updateData = { 
-        outbound_no: formData.voucherNo,
-        customer_id: formData.customerId,
-        warehouse_id: formData.warehouseId,
-        outbound_date: formData.voucherDate,
-        total_amount: formData.totalAmount,
-        remark: formData.remark,
-        handler_name: formData.handlerName
-      }
-      console.log('更新出库单数据:', updateData)
       if (window.electron && window.electron.dbUpdate) {
-        await window.electron.dbUpdate('sales_outbound', updateData, 'id = ?', [formData.id])
+        await window.electron.dbUpdate('sales_outbound', { 
+          outbound_no: formData.voucherNo,
+          customer_id: formData.customerId,
+          warehouse_id: formData.warehouseId,
+          outbound_date: formData.voucherDate,
+          total_amount: formData.totalAmount,
+          remark: formData.remark,
+          handler_name: formData.handlerName
+        }, 'id = ?', [formData.id])
       } else {
-        await dbUpdate('sales_outbound', updateData, 'id = ?', [formData.id])
-      }
-      
-      // 更新明细数据
-      for (const item of formData.items) {
-        // 这里需要调用后端 API 来更新明细，暂时跳过
-        console.log('需要更新明细:', item)
+        await dbUpdate('sales_outbound', { 
+          outbound_no: formData.voucherNo,
+          customer_id: formData.customerId,
+          warehouse_id: formData.warehouseId,
+          outbound_date: formData.voucherDate,
+          total_amount: formData.totalAmount,
+          remark: formData.remark,
+          handler_name: formData.handlerName
+        }, 'id = ?', [formData.id])
       }
     } else {
       // 新增
       const outboundData = {
         outbound_no: formData.voucherNo,
-        order_id: null,
         customer_id: formData.customerId,
         warehouse_id: formData.warehouseId,
         outbound_date: formData.voucherDate,
@@ -1094,20 +1052,11 @@ const handleSubmit = async () => {
         created_by: formData.operator,
         items: formData.items.map((item: any) => ({
           product_id: item.productId,
-          product_name: item.productName,
-          specification: item.specification,
-          unit: item.unit,
           quantity: item.quantity,
-          unit_price: item.unitPriceEx || 0,
-          sale_price: item.unitPrice || 0,
-          tax_rate: item.taxRate === '免税' ? 0 : (item.taxRate || 0),
-          tax_amount: item.taxAmount || 0,
-          total_amount: item.totalAmount || 0,
           cost_price: item.costPrice || item.unitPrice || 0,
           remark: item.remark || ''
         }))
       }
-      console.log('新增出库单数据:', outboundData)
       
       if (window.electron && window.electron.outboundAdd) {
         await window.electron.outboundAdd(outboundData)
@@ -1118,8 +1067,12 @@ const handleSubmit = async () => {
       }
     }
     
-    // 暂时跳过成本重新结算，因为缺少对应的 IPC 处理程序
-    console.log('暂时跳过成本重新结算')
+    // 检测是否需要重新结算成本
+    await handleDocumentSave(
+      DocumentType.SALES_OUTBOUND,
+      formData.items || [],
+      formData.voucherDate
+    )
     
     dialogVisible.value = false
     ElMessage.success('保存成功')
@@ -1133,12 +1086,20 @@ const handleSubmit = async () => {
 const handleView = (row: OutboundRecord) => {
   dialogTitle.value = '查看出库单'
   isViewMode.value = true
-  Object.assign(formData, {
-    ...row,
-    totalAmount: row.totalAmount || 0,
-    receivedAmount: row.receivedAmount || 0,
-    items: row.items ? JSON.parse(JSON.stringify(row.items)) : []
-  })
+  
+  // 使用深拷贝避免数据被修改（和入库单一样）
+  const viewData = JSON.parse(JSON.stringify(row))
+  if (viewData.items) {
+    viewData.items.forEach((item: any) => {
+      item._lastEdited = undefined
+    })
+  }
+  Object.assign(formData, viewData)
+  
+  console.log('查看出库单:', row)
+  console.log('深拷贝后的 viewData:', viewData)
+  console.log('赋值后的 formData:', formData)
+  
   selectedRows.value = [row]
   dialogVisible.value = true
 }
@@ -1146,12 +1107,7 @@ const handleView = (row: OutboundRecord) => {
 const handleEdit = (row: OutboundRecord) => {
   dialogTitle.value = '编辑出库单'
   isViewMode.value = false
-  Object.assign(formData, {
-    ...row,
-    totalAmount: row.totalAmount || 0,
-    receivedAmount: row.receivedAmount || 0,
-    items: row.items ? JSON.parse(JSON.stringify(row.items)) : []
-  })
+  Object.assign(formData, { ...row, items: row.items ? JSON.parse(JSON.stringify(row.items)) : [] })
   selectedRows.value = [row]
   dialogVisible.value = true
 }
@@ -1186,13 +1142,13 @@ const printOutboundForm = (row: OutboundRecord & { handlerName?: string }) => {
         <td>${index + 1}</td>
         <td>${item.productName}</td>
         <td>${item.specification}</td>
-        <td>${item.quantity || 0}</td>
+        <td>${item.quantity}</td>
         <td>${item.unit}</td>
         <td>${(item.unitPriceEx ?? item.unitPrice ?? 0).toFixed(2)}</td>
         <td>${(item.unitPrice ?? 0).toFixed(2)}</td>
         <td>${item.taxRate}%</td>
-        <td>${(item.taxAmount ?? 0).toFixed(2)}</td>
-        <td>${(item.totalAmount ?? 0).toFixed(2)}</td>
+        <td>${item.taxAmount.toFixed(2)}</td>
+        <td>${item.totalAmount.toFixed(2)}</td>
       </tr>
     `).join('')
 
@@ -1244,7 +1200,7 @@ const printOutboundForm = (row: OutboundRecord & { handlerName?: string }) => {
             ${itemsHtml}
           </tbody>
         </table>
-        <div style="text-align: right; font-weight: bold;">总金额：${(row.totalAmount ?? 0).toFixed(2)}</div>
+        <div style="text-align: right; font-weight: bold;">总金额：${row.totalAmount.toFixed(2)}</div>
         <div style="margin-top: 10px; border: 1px solid #000; padding: 8px; text-align: left;">备注：${row.remark || '-'}</div>
         <div style="margin-top: 15px; display: flex; justify-content: space-between; align-items: center;">
           <div>操作员：${row.operator}  &nbsp;&nbsp;&nbsp;&nbsp; 经办人：${row.handlerName || '-'}</div>
@@ -1280,8 +1236,8 @@ const printBatchOutboundForms = (rows: (OutboundRecord & { handlerName?: string 
           <td>${(item.unitPriceEx ?? item.unitPrice ?? 0).toFixed(2)}</td>
           <td>${(item.unitPrice ?? 0).toFixed(2)}</td>
           <td>${item.taxRate}%</td>
-          <td>${(item.taxAmount ?? 0).toFixed(2)}</td>
-          <td>${(item.totalAmount ?? 0).toFixed(2)}</td>
+          <td>${item.taxAmount.toFixed(2)}</td>
+          <td>${item.totalAmount.toFixed(2)}</td>
         </tr>
       `).join('')
 
@@ -1317,7 +1273,7 @@ const printBatchOutboundForms = (rows: (OutboundRecord & { handlerName?: string 
             ${itemsHtml}
           </tbody>
         </table>
-        <div style="text-align: right; font-weight: bold;">总金额：${(row.totalAmount ?? 0).toFixed(2)}</div>
+        <div style="text-align: right; font-weight: bold;">总金额：${row.totalAmount.toFixed(2)}</div>
         <div style="margin-top: 10px; border: 1px solid #000; padding: 8px; text-align: left;">备注：${row.remark || '-'}</div>
         <div style="margin-top: 15px; display: flex; justify-content: space-between; align-items: center;">
           <div>操作员：${row.operator}  &nbsp;&nbsp;&nbsp;&nbsp; 经办人：${row.handlerName || '-'}</div>

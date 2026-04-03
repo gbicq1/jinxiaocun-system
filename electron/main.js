@@ -5,10 +5,12 @@ const path_1 = require("path");
 const database_1 = require("./database");
 const cost_settlement_handler_1 = require("./cost-settlement-handler");
 const scheduled_task_service_1 = require("./scheduled-task-service");
+const database_backup_1 = require("./database-backup");
 let mainWindow = null;
 let db;
 let costHandler;
 let scheduledTaskService;
+let databaseBackup;
 function createWindow() {
     console.log('创建窗口，preload 路径:', (0, path_1.resolve)(__dirname, 'preload.js'));
     mainWindow = new electron_1.BrowserWindow({
@@ -106,6 +108,15 @@ function initDatabase() {
     db = new database_1.InventoryDatabase(dbPath);
     db.initialize();
     console.log('数据库初始化完成:', dbPath);
+    // 初始化数据库备份服务
+    databaseBackup = new database_backup_1.DatabaseBackup(dbPath);
+    // 启动时自动备份数据库
+    const backupPath = databaseBackup.autoBackup();
+    if (backupPath) {
+        console.log('启动时自动备份完成:', backupPath);
+    }
+    // 清理旧备份（保留最近 10 个）
+    databaseBackup.cleanupOldBackups(10);
     // 初始化成本结算处理器
     if (db.costDb) {
         costHandler = new cost_settlement_handler_1.CostSettlementHandler(db.costDb, mainWindow);
@@ -113,7 +124,7 @@ function initDatabase() {
         console.log('成本结算处理器初始化完成');
     }
     // 初始化定时任务服务
-    scheduledTaskService = new scheduled_task_service_1.ScheduledTaskService(db.costDb, mainWindow);
+    scheduledTaskService = new scheduled_task_service_1.ScheduledTaskService(db.costDb, mainWindow, db.db);
     scheduledTaskService.start();
     console.log('定时任务服务已启动');
 }
@@ -341,6 +352,67 @@ function setupIpcHandlers() {
             throw new Error('成本结算数据库未初始化');
         }
         return db.costDb.getSettlements(year, month, productCode, warehouseId);
+    });
+    // 数据库备份管理
+    electron_1.ipcMain.handle('db-backup-manual', async () => {
+        const result = await databaseBackup.manualBackup();
+        if (result.success) {
+            electron_1.dialog.showMessageBox(mainWindow, {
+                type: 'info',
+                title: '备份成功',
+                message: `数据库已成功备份到：\n${result.path}`
+            });
+        }
+        else if (result.error) {
+            electron_1.dialog.showMessageBox(mainWindow, {
+                type: 'error',
+                title: '备份失败',
+                message: `备份失败：${result.error}`
+            });
+        }
+        return result;
+    });
+    electron_1.ipcMain.handle('db-backup-restore', async () => {
+        const result = await databaseBackup.restoreBackup();
+        if (result.success) {
+            electron_1.dialog.showMessageBox(mainWindow, {
+                type: 'info',
+                title: '恢复成功',
+                message: '数据库已成功恢复，请重启系统以应用更改。'
+            });
+        }
+        else if (result.error) {
+            electron_1.dialog.showMessageBox(mainWindow, {
+                type: 'error',
+                title: '恢复失败',
+                message: `恢复失败：${result.error}`
+            });
+        }
+        return result;
+    });
+    electron_1.ipcMain.handle('db-backup-list', async () => {
+        return databaseBackup.getBackupList();
+    });
+    electron_1.ipcMain.handle('db-export', async () => {
+        const result = await databaseBackup.exportDatabase();
+        if (result.success) {
+            electron_1.dialog.showMessageBox(mainWindow, {
+                type: 'info',
+                title: '导出成功',
+                message: `数据库已成功导出到：\n${result.path}\n\n您可以将此文件复制到其他电脑使用。`
+            });
+        }
+        else if (result.error) {
+            electron_1.dialog.showMessageBox(mainWindow, {
+                type: 'error',
+                title: '导出失败',
+                message: `导出失败：${result.error}`
+            });
+        }
+        return result;
+    });
+    electron_1.ipcMain.handle('db-info', async () => {
+        return databaseBackup.getDatabaseInfo();
     });
     console.log('IPC 处理器设置完成');
 }

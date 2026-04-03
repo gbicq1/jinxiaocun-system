@@ -292,13 +292,68 @@ class InventoryDatabase {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         outbound_id INTEGER,
         product_id INTEGER,
-        quantity INTEGER,
+        product_name VARCHAR(200),
+        specification VARCHAR(200),
+        quantity DECIMAL(14,4),
+        unit VARCHAR(50),
+        unit_price_ex DECIMAL(14,4),
+        unit_price DECIMAL(14,4),
+        tax_rate VARCHAR(20),
+        tax_amount DECIMAL(14,2),
+        total_amount DECIMAL(14,2),
+        deduction_amount DECIMAL(14,2),
+        allow_deduction INTEGER DEFAULT 0,
         cost_price DECIMAL(10,2),
         remark TEXT,
         FOREIGN KEY (outbound_id) REFERENCES sales_outbound(id),
         FOREIGN KEY (product_id) REFERENCES products(id)
       )
     `);
+        try {
+            this.db.exec(`ALTER TABLE sales_outbound_items ADD COLUMN product_name VARCHAR(200)`);
+        }
+        catch (e) {
+            try {
+                this.db.exec(`ALTER TABLE sales_outbound_items ADD COLUMN specification VARCHAR(200)`);
+            }
+            catch (_) { }
+        }
+        try {
+            this.db.exec(`ALTER TABLE sales_outbound_items ADD COLUMN specification VARCHAR(200)`);
+        }
+        catch (e) { }
+        try {
+            this.db.exec(`ALTER TABLE sales_outbound_items ADD COLUMN unit VARCHAR(50)`);
+        }
+        catch (e) { }
+        try {
+            this.db.exec(`ALTER TABLE sales_outbound_items ADD COLUMN unit_price_ex DECIMAL(14,4)`);
+        }
+        catch (e) { }
+        try {
+            this.db.exec(`ALTER TABLE sales_outbound_items ADD COLUMN unit_price DECIMAL(14,4)`);
+        }
+        catch (e) { }
+        try {
+            this.db.exec(`ALTER TABLE sales_outbound_items ADD COLUMN tax_rate VARCHAR(20)`);
+        }
+        catch (e) { }
+        try {
+            this.db.exec(`ALTER TABLE sales_outbound_items ADD COLUMN tax_amount DECIMAL(14,2)`);
+        }
+        catch (e) { }
+        try {
+            this.db.exec(`ALTER TABLE sales_outbound_items ADD COLUMN total_amount DECIMAL(14,2)`);
+        }
+        catch (e) { }
+        try {
+            this.db.exec(`ALTER TABLE sales_outbound_items ADD COLUMN deduction_amount DECIMAL(14,2)`);
+        }
+        catch (e) { }
+        try {
+            this.db.exec(`ALTER TABLE sales_outbound_items ADD COLUMN allow_deduction INTEGER DEFAULT 0`);
+        }
+        catch (e) { }
         // 采购申请单表
         this.db.exec(`
       CREATE TABLE IF NOT EXISTS purchase_requests (
@@ -416,15 +471,17 @@ class InventoryDatabase {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         outbound_id INTEGER,
         product_id INTEGER,
-        product_name TEXT,
-        specification TEXT,
-        unit TEXT,
-        quantity INTEGER,
-        unit_price DECIMAL(10,2),
-        sale_price DECIMAL(10,2),
-        tax_rate DECIMAL(5,2),
-        tax_amount DECIMAL(10,2),
-        total_amount DECIMAL(10,2),
+        product_name VARCHAR(200),
+        specification VARCHAR(200),
+        quantity DECIMAL(14,4),
+        unit VARCHAR(50),
+        unit_price_ex DECIMAL(14,4),
+        unit_price DECIMAL(14,4),
+        tax_rate VARCHAR(20),
+        tax_amount DECIMAL(14,2),
+        total_amount DECIMAL(14,2),
+        deduction_amount DECIMAL(14,2),
+        allow_deduction INTEGER DEFAULT 0,
         cost_price DECIMAL(10,2),
         remark TEXT,
         FOREIGN KEY (outbound_id) REFERENCES sales_outbound(id),
@@ -992,22 +1049,22 @@ class InventoryDatabase {
                 createdBy: record.created_by,
                 createdAt: record.created_at,
                 items: items.map((item) => {
-                    // 加载产品信息
-                    const product = this.db.prepare('SELECT name, spec, unit FROM products WHERE id = ?').get(item.product_id);
                     return {
                         id: item.id,
                         outboundId: item.outbound_id,
                         productId: item.product_id,
-                        productName: product?.name || '',
-                        specification: product?.spec || '',
-                        unit: product?.unit || '',
+                        productName: item.product_name || '',
+                        specification: item.specification || '',
+                        unit: item.unit || '',
                         quantity: item.quantity,
-                        unitPrice: item.unit_price,
-                        unitPriceEx: item.unit_price_ex,
-                        taxRate: item.tax_rate,
-                        taxAmount: item.tax_amount,
-                        totalAmount: item.total_amount,
-                        totalAmountEx: item.total_amount_ex
+                        unitPriceEx: item.unit_price_ex || 0,
+                        unitPrice: item.unit_price || 0,
+                        taxRate: item.tax_rate ?? item.taxRate ?? 0,
+                        taxAmount: item.tax_amount ?? item.taxAmount ?? 0,
+                        totalAmount: item.total_amount ?? item.totalAmount ?? ((item.quantity || 0) * (item.unit_price || 0)),
+                        deductionAmount: item.deduction_amount ?? item.deductionAmount ?? 0,
+                        allowDeduction: !!item.allow_deduction,
+                        costPrice: item.cost_price || 0
                     };
                 })
             };
@@ -1022,32 +1079,32 @@ class InventoryDatabase {
     addOutbound(outbound) {
         try {
             console.log('【Electron 后端】收到出库单数据:', outbound);
-            // 开启事务
             const transaction = this.db.transaction(() => {
-                // 提取 items 数据
                 const items = outbound.items || [];
                 console.log('【Electron 后端】明细项数量:', items.length);
+                console.log('【Electron 后端】明细项原始数据:', JSON.stringify(items));
                 delete outbound.items;
-                // 插入主表
                 const id = this.insert('sales_outbound', outbound);
                 console.log('【Electron 后端】主表插入成功，ID:', id);
-                // 插入明细表
                 if (items.length > 0) {
                     items.forEach((item, index) => {
+                        const enrichedItem = this.enrichOutboundItem(item);
                         const itemData = {
                             outbound_id: id,
-                            product_id: item.product_id,
-                            product_name: item.product_name || '',
-                            specification: item.specification || '',
-                            unit: item.unit || '',
-                            quantity: item.quantity,
-                            unit_price: item.unit_price || 0,
-                            sale_price: item.sale_price || 0,
-                            tax_rate: item.tax_rate || 0,
-                            tax_amount: item.tax_amount || 0,
-                            total_amount: item.total_amount || 0,
-                            cost_price: item.cost_price || 0,
-                            remark: item.remark || ''
+                            product_id: enrichedItem.product_id,
+                            product_name: enrichedItem.product_name || '',
+                            specification: enrichedItem.specification || '',
+                            quantity: enrichedItem.quantity || 0,
+                            unit: enrichedItem.unit || '',
+                            unit_price_ex: enrichedItem.unit_price_ex || 0,
+                            unit_price: enrichedItem.unit_price || 0,
+                            tax_rate: String(enrichedItem.tax_rate ?? ''),
+                            tax_amount: enrichedItem.tax_amount ?? 0,
+                            total_amount: enrichedItem.total_amount ?? 0,
+                            deduction_amount: enrichedItem.deduction_amount ?? 0,
+                            allow_deduction: enrichedItem.allow_deduction ? 1 : 0,
+                            cost_price: enrichedItem.cost_price || 0,
+                            remark: enrichedItem.remark || ''
                         };
                         console.log(`【Electron 后端】插入销售出库明细项 ${index + 1}:`, itemData);
                         this.insert('sales_outbound_items', itemData);
@@ -1068,10 +1125,85 @@ class InventoryDatabase {
             throw error;
         }
     }
+    enrichOutboundItem(item) {
+        const result = { ...item };
+        if (!result.product_name || !result.specification || !result.unit || !result.unit_price || !result.unit_price_ex) {
+            try {
+                const product = this.db.prepare('SELECT name, spec, unit, cost_price, sell_price FROM products WHERE id = ?').get(result.product_id);
+                if (product) {
+                    if (!result.product_name)
+                        result.product_name = product.name || '';
+                    if (!result.specification)
+                        result.specification = product.spec || '';
+                    if (!result.unit)
+                        result.unit = product.unit || '';
+                    if (!result.unit_price_ex || result.unit_price_ex === 0)
+                        result.unit_price_ex = product.cost_price || 0;
+                    if (!result.unit_price || result.unit_price === 0)
+                        result.unit_price = product.sell_price || product.cost_price || 0;
+                }
+            }
+            catch (e) { /* ignore */ }
+        }
+        if (!result.product_name)
+            result.product_name = item.product_name || '';
+        if (!result.specification)
+            result.specification = item.specification || '';
+        if (!result.unit)
+            result.unit = item.unit || '';
+        result.product_id = item.product_id;
+        result.quantity = item.quantity || 0;
+        result.unit_price_ex = result.unit_price_ex || item.unit_price_ex || item.unitPriceEx || 0;
+        result.unit_price = result.unit_price || item.unit_price || item.unitPrice || 0;
+        result.tax_rate = item.taxRate ?? item.tax_rate ?? '';
+        result.tax_amount = item.taxAmount ?? item.tax_amount ?? 0;
+        result.total_amount = item.totalAmount ?? item.total_amount ?? ((result.quantity || 0) * (result.unit_price || 0));
+        result.deduction_amount = item.deductionAmount ?? item.deduction_amount ?? 0;
+        result.allow_deduction = item.allowDeduction ?? item.allow_deduction ?? 0;
+        result.cost_price = result.cost_price || item.cost_price || result.unit_price_ex || 0;
+        result.remark = item.remark || '';
+        return result;
+    }
     updateOutbound(outbound) {
-        const id = outbound.id;
-        delete outbound.id;
-        return this.update('sales_outbound', outbound, 'id = ?', [id]);
+        try {
+            const id = outbound.id;
+            const items = outbound.items || [];
+            delete outbound.items;
+            delete outbound.id;
+            const transaction = this.db.transaction(() => {
+                this.db.prepare('DELETE FROM sales_outbound_items WHERE outbound_id = ?').run(id);
+                this.update('sales_outbound', outbound, 'id = ?', [id]);
+                if (items.length > 0) {
+                    items.forEach((item) => {
+                        const enrichedItem = this.enrichOutboundItem(item);
+                        const itemData = {
+                            outbound_id: id,
+                            product_id: enrichedItem.product_id,
+                            product_name: enrichedItem.product_name || '',
+                            specification: enrichedItem.specification || '',
+                            quantity: enrichedItem.quantity || 0,
+                            unit: enrichedItem.unit || '',
+                            unit_price_ex: enrichedItem.unit_price_ex || 0,
+                            unit_price: enrichedItem.unit_price || 0,
+                            tax_rate: String(enrichedItem.tax_rate ?? ''),
+                            tax_amount: enrichedItem.tax_amount ?? 0,
+                            total_amount: enrichedItem.total_amount ?? 0,
+                            deduction_amount: enrichedItem.deduction_amount ?? 0,
+                            allow_deduction: enrichedItem.allow_deduction ? 1 : 0,
+                            cost_price: enrichedItem.cost_price || 0,
+                            remark: enrichedItem.remark || ''
+                        };
+                        this.insert('sales_outbound_items', itemData);
+                    });
+                }
+                return id;
+            });
+            return transaction();
+        }
+        catch (error) {
+            console.error('【Electron 后端】更新销售出库单失败:', error);
+            throw error;
+        }
     }
     deleteOutbound(id) {
         return this.delete('sales_outbound', 'id = ?', [id]);

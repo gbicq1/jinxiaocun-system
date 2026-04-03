@@ -109,11 +109,11 @@ class DatabaseService {
       return result
     }
 
-    if (!result.data || result.data.length === 0) {
+    if (!result.data || (result.data as T[]).length === 0) {
       return { success: false, error: '未找到记录' }
     }
 
-    return { success: true, data: result.data[0] }
+    return { success: true, data: (result.data as T[])[0] }
   }
 
   /**

@@ -79,6 +79,13 @@ electron_1.contextBridge.exposeInMainWorld('electron', {
   // 成本结算查询
   costSettlementQuery: (year, month, productCode, warehouseId) => electron_1.ipcRenderer.invoke('cost-settlement-query', year, month, productCode, warehouseId),
   
+  // 数据库备份管理
+  dbBackupManual: () => electron_1.ipcRenderer.invoke('db-backup-manual'),
+  dbBackupRestore: () => electron_1.ipcRenderer.invoke('db-backup-restore'),
+  dbBackupList: () => electron_1.ipcRenderer.invoke('db-backup-list'),
+  dbExport: () => electron_1.ipcRenderer.invoke('db-export'),
+  dbInfo: () => electron_1.ipcRenderer.invoke('db-info'),
+  
   // IPC 直接访问（用于 db-ipc.ts）
   ipcRenderer: electron_1.ipcRenderer
 })

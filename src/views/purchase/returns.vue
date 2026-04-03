@@ -492,6 +492,7 @@ import dayjs from 'dayjs'
 import { getStockBeforeDateTime } from '@/utils/stock'
 import { handleDocumentSave, DocumentType } from '@/utils/cost-recalculation'
 import { dbQuery } from '@/utils/db'
+import { db } from '@/utils/db-ipc'
 
 // 类型定义
 interface ReturnItem {
@@ -631,22 +632,16 @@ const rules = {
 // 加载退货单列表
 const loadReturnsList = async () => {
   try {
-    const electron = (window as any).electron
-    if (electron) {
-      const result = await electron.purchaseReturnList(currentPage.value, pageSize.value)
-      returnsList.value = result.data.map((item: any) => ({
-        ...item,
-        voucherNo: item.return_no,
-        voucherDate: item.return_date,
-        originalVoucherNo: item.original_inbound_no,
-        totalAmount: item.total_amount,
-        returnReason: item.return_reason
-      }))
-      total.value = result.total
-    } else {
-      returnsList.value = []
-      total.value = 0
-    }
+    const result = await db.getPurchaseReturns(currentPage.value, pageSize.value)
+    returnsList.value = result.data.map((item: any) => ({
+      ...item,
+      voucherNo: item.return_no,
+      voucherDate: item.return_date,
+      originalVoucherNo: item.original_inbound_no,
+      totalAmount: item.total_amount,
+      returnReason: item.return_reason
+    }))
+    total.value = result.total
   } catch (error) {
     console.error('加载退货单列表失败:', error)
     ElMessage.error('加载退货单列表失败')
@@ -1073,50 +1068,47 @@ const handleSubmit = async () => {
       formData.voucherNo = generateVoucherNo()
     }
 
-    const electron = (window as any).electron
-    if (electron) {
-      // 转换数据格式
-      const dbData = {
-        return_no: formData.voucherNo,
-        original_inbound_no: formData.originalVoucherNo,
-        supplier_id: formData.supplierId,
-        warehouse_id: formData.warehouseId,
-        return_date: formData.voucherDate,
-        total_amount: formData.totalAmount,
-        return_reason: formData.returnReason,
-        remark: formData.remark,
-        items: formData.items
-          .filter((item: any) => item.quantity > 0) // 只保存数量>0的商品
-          .map((item: any) => ({
-            product_id: item.productId,
-            quantity: item.quantity,
-            cost_price: item.unitPrice,
-            remark: item.remark,
-            original_item_index: item.originalItemIndex // 保存原索引，用于重新加载时匹配
-          }))
-      }
-
-      if (formData.id) {
-        // 更新现有单据
-        dbData.id = formData.id
-        await electron.purchaseReturnUpdate(dbData)
-      } else {
-        // 新增单据
-        await electron.purchaseReturnAdd(dbData)
-      }
-
-      ElMessage.success('保存成功')
-      
-      // 检测是否需要重新结算成本
-      await handleDocumentSave(
-        DocumentType.PURCHASE_RETURN,
-        formData.items,
-        formData.voucherDate
-      )
-      
-      dialogVisible.value = false
-      loadReturnsList()
+    // 转换数据格式
+    const dbData = {
+      return_no: formData.voucherNo,
+      original_inbound_no: formData.originalVoucherNo,
+      supplier_id: formData.supplierId,
+      warehouse_id: formData.warehouseId,
+      return_date: formData.voucherDate,
+      total_amount: formData.totalAmount,
+      return_reason: formData.returnReason,
+      remark: formData.remark,
+      items: formData.items
+        .filter((item: any) => item.quantity > 0) // 只保存数量>0 的商品
+        .map((item: any) => ({
+          product_id: item.productId,
+          quantity: item.quantity,
+          cost_price: item.unitPrice,
+          remark: item.remark,
+          original_item_index: item.originalItemIndex // 保存原索引，用于重新加载时匹配
+        }))
     }
+
+    if (formData.id) {
+      // 更新现有单据
+      dbData.id = formData.id
+      await db.updatePurchaseReturn(dbData)
+    } else {
+      // 新增单据
+      await db.savePurchaseReturn(dbData)
+    }
+
+    ElMessage.success('保存成功')
+    
+    // 检测是否需要重新结算成本
+    await handleDocumentSave(
+      DocumentType.PURCHASE_RETURN,
+      formData.items,
+      formData.voucherDate
+    )
+    
+    dialogVisible.value = false
+    loadReturnsList()
   } catch (error: any) {
     if (error.validate) {
       ElMessage.error('请完善表单信息')

@@ -127,6 +127,7 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import dayjs from 'dayjs'
 import exportToCsv from '../../utils/exportCsv'
+import { dbQuery, dbInsert, dbUpdate, dbDelete } from '@/utils/db'
 
 interface Order {
   id?: number
@@ -174,13 +175,8 @@ const generateOrderNo = () => {
 // 加载订单列表
 const loadOrders = async () => {
   try {
-    if (window.electron && window.electron.dbQuery) {
-      const result = await window.electron.dbQuery('sales_orders', 'SELECT * FROM sales_orders ORDER BY created_at DESC')
-      orders.value = result
-    } else {
-      const savedData = localStorage.getItem('sales_orders')
-      orders.value = savedData ? JSON.parse(savedData) : []
-    }
+    const result = await dbQuery('SELECT * FROM sales_orders ORDER BY created_at DESC')
+    orders.value = result
     total.value = orders.value.length
   } catch (error) {
     ElMessage.error('加载订单列表失败')
@@ -220,18 +216,14 @@ const handleDelete = async (row: Order) => {
       cancelButtonText: '取消',
       type: 'warning'
     })
-    
-    if (window.electron && window.electron.dbDelete) {
-      await window.electron.dbDelete('sales_orders', 'id = ?', [row.id])
-    } else {
-      const filtered = orders.value.filter(r => r.id !== row.id)
-      localStorage.setItem('sales_orders', JSON.stringify(filtered))
-    }
-    
+    await dbDelete('sales_orders', 'id = ?', [row.id])
     ElMessage.success('删除成功')
     loadOrders()
-  } catch {
-    // 用户取消删除
+  } catch (error: any) {
+    if (error !== 'cancel') {
+      ElMessage.error('删除失败')
+      console.error(error)
+    }
   }
 }
 
@@ -250,20 +242,12 @@ const handleApprove = async (row: Order) => {
       type: 'warning'
     })
     
-    if (window.electron && window.electron.dbUpdate) {
-      await window.electron.dbUpdate('sales_orders', { ...row, status: 'approved' }, 'id = ?', [row.id])
-    } else {
-      const index = orders.value.findIndex(r => r.id === row.id)
-      if (index !== -1) {
-        orders.value[index].status = 'approved'
-        localStorage.setItem('sales_orders', JSON.stringify(orders.value))
-      }
-    }
-    
+    await dbUpdate('sales_orders', { ...row, status: 'approved' }, 'id = ?', [row.id])
     ElMessage.success('审核成功')
     loadOrders()
-  } catch {
-    // 用户取消
+  } catch (error) {
+    ElMessage.error('审核失败')
+    console.error(error)
   }
 }
 
@@ -303,34 +287,11 @@ const handleSubmit = async () => {
     
     if (formData.id) {
       // 更新
-      if (window.electron && window.electron.dbUpdate) {
-        await window.electron.dbUpdate('sales_orders', formData, 'id = ?', [formData.id])
-      } else {
-        const savedData = localStorage.getItem('sales_orders')
-        const allOrders = savedData ? JSON.parse(savedData) : []
-        const index = allOrders.findIndex((r: Order) => r.id === formData.id)
-        if (index !== -1) {
-          allOrders[index] = { ...formData }
-          localStorage.setItem('sales_orders', JSON.stringify(allOrders))
-        }
-      }
+      await dbUpdate('sales_orders', formData, 'id = ?', [formData.id])
       ElMessage.success('更新成功')
     } else {
       // 新增
-      const newOrder = {
-        ...formData,
-        id: Date.now()
-      }
-      
-      if (window.electron && window.electron.dbInsert) {
-        await window.electron.dbInsert('sales_orders', newOrder)
-      } else {
-        const savedData = localStorage.getItem('sales_orders')
-        const allOrders = savedData ? JSON.parse(savedData) : []
-        allOrders.push(newOrder)
-        localStorage.setItem('sales_orders', JSON.stringify(allOrders))
-      }
-      
+      await dbInsert('sales_orders', formData)
       ElMessage.success('新增成功')
     }
     

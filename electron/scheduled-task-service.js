@@ -7,10 +7,11 @@ const cost_settlement_service_1 = require("./cost-settlement-service");
  * 负责每月自动执行成本结转
  */
 class ScheduledTaskService {
-    constructor(db, mainWindow) {
+    constructor(db, mainWindow, mainDb) {
         this.timers = [];
         this.costDb = db;
-        this.settlementService = new cost_settlement_service_1.MonthlyCostSettlementService(db);
+        this.mainDb = mainDb;
+        this.settlementService = new cost_settlement_service_1.MonthlyCostSettlementService(db, mainDb);
         this.mainWindow = mainWindow;
     }
     /**

@@ -459,20 +459,39 @@ const generateVoucherNo = () => {
 
 const loadOutboundList = async () => {
   try {
-    if (window.electron && window.electron.dbQuery) {
+    if (window.electron && window.electron.outboundList) {
+      const result = await window.electron.outboundList(1, 1000)
+      let allRecords = (result && result.data) ? result.data : []
+      if (searchQuery.value) {
+        const query = searchQuery.value.toLowerCase()
+        allRecords = allRecords.filter((r: OutboundRecord) =>
+          r.voucherNo?.toLowerCase().includes(query) ||
+          r.customerName?.toLowerCase().includes(query)
+        )
+      }
+      total.value = allRecords.length
+      const start = (currentPage.value - 1) * pageSize.value
+      outboundList.value = allRecords.slice(start, start + pageSize.value)
+    } else if (window.electron && window.electron.dbQuery) {
       const result = await window.electron.dbQuery('sales_outbound', 'SELECT * FROM sales_outbound ORDER BY created_at DESC')
-      outboundList.value = result
+      let filtered = result
+      if (searchQuery.value) {
+        const query = searchQuery.value.toLowerCase()
+        filtered = result.filter((r: OutboundRecord) =>
+          r.voucherNo?.toLowerCase().includes(query) ||
+          r.customerName?.toLowerCase().includes(query)
+        )
+      }
+      total.value = filtered.length
+      const start = (currentPage.value - 1) * pageSize.value
+      outboundList.value = filtered.slice(start, start + pageSize.value)
     } else {
-      // 尝试多个可能的键名
       const possibleKeys = ['sales_outbound_records', 'outbound_records', 'salesOutbounds']
       let savedData = null
       
       for (const key of possibleKeys) {
         savedData = localStorage.getItem(key)
-        if (savedData) {
-          console.log(`从 ${key} 加载出库单数据`)
-          break
-        }
+        if (savedData) break
       }
       
       const allRecords = savedData ? JSON.parse(savedData) : []
@@ -484,14 +503,10 @@ const loadOutboundList = async () => {
           r.customerName?.toLowerCase().includes(query)
         )
       }
-      outboundList.value = filtered
+      total.value = filtered.length
+      const start = (currentPage.value - 1) * pageSize.value
+      outboundList.value = filtered.slice(start, start + pageSize.value)
     }
-
-    const start = (currentPage.value - 1) * pageSize.value
-    const end = start + pageSize.value
-    const paginated = outboundList.value.slice(start, end)
-    outboundList.value = paginated
-    total.value = outboundList.value.length
   } catch (error) {
     ElMessage.error('加载出库单列表失败')
     console.error(error)
@@ -884,6 +899,7 @@ const checkStockAvailability = (): boolean => {
 }
 
 const handleSubmit = async () => {
+  console.log('🔧 [DEBUG] handleSubmit 被调用 - inventory/outbound.vue v2')
   try {
     // 先执行表单规则校验
     await formRef.value.validate()
@@ -945,8 +961,35 @@ const handleSubmit = async () => {
     calculateTotalAmount()
 
     if (formData.id) {
-      if (window.electron && window.electron.dbUpdate) {
-        await window.electron.dbUpdate('sales_outbound', formData, 'id = ?', [formData.id])
+      const updateData = {
+        id: formData.id,
+        outbound_no: formData.voucherNo,
+        customer_id: formData.customerId,
+        warehouse_id: formData.warehouseId,
+        outbound_date: formData.voucherDate,
+        total_amount: formData.totalAmount,
+        status: 'completed',
+        remark: formData.remark || '',
+        handler_name: formData.operator,
+        created_by: formData.operator,
+        items: (formData.items || []).map((item: any) => ({
+          product_id: item.productId,
+          product_name: item.productName,
+          specification: item.specification,
+          quantity: item.quantity,
+          unit: item.unit,
+          unit_price_ex: item.unitPriceEx || 0,
+          unit_price: item.unitPrice || 0,
+          tax_rate: item.taxRate,
+          tax_amount: item.taxAmount || 0,
+          total_amount: item.totalAmount || 0,
+          deduction_amount: item.deductionAmount || 0,
+          allow_deduction: item.allowDeduction ? 1 : 0,
+          remark: item.remark || ''
+        }))
+      }
+      if (window.electron && window.electron.outboundUpdate) {
+        await window.electron.outboundUpdate(updateData)
       } else {
         const possibleKeys = ['sales_outbound_records', 'outbound_records', 'salesOutbounds']
         let savedData = null
@@ -971,11 +1014,39 @@ const handleSubmit = async () => {
       }
       ElMessage.success('更新成功')
     } else {
-      formData.id = Date.now()
-      formData.createdAt = new Date().toISOString() // 添加精确时间戳
-      if (window.electron && window.electron.dbInsert) {
-        await window.electron.dbInsert('sales_outbound', formData)
+      const outboundData = {
+        outbound_no: formData.voucherNo,
+        customer_id: formData.customerId,
+        warehouse_id: formData.warehouseId,
+        outbound_date: formData.voucherDate,
+        total_amount: formData.totalAmount,
+        status: 'completed',
+        remark: formData.remark || '',
+        handler_name: formData.operator,
+        created_by: formData.operator,
+        items: (formData.items || []).map((item: any) => ({
+          product_id: item.productId,
+          product_name: item.productName,
+          specification: item.specification,
+          quantity: item.quantity,
+          unit: item.unit,
+          unit_price_ex: item.unitPriceEx || 0,
+          unit_price: item.unitPrice || 0,
+          tax_rate: item.taxRate,
+          tax_amount: item.taxAmount || 0,
+          total_amount: item.totalAmount || 0,
+          deduction_amount: item.deductionAmount || 0,
+          allow_deduction: item.allowDeduction ? 1 : 0,
+          remark: item.remark || ''
+        }))
+      }
+      
+      if (window.electron && window.electron.outboundAdd) {
+        console.log('🔧 [DEBUG] 即将发送 outboundData:', JSON.stringify(outboundData, null, 2))
+        await window.electron.outboundAdd(outboundData)
       } else {
+        formData.id = Date.now()
+        formData.createdAt = new Date().toISOString()
         const key = 'sales_outbound_records'
         const savedData = localStorage.getItem(key)
         const allRecords = savedData ? JSON.parse(savedData) : []

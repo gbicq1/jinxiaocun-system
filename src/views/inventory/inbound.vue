@@ -57,20 +57,14 @@
         </el-table-column>
         <el-table-column prop="operator" label="经办人" width="100" />
         <el-table-column prop="remark" label="备注" min-width="150" />
-        <el-table-column label="操作" width="250" fixed="right">
+        <el-table-column label="操作" width="260" fixed="right">
           <template #default="{ row }">
-            <el-button type="primary" size="small" @click="handleEdit(row)">
-              编辑
-            </el-button>
-            <el-button type="info" size="small" @click="handleView(row)">
-              查看
-            </el-button>
-            <el-button type="success" size="small" @click="handlePrint(row)">
-              打印
-            </el-button>
-            <el-button type="danger" size="small" @click="handleDelete(row)">
-              删除
-            </el-button>
+            <div class="action-buttons">
+              <el-button type="primary" size="small" @click="handleView(row)">查看</el-button>
+              <el-button type="warning" size="small" @click="handleEdit(row)">编辑</el-button>
+              <el-button type="success" size="small" @click="handlePrint(row)">打印</el-button>
+              <el-button type="danger" size="small" @click="handleDelete(row)">删除</el-button>
+            </div>
           </template>
         </el-table-column>
       </el-table>
@@ -1467,5 +1461,10 @@ onMounted(() => {
   margin-top: 20px;
   display: flex;
   justify-content: flex-end;
+}
+
+.action-buttons {
+  display: flex;
+  gap: 5px;
 }
 </style>

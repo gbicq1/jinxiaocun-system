@@ -117,7 +117,7 @@ class DatabaseIPC {
    */
   async getProducts(): Promise<Product[]> {
     try {
-      const result = await window.electron.ipcRenderer.invoke('db:products-list')
+      const result = await window.electron!.invoke!('db:products-list')
       console.log('getProducts 结果:', result)
       return result
     } catch (error) {
@@ -131,7 +131,7 @@ class DatabaseIPC {
    */
   async getWarehouses(): Promise<Warehouse[]> {
     try {
-      const result = await window.electron.ipcRenderer.invoke('db:warehouses-list')
+      const result = await window.electron!.invoke!('db:warehouses-list')
       console.log('getWarehouses 结果:', result)
       return result
     } catch (error) {
@@ -152,7 +152,7 @@ class DatabaseIPC {
     params?: any[]
   ): Promise<{ list: PurchaseInbound[]; total: number }> {
     try {
-      return await window.electron.ipcRenderer.invoke('purchase-list', page, pageSize, where, params)
+      return await window.electron!.invoke!('purchase-list', page, pageSize, where, params)
     } catch (error) {
       console.error('获取采购入库列表失败:', error)
       return { list: [], total: 0 }
@@ -171,7 +171,7 @@ class DatabaseIPC {
     params?: any[]
   ): Promise<{ list: SalesOutbound[]; total: number }> {
     try {
-      return await window.electron.ipcRenderer.invoke('outbound-list', page, pageSize, where, params)
+      return await window.electron!.invoke!('outbound-list', page, pageSize, where, params)
     } catch (error) {
       console.error('获取销售出库列表失败:', error)
       return { list: [], total: 0 }
@@ -190,7 +190,7 @@ class DatabaseIPC {
     params?: any[]
   ): Promise<{ data: InventoryTransfer[]; total: number }> {
     try {
-      return await window.electron.ipcRenderer.invoke('transfer-list', page, pageSize, where, params)
+      return await window.electron!.invoke!('transfer-list', page, pageSize, where, params)
     } catch (error) {
       console.error('获取调拨列表失败:', error)
       return { data: [], total: 0 }
@@ -209,7 +209,7 @@ class DatabaseIPC {
     month: number
   ): Promise<CostSettlement | null> {
     try {
-      return await window.electron.ipcRenderer.invoke('cost:get-settlement', {
+      return await window.electron!.invoke!('cost:get-settlement', {
         productCode,
         warehouseId,
         year,
@@ -231,7 +231,7 @@ class DatabaseIPC {
     warehouseId?: number
   ): Promise<CostSettlement[]> {
     try {
-      return await window.electron.ipcRenderer.invoke('cost:get-settlements', {
+      return await window.electron!.invoke!('cost:get-settlements', {
         year,
         month,
         productCode,
@@ -248,7 +248,7 @@ class DatabaseIPC {
    */
   async saveCostSettlement(settlement: CostSettlement): Promise<void> {
     try {
-      return await window.electron.ipcRenderer.invoke('cost:save-settlement', settlement)
+      return await window.electron!.invoke!('cost:save-settlement', settlement)
     } catch (error) {
       console.error('保存成本结算数据失败:', error)
     }
@@ -259,7 +259,7 @@ class DatabaseIPC {
    */
   async saveCostSettlements(settlements: CostSettlement[]): Promise<void> {
     try {
-      return await window.electron.ipcRenderer.invoke('cost:save-settlements', settlements)
+      return await window.electron!.invoke!('cost:save-settlements', settlements)
     } catch (error) {
       console.error('批量保存成本结算数据失败:', error)
     }
@@ -270,7 +270,7 @@ class DatabaseIPC {
    */
   async isCostSettled(year: number, month: number): Promise<boolean> {
     try {
-      return await window.electron.ipcRenderer.invoke('cost:is-settled', { year, month })
+      return await window.electron!.invoke!('cost:is-settled', { year, month })
     } catch (error) {
       console.error('检查结算状态失败:', error)
       return false
@@ -282,7 +282,7 @@ class DatabaseIPC {
    */
   async getSettledPeriods(): Promise<Array<{ year: number; month: number }>> {
     try {
-      return await window.electron.ipcRenderer.invoke('cost:get-settled-periods')
+      return await window.electron!.invoke!('cost:get-settled-periods')
     } catch (error) {
       console.error('获取已结算期间列表失败:', error)
       return []
@@ -294,7 +294,7 @@ class DatabaseIPC {
    */
   async getLatestSettledPeriod(): Promise<{ year: number; month: number } | null> {
     try {
-      return await window.electron.ipcRenderer.invoke('cost:get-latest-settled-period')
+      return await window.electron!.invoke!('cost:get-latest-settled-period')
     } catch (error) {
       console.error('获取最新已结算期间失败:', error)
       return null
@@ -306,7 +306,7 @@ class DatabaseIPC {
    */
   async unlockCostMonth(year: number, month: number): Promise<void> {
     try {
-      return await window.electron.ipcRenderer.invoke('cost:unlock-month', { year, month })
+      return await window.electron!.invoke!('cost:unlock-month', { year, month })
     } catch (error) {
       console.error('解锁月份失败:', error)
     }
@@ -323,7 +323,7 @@ class DatabaseIPC {
     date: string
   ): Promise<{ quantity: number; cost: number } | null> {
     try {
-      return await window.electron.ipcRenderer.invoke('cost:get-snapshot', {
+      return await window.electron!.invoke!('cost:get-snapshot', {
         productCode,
         warehouseId,
         date
@@ -344,7 +344,7 @@ class DatabaseIPC {
     month: number
   ): Promise<{ quantity: number; cost: number } | null> {
     try {
-      return await window.electron.ipcRenderer.invoke('cost:get-month-end-snapshot', {
+      return await window.electron!.invoke!('cost:get-month-end-snapshot', {
         productCode,
         warehouseId,
         year,
@@ -369,7 +369,7 @@ class DatabaseIPC {
     cost: number
   ): Promise<void> {
     try {
-      return await window.electron.ipcRenderer.invoke('cost:save-snapshot', {
+      return await window.electron!.invoke!('cost:save-snapshot', {
         product_code: productCode,
         product_name: productName,
         warehouse_id: warehouseId,
@@ -380,6 +380,106 @@ class DatabaseIPC {
       })
     } catch (error) {
       console.error('保存库存快照失败:', error)
+    }
+  }
+
+  // ==================== 采购退货 ====================
+
+  /**
+   * 获取采购退货单列表
+   */
+  async getPurchaseReturns(page = 1, pageSize = 10): Promise<{ data: any[]; total: number }> {
+    try {
+      return await window.electron!.purchaseReturnList!(page, pageSize)
+    } catch (error) {
+      console.error('获取采购退货单列表失败:', error)
+      return { data: [], total: 0 }
+    }
+  }
+
+  /**
+   * 保存采购退货单
+   */
+  async savePurchaseReturn(returnData: any): Promise<number> {
+    try {
+      return await window.electron!.purchaseReturnAdd!(returnData)
+    } catch (error) {
+      console.error('保存采购退货单失败:', error)
+      throw error
+    }
+  }
+
+  /**
+   * 更新采购退货单
+   */
+  async updatePurchaseReturn(returnData: any): Promise<void> {
+    try {
+      return await window.electron!.purchaseReturnUpdate!(returnData)
+    } catch (error) {
+      console.error('更新采购退货单失败:', error)
+      throw error
+    }
+  }
+
+  /**
+   * 删除采购退货单
+   */
+  async deletePurchaseReturn(id: number): Promise<void> {
+    try {
+      return await window.electron!.purchaseReturnDelete!(id)
+    } catch (error) {
+      console.error('删除采购退货单失败:', error)
+      throw error
+    }
+  }
+
+  // ==================== 销售退货 ====================
+
+  /**
+   * 获取销售退货单列表
+   */
+  async getSalesReturns(page = 1, pageSize = 10): Promise<{ data: any[]; total: number }> {
+    try {
+      return await window.electron!.salesReturnList!(page, pageSize)
+    } catch (error) {
+      console.error('获取销售退货单列表失败:', error)
+      return { data: [], total: 0 }
+    }
+  }
+
+  /**
+   * 保存销售退货单
+   */
+  async saveSalesReturn(returnData: any): Promise<number> {
+    try {
+      return await window.electron!.salesReturnAdd!(returnData)
+    } catch (error) {
+      console.error('保存销售退货单失败:', error)
+      throw error
+    }
+  }
+
+  /**
+   * 更新销售退货单
+   */
+  async updateSalesReturn(returnData: any): Promise<void> {
+    try {
+      return await window.electron!.salesReturnUpdate!(returnData)
+    } catch (error) {
+      console.error('更新销售退货单失败:', error)
+      throw error
+    }
+  }
+
+  /**
+   * 删除销售退货单
+   */
+  async deleteSalesReturn(id: number): Promise<void> {
+    try {
+      return await window.electron!.salesReturnDelete!(id)
+    } catch (error) {
+      console.error('删除销售退货单失败:', error)
+      throw error
     }
   }
 }

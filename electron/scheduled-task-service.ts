@@ -1,6 +1,7 @@
 import { BrowserWindow } from 'electron'
 import { CostSettlementDatabase } from './database-cost'
 import { MonthlyCostSettlementService } from './cost-settlement-service'
+import Database from 'better-sqlite3'
 
 /**
  * 定时任务服务
@@ -8,13 +9,15 @@ import { MonthlyCostSettlementService } from './cost-settlement-service'
  */
 export class ScheduledTaskService {
   private costDb: CostSettlementDatabase
+  private mainDb: Database.Database
   private settlementService: MonthlyCostSettlementService
   private mainWindow: BrowserWindow
   private timers: NodeJS.Timeout[] = []
 
-  constructor(db: CostSettlementDatabase, mainWindow: BrowserWindow) {
+  constructor(db: CostSettlementDatabase, mainWindow: BrowserWindow, mainDb: Database.Database) {
     this.costDb = db
-    this.settlementService = new MonthlyCostSettlementService(db)
+    this.mainDb = mainDb
+    this.settlementService = new MonthlyCostSettlementService(db, mainDb)
     this.mainWindow = mainWindow
   }
 
