@@ -11,7 +11,36 @@ let db;
 let costHandler;
 let scheduledTaskService;
 let databaseBackup;
+
+// 单实例检查：如果已经有实例运行，则激活已有窗口
+const gotTheLock = electron_1.app.requestSingleInstanceLock();
+if (!gotTheLock) {
+    console.log('已有实例在运行，退出');
+    electron_1.app.quit();
+} else {
+    // 如果已经有窗口，激活它
+    electron_1.app.on('second-instance', (event, commandLine, workingDirectory) => {
+        console.log('检测到第二个实例启动，激活已有窗口');
+        if (mainWindow) {
+            if (mainWindow.isMinimized()) {
+                mainWindow.restore();
+            }
+            mainWindow.focus();
+        }
+    });
+}
+
 function createWindow() {
+    // 如果已存在窗口，不再创建新窗口
+    if (mainWindow !== null) {
+        console.log('已有窗口存在，激活已有窗口');
+        if (mainWindow.isMinimized()) {
+            mainWindow.restore();
+        }
+        mainWindow.focus();
+        return;
+    }
+
     console.log('创建窗口，preload 路径:', (0, path_1.resolve)(__dirname, 'preload.js'));
     mainWindow = new electron_1.BrowserWindow({
         width: 1400,

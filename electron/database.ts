@@ -15,6 +15,10 @@ export class InventoryDatabase {
     try {
       this.db = new Database(this.dbPath)
       this.db.pragma('foreign_keys = OFF')
+      // 设置数据库忙碌超时时间（5秒），避免并发操作时立即失败
+      this.db.pragma('busy_timeout = 5000')
+      // 使用 WAL 模式提高并发性能
+      this.db.pragma('journal_mode = WAL')
       
       // 检查数据库是否已经初始化过（通过检查是否存在 products 表）
       const tableExists = this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='products'").get()
@@ -1434,7 +1438,32 @@ export class InventoryDatabase {
   }
 
   deletePurchaseReturn(id: number): number {
-    return this.delete('purchase_returns', 'id = ?', [id])
+    try {
+      console.log('【Electron 后端】删除采购退货单，ID:', id)
+      
+      if (!this.db) {
+        throw new Error('数据库未初始化')
+      }
+      
+      // 先删除明细
+      this.db.prepare('DELETE FROM purchase_return_items WHERE return_id = ?').run(id)
+      console.log('【Electron 后端】已删除采购退货单明细项')
+      
+      // 再删除主表
+      const result = this.db.prepare('DELETE FROM purchase_returns WHERE id = ?').run(id)
+      console.log('【Electron 后端】采购退货单主表删除完成，影响行数:', result.changes)
+      
+      return result.changes
+    } catch (error: any) {
+      console.error('【Electron 后端】删除采购退货单失败:', error)
+      console.error('【Electron 后端】错误详情:', {
+        message: error.message,
+        stack: error.stack,
+        code: error.code,
+        name: error.name
+      })
+      throw error
+    }
   }
 
   // 销售退货相关方法
@@ -1518,7 +1547,45 @@ export class InventoryDatabase {
   }
 
   deleteSalesReturn(id: number): number {
-    return this.delete('sales_returns', 'id = ?', [id])
+    let tempDb: Database.Database | null = null
+    try {
+      console.log('【Electron 后端】删除销售退货单，ID:', id)
+      console.log('【Electron 后端】使用独立数据库连接进行删除操作')
+      
+      // 创建独立的数据库连接，避免与其他操作的冲突
+      tempDb = new Database(this.dbPath)
+      tempDb.pragma('journal_mode = WAL')
+      
+      // 先删除明细
+      tempDb.prepare('DELETE FROM sales_return_items WHERE return_id = ?').run(id)
+      console.log('【Electron 后端】已删除销售退货单明细项')
+      
+      // 再删除主表
+      const result = tempDb.prepare('DELETE FROM sales_returns WHERE id = ?').run(id)
+      console.log('【Electron 后端】销售退货单主表删除完成，影响行数:', result.changes)
+      
+      return result.changes
+    } catch (error: any) {
+      console.error('【Electron 后端】删除销售退货单失败:', error)
+      console.error('【Electron 后端】错误详情:', {
+        message: error.message,
+        stack: error.stack,
+        code: error.code,
+        name: error.name,
+        dbPath: this.dbPath
+      })
+      throw error
+    } finally {
+      // 确保关闭临时连接
+      if (tempDb) {
+        try {
+          tempDb.close()
+          console.log('【Electron 后端】临时数据库连接已关闭')
+        } catch (closeError) {
+          console.error('【Electron 后端】关闭临时连接失败:', closeError)
+        }
+      }
+    }
   }
 
   // 库存调拨相关方法

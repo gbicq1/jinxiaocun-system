@@ -203,6 +203,7 @@
         <el-alert title="商品明细" type="warning" :closable="false" show-icon style="margin-bottom: 20px" />
 
         <el-table :data="formData.items" style="width: 100%" border>
+          <el-table-column label="序号" width="60" type="index" />
           <el-table-column label="商品" min-width="200">
             <template #default="{ row, $index }">
               <el-select 
@@ -1015,49 +1016,44 @@ const handleSubmit = async () => {
   calculateTotalAmount()
   
   try {
+    const outboundData = {
+      outbound_no: formData.voucherNo,
+      customer_id: formData.customerId,
+      warehouse_id: formData.warehouseId,
+      outbound_date: formData.voucherDate,
+      total_amount: formData.totalAmount,
+      status: 'completed',
+      remark: formData.remark,
+      handler_name: formData.handlerName,
+      created_by: formData.operator,
+      items: formData.items.map((item: any) => ({
+        product_id: item.productId,
+        product_name: item.productName,
+        specification: item.specification,
+        quantity: item.quantity,
+        unit: item.unit,
+        unit_price_ex: item.unitPriceEx || 0,
+        unit_price: item.unitPrice || 0,
+        tax_rate: item.taxRate,
+        tax_amount: item.taxAmount || 0,
+        total_amount: item.totalAmount || 0,
+        cost_price: item.costPrice || item.unitPriceEx || 0,
+        remark: item.remark || ''
+      }))
+    }
+
     if (formData.id) {
       // 更新
-      if (window.electron && window.electron.dbUpdate) {
-        await window.electron.dbUpdate('sales_outbound', { 
-          outbound_no: formData.voucherNo,
-          customer_id: formData.customerId,
-          warehouse_id: formData.warehouseId,
-          outbound_date: formData.voucherDate,
-          total_amount: formData.totalAmount,
-          remark: formData.remark,
-          handler_name: formData.handlerName
-        }, 'id = ?', [formData.id])
+      outboundData.id = formData.id
+      if (window.electron && window.electron.outboundUpdate) {
+        await window.electron.outboundUpdate(outboundData)
       } else {
-        await dbUpdate('sales_outbound', { 
-          outbound_no: formData.voucherNo,
-          customer_id: formData.customerId,
-          warehouse_id: formData.warehouseId,
-          outbound_date: formData.voucherDate,
-          total_amount: formData.totalAmount,
-          remark: formData.remark,
-          handler_name: formData.handlerName
-        }, 'id = ?', [formData.id])
+        console.error('outboundUpdate 方法不可用')
+        ElMessage.error('保存失败：后端方法不可用')
+        return
       }
     } else {
       // 新增
-      const outboundData = {
-        outbound_no: formData.voucherNo,
-        customer_id: formData.customerId,
-        warehouse_id: formData.warehouseId,
-        outbound_date: formData.voucherDate,
-        total_amount: formData.totalAmount,
-        status: 'completed',
-        remark: formData.remark,
-        handler_name: formData.handlerName,
-        created_by: formData.operator,
-        items: formData.items.map((item: any) => ({
-          product_id: item.productId,
-          quantity: item.quantity,
-          cost_price: item.costPrice || item.unitPrice || 0,
-          remark: item.remark || ''
-        }))
-      }
-      
       if (window.electron && window.electron.outboundAdd) {
         await window.electron.outboundAdd(outboundData)
       } else {

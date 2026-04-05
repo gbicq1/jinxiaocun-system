@@ -908,12 +908,20 @@ const handleDelete = async (row: ReturnRecord) => {
 
     const electron = (window as any).electron
     if (electron) {
+      console.log('开始删除采购退货单，ID:', row.id)
       await electron.purchaseReturnDelete(row.id)
+      console.log('删除成功')
       ElMessage.success('删除成功')
       loadReturnsList()
+    } else {
+      console.error('未找到 electron API')
+      ElMessage.error('未找到 electron API')
     }
-  } catch {
-    // 取消删除
+  } catch (error: any) {
+    console.error('删除失败，错误:', error)
+    if (error !== 'cancel') {
+      ElMessage.error('删除失败：' + (error.message || '未知错误'))
+    }
   }
 }
 

@@ -282,6 +282,7 @@
           style="width: 100%; margin-bottom: 10px"
           border
         >
+          <el-table-column label="序号" width="60" type="index" />
           <el-table-column label="商品" min-width="200">
             <template #default="{ row }">
               <el-select
@@ -303,17 +304,22 @@
           <el-table-column prop="productName" label="商品名称" min-width="150" />
           <el-table-column prop="specification" label="规格" width="120" />
           <el-table-column prop="unit" label="单位" width="80" />
-          <el-table-column label="退货数量" width="120">
+          <el-table-column label="退货数量" width="150">
             <template #default="{ row }">
-              <el-input-number
-                v-model="row.quantity"
-                :min="1"
-                :precision="2"
-                controls-position="right"
-                style="width: 100%"
-                @focus="handleFocus(row, 'quantity')"
-                @change="calculateRowTotals(row)"
-              />
+              <div style="display: flex; flex-direction: column; gap: 2px;">
+                <el-input-number
+                  v-model="row.quantity"
+                  :min="0"
+                  :max="row.originalQuantity || 999999"
+                  :precision="2"
+                  controls-position="right"
+                  style="width: 100%"
+                  @change="calculateRowTotals(row)"
+                />
+                <span v-if="row.originalQuantity" style="font-size: 12px; color: #909399;">
+                  原出库：{{ row.originalQuantity }}
+                </span>
+              </div>
             </template>
           </el-table-column>
           <el-table-column label="单价 (不含税)" width="120">
@@ -623,20 +629,31 @@ const loadReturnsList = async () => {
 // 加载订单列表（用于选择原订单）
 const loadOrderList = async () => {
   try {
-    // 尝试多个可能的键名
-    const possibleKeys = ['sales_outbound_records', 'sales_orders', 'sales_outbounds']
-    let foundData = null
-    
-    for (const key of possibleKeys) {
-      const saved = localStorage.getItem(key)
-      if (saved) {
-        foundData = JSON.parse(saved)
-        console.log(`从 ${key} 加载出库单列表，共 ${foundData.length} 条记录`)
-        break
-      }
+    // 从数据库读取销售出库单列表
+    const electron = (window as any).electron
+    if (electron && electron.outboundList) {
+      const result = await electron.outboundList(1, 1000) // 获取所有数据
+      console.log('出库单列表结果:', result)
+
+      // 转换字段格式
+      orderList.value = (result.data || result).map((item: any) => ({
+        id: item.id,
+        voucherNo: item.voucherNo,
+        voucherDate: item.voucherDate,
+        customerId: item.customerId,
+        customerName: item.customerName,
+        warehouseId: item.warehouseId,
+        warehouseName: item.warehouseName,
+        operator: item.handlerName || item.createdBy,
+        handlerName: item.handlerName || item.createdBy,
+        items: item.items || []
+      }))
+
+      console.log(`从数据库加载出库单列表，共 ${orderList.value.length} 条记录`)
+    } else {
+      console.error('outboundList 方法不可用')
+      orderList.value = []
     }
-    
-    orderList.value = foundData || []
   } catch (error) {
     console.error('加载订单列表失败:', error)
     orderList.value = []
@@ -788,12 +805,20 @@ const handleDelete = async (row: ReturnRecord) => {
 
     const electron = (window as any).electron
     if (electron) {
+      console.log('开始删除销售退货单，ID:', row.id)
       await electron.salesReturnDelete(row.id)
+      console.log('删除成功')
       ElMessage.success('删除成功')
       loadReturnsList()
+    } else {
+      console.error('未找到 electron API')
+      ElMessage.error('未找到 electron API')
     }
-  } catch {
-    // 取消删除
+  } catch (error: any) {
+    console.error('删除失败，错误:', error)
+    if (error !== 'cancel') {
+      ElMessage.error('删除失败：' + (error.message || '未知错误'))
+    }
   }
 }
 
@@ -915,13 +940,15 @@ const handleOriginalOrderChange = (voucherNo: string) => {
       const unitPriceIncl = item.unitPrice || 0  // 出库单的 unitPrice 是含税单价
       const unitPriceEx = item.unitPriceEx || 0  // 出库单的 unitPriceEx 是不含税单价
       const taxRate = item.taxRate || 0
-      
+      const originalQuantity = item.quantity || 0  // 保存原订单数量用于显示
+
       return {
         productId: item.productId,
         productName: item.productName,
         specification: item.specification,
         unit: item.unit,
         quantity: 0,  // 退货数量默认为 0，由用户输入
+        originalQuantity: originalQuantity,  // 原订单数量，用于显示提示
         unitPrice: unitPriceEx,  // 退货单的不含税单价
         unitPriceIncl: unitPriceIncl,  // 退货单的含税单价
         taxRate: taxRate,
@@ -1024,9 +1051,11 @@ const validateSingleReturnItem = (item: ReturnItem): boolean => {
   }
   
   // 校验退货数量不能超过原订单数量（取绝对值比较）
+  // 优先使用 item.originalQuantity 处理同一商品多行情况
+  const originalQty = item.originalQuantity ?? origItem.quantity
   const retQty = Math.abs(item.quantity)
-  if (retQty > origItem.quantity) {
-    ElMessage.error(`商品"${item.productName}"的退货数量(${retQty})不能超过原出库单数量(${origItem.quantity})`)
+  if (retQty > originalQty) {
+    ElMessage.error(`商品"${item.productName}"的退货数量(${retQty})不能超过原出库单数量(${originalQty})`)
     return false
   }
   
