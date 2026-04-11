@@ -77,6 +77,7 @@
           <el-menu-item index="/system/barcode-settings">条码扫描设置</el-menu-item>
           <el-menu-item index="/system/logs">操作日志</el-menu-item>
           <el-menu-item index="/system/recycle-bin">回收站</el-menu-item>
+          <el-menu-item index="/system/backup">备份与恢复</el-menu-item>
         </el-sub-menu>
       </el-menu>
     </el-aside>

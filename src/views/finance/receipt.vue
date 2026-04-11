@@ -208,10 +208,9 @@ const generateReceiptNo = () => {
   return `SK${date}${random}`
 }
 
-const loadCustomers = () => {
+const loadCustomers = async () => {
   try {
-    const saved = localStorage.getItem('customers')
-    customers.value = saved ? JSON.parse(saved) : []
+    customers.value = await db.getCustomers()
   } catch (error) {
     console.error('加载客户数据失败:', error)
     customers.value = []
@@ -220,8 +219,7 @@ const loadCustomers = () => {
 
 const loadReceiptList = async () => {
   try {
-    const savedData = localStorage.getItem('finance_receipt')
-    receiptList.value = savedData ? JSON.parse(savedData) : []
+    receiptList.value = await db.getReceiptList()
   } catch (error) {
     ElMessage.error('加载收款单列表失败')
     console.error(error)
@@ -255,58 +253,47 @@ const handleEdit = (row: ReceiptRecord) => {
   dialogVisible.value = true
 }
 
-const handleDelete = (row: ReceiptRecord) => {
-  ElMessageBox.confirm('确定要删除这条收款单吗？', '提示', {
-    confirmButtonText: '确定',
-    cancelButtonText: '取消',
-    type: 'warning'
-  }).then(() => {
-    try {
-      const savedData = localStorage.getItem('finance_receipt')
-      const allRecords = savedData ? JSON.parse(savedData) : []
-      const filtered = allRecords.filter((r: ReceiptRecord) => r.id !== row.id)
-      localStorage.setItem('finance_receipt', JSON.stringify(filtered))
-      receiptList.value = filtered
-      ElMessage.success('删除成功')
-    } catch (error) {
-      ElMessage.error('删除失败')
-      console.error(error)
-    }
-  }).catch(() => {})
+const handleDelete = async (row: ReceiptRecord) => {
+  try {
+    await ElMessageBox.confirm('确定要删除这条收款单吗？', '提示', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+
+    await db.deleteReceipt(row.id)
+    receiptList.value = receiptList.value.filter((r: ReceiptRecord) => r.id !== row.id)
+    ElMessage.success('删除成功')
+  } catch {
+  }
 }
 
 const handleSubmit = async () => {
   try {
     await formRef.value.validate()
-    
+
     const customer = customers.value.find(c => c.id === formData.customerId)
     if (customer) {
       formData.customerName = customer.name
     }
-    
-    const savedData = localStorage.getItem('finance_receipt')
-    const allRecords = savedData ? JSON.parse(savedData) : []
-    
+
     if (formData.id) {
-      const index = allRecords.findIndex((r: ReceiptRecord) => r.id === formData.id)
+      await db.updateReceipt(formData)
+      const index = receiptList.value.findIndex((r: ReceiptRecord) => r.id === formData.id)
       if (index !== -1) {
-        allRecords[index] = { ...formData }
-        ElMessage.success('更新成功')
+        receiptList.value[index] = { ...formData }
       }
+      ElMessage.success('更新成功')
     } else {
-      const newRecord = {
-        ...formData,
-        id: Date.now()
-      }
-      allRecords.push(newRecord)
+      const saved = await db.addReceipt(formData)
+      formData.id = saved.id
+      receiptList.value.push({ ...formData })
       ElMessage.success('新增成功')
     }
-    
-    localStorage.setItem('finance_receipt', JSON.stringify(allRecords))
-    receiptList.value = allRecords
+
     dialogVisible.value = false
   } catch (error) {
-    console.error('表单验证失败:', error)
+    console.error(error)
   }
 }
 

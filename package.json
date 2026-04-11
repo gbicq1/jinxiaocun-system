@@ -6,8 +6,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "electron:dev": "concurrently -k \"vite\" \"tsc -p electron/tsconfig.json --watch\"",
-    "electron:start": "electron electron/main.js",
+    "start": "tsc -p electron/tsconfig.json && electron electron/main.js",
+    "electron:dev": "concurrently -k \"vite\" \"tsc -p electron/tsconfig.json --watch\" \"electron electron/main.js\"",
     "electron:build": "vite build && tsc -p electron/tsconfig.json && electron-builder"
   },
   "dependencies": {
@@ -27,6 +27,7 @@
     "electron": "^41.1.0",
     "electron-builder": "^26.8.1",
     "electron-rebuild": "^3.2.9",
+    "sass-embedded": "^1.99.0",
     "tsc-watch": "^7.2.0",
     "typescript": "^5.3.3",
     "vite": "^5.0.0",

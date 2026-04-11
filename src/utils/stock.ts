@@ -1,7 +1,13 @@
 /**
  * 库存计算工具函数
  * 用于从出入库交易记录中计算实时库存
+ * 优先使用数据库查询，降级使用 localStorage
  */
+
+// 检查是否在 Electron 环境中
+const isElectronEnv = () => {
+  return typeof window !== 'undefined' && typeof (window as any).electron !== 'undefined'
+}
 
 // 从 localStorage 加载仓库列表
 export const loadWarehousesFromStorage = () => {
@@ -31,11 +37,48 @@ export const loadProductsFromStorage = () => {
 
 /**
  * 获取指定产品在指定仓库的实时库存
+ * 优先从数据库查询，如果不可用则降级到 localStorage 计算
  * @param productId 产品 ID
  * @param warehouseId 仓库 ID
  * @returns 实时库存数量
  */
-export const getRealTimeStock = (productId: number | undefined, warehouseId: number | undefined): number => {
+export const getRealTimeStock = async (productId: number | undefined, warehouseId: number | undefined): Promise<number> => {
+  if (!productId || !warehouseId) return 0
+  
+  // 优先尝试从数据库查询（Electron 环境）
+  if (isElectronEnv()) {
+    try {
+      const stock = await (window as any).electron.productStock(productId, warehouseId)
+      console.log(`[库存查询] 从数据库获取产品 ${productId} 在仓库 ${warehouseId} 的库存:`, stock)
+      return stock || 0
+    } catch (error) {
+      console.warn('[库存查询] 数据库查询失败，降级到 localStorage 计算:', error)
+    }
+  }
+  
+  // 降级：从 localStorage 计算
+  return calculateStockFromLocalStorage(productId, warehouseId)
+}
+
+/**
+ * 同步版本（向后兼容）
+ */
+export const getRealTimeStockSync = (productId: number | undefined, warehouseId: number | undefined): number => {
+  if (!productId || !warehouseId) return 0
+  
+  // 如果在 Electron 环境中，尝试同步方式（可能返回缓存值或0）
+  if (isElectronEnv()) {
+    console.warn('[库存查询] 同步调用在 Electron 环境中可能不准确，建议使用异步版本')
+  }
+  
+  // 直接从 localStorage 计算
+  return calculateStockFromLocalStorage(productId, warehouseId)
+}
+
+/**
+ * 从 localStorage 计算库存（降级方案）
+ */
+const calculateStockFromLocalStorage = (productId: number | undefined, warehouseId: number | undefined): number => {
   if (!productId || !warehouseId) return 0
   
   let stock = 0

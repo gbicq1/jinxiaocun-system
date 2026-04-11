@@ -126,6 +126,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import dayjs from 'dayjs'
+import { db } from '@/utils/db-ipc'
 import exportToCsv from '../../utils/exportCsv'
 
 interface PurchaseOrder {
@@ -158,10 +159,17 @@ const formData = reactive<PurchaseOrder>({
   status: 'pending'
 })
 
-const suppliers = ref([
-  { id: 1, name: '供应商 A' },
-  { id: 2, name: '供应商 B' }
-])
+const suppliers = ref<any[]>([])
+
+// 加载供应商列表
+const loadSuppliers = async () => {
+  try {
+    suppliers.value = await db.getSuppliers()
+    console.log('加载供应商成功:', suppliers.value.length, '个')
+  } catch (error) {
+    console.error('加载供应商失败:', error)
+  }
+}
 
 // 生成订单号
 const generateOrderNo = () => {
@@ -173,13 +181,7 @@ const generateOrderNo = () => {
 // 加载订单列表
 const loadOrders = async () => {
   try {
-    if (window.electron && window.electron.dbQuery) {
-      const result = await window.electron.dbQuery('purchase_orders', 'SELECT * FROM purchase_orders ORDER BY created_at DESC')
-      orders.value = result
-    } else {
-      const savedData = localStorage.getItem('purchase_orders')
-      orders.value = savedData ? JSON.parse(savedData) : []
-    }
+    orders.value = await db.getPurchaseOrders()
     total.value = orders.value.length
   } catch (error) {
     ElMessage.error('加载订单列表失败')
@@ -220,13 +222,8 @@ const handleDelete = async (row: PurchaseOrder) => {
       type: 'warning'
     })
     
-    if (window.electron && window.electron.dbDelete) {
-      await window.electron.dbDelete('purchase_orders', 'id = ?', [row.id])
-    } else {
-      const filtered = orders.value.filter((r: PurchaseOrder) => r.id !== row.id)
-      localStorage.setItem('purchase_orders', JSON.stringify(filtered))
-    }
-    
+    await db.deletePurchaseOrder(row.id)
+
     ElMessage.success('删除成功')
     loadOrders()
   } catch {
@@ -248,21 +245,12 @@ const handleApprove = async (row: PurchaseOrder) => {
       cancelButtonText: '取消',
       type: 'warning'
     })
-    
-    if (window.electron && window.electron.dbUpdate) {
-      await window.electron.dbUpdate('purchase_orders', { ...row, status: 'approved' }, 'id = ?', [row.id])
-    } else {
-      const index = orders.value.findIndex((r: PurchaseOrder) => r.id === row.id)
-      if (index !== -1) {
-        orders.value[index].status = 'approved'
-        localStorage.setItem('purchase_orders', JSON.stringify(orders.value))
-      }
-    }
-    
+
+    await db.updatePurchaseOrder({ ...row, status: 'approved' })
+
     ElMessage.success('审核成功')
     loadOrders()
   } catch {
-    // 用户取消
   }
 }
 
@@ -293,46 +281,21 @@ const getStatusType = (status: string) => {
 const handleSubmit = async () => {
   try {
     await formRef.value.validate()
-    
-    // 获取供应商名称
+
     const supplier = suppliers.value.find(s => s.id === formData.supplierId)
     if (supplier) {
       formData.supplierName = supplier.name
     }
-    
+
     if (formData.id) {
-      // 更新
-      if (window.electron && window.electron.dbUpdate) {
-        await window.electron.dbUpdate('purchase_orders', formData, 'id = ?', [formData.id])
-      } else {
-        const savedData = localStorage.getItem('purchase_orders')
-        const allOrders = savedData ? JSON.parse(savedData) : []
-        const index = allOrders.findIndex((r: PurchaseOrder) => r.id === formData.id)
-        if (index !== -1) {
-          allOrders[index] = { ...formData }
-          localStorage.setItem('purchase_orders', JSON.stringify(allOrders))
-        }
-      }
+      await db.updatePurchaseOrder(formData)
       ElMessage.success('更新成功')
     } else {
-      // 新增
-      const newOrder = {
-        ...formData,
-        id: Date.now()
-      }
-      
-      if (window.electron && window.electron.dbInsert) {
-        await window.electron.dbInsert('purchase_orders', newOrder)
-      } else {
-        const savedData = localStorage.getItem('purchase_orders')
-        const allOrders = savedData ? JSON.parse(savedData) : []
-        allOrders.push(newOrder)
-        localStorage.setItem('purchase_orders', JSON.stringify(allOrders))
-      }
-      
+      const saved = await db.addPurchaseOrder(formData)
+      formData.id = saved.id
       ElMessage.success('新增成功')
     }
-    
+
     dialogVisible.value = false
     loadOrders()
   } catch (error) {
@@ -342,6 +305,7 @@ const handleSubmit = async () => {
 
 onMounted(() => {
   loadOrders()
+  loadSuppliers()
 })
 </script>
 

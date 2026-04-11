@@ -111,6 +111,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { db } from '@/utils/db-ipc'
 
 const searchQuery = ref('')
 const periodList = ref<any[]>([])
@@ -133,58 +134,51 @@ const formData = reactive<any>({
   remark: ''
 })
 
-// 加载仓库列表
-const loadWarehouses = () => {
+// 加载仓库列表（从数据库获取）
+const loadWarehouses = async () => {
   try {
-    const saved = localStorage.getItem('warehouses')
-    if (saved) {
-      warehouses.value = JSON.parse(saved).filter((w: any) => w.status === 1)
-    }
+    warehouses.value = await db.getWarehouses()
+    console.log('加载仓库列表成功（数据库），共', warehouses.value.length, '个仓库')
   } catch (error) {
     console.error('加载仓库列表失败:', error)
   }
 }
 
-// 加载产品列表
-const loadProducts = () => {
+// 加载产品列表（从数据库获取）
+const loadProducts = async () => {
   try {
-    const saved = localStorage.getItem('products')
-    if (saved) {
-      products.value = JSON.parse(saved)
-        .filter((p: any) => p.status === 1)
-        .map((p: any) => ({
-          id: p.id,
-          code: p.code || p.productCode || '',
-          name: p.name || p.productName || '',
-          unit: p.unit || ''
-        }))
-    }
+    const savedProducts = await db.getProducts()
+    products.value = savedProducts
+      .filter((p: any) => (p.status as any) === 1 || (p.status as any) === true)
+      .map((p: any) => ({
+        id: p.id,
+        code: p.code || p.productCode || '',
+        name: p.name || p.productName || '',
+        unit: p.unit || ''
+      }))
+    console.log('加载产品列表成功（数据库），共', products.value.length, '个产品')
   } catch (error) {
     console.error('加载产品列表失败:', error)
   }
 }
 
-// 加载期初期末列表
-const loadPeriodList = () => {
+// 加载期初期末列表（从数据库获取）
+const loadPeriodList = async () => {
   try {
-    const saved = localStorage.getItem('inventory_period')
-    if (saved) {
-      let list = JSON.parse(saved)
-      
-      // 搜索过滤
-      if (searchQuery.value) {
-        list = list.filter((item: any) => 
-          item.productCode?.toLowerCase().includes(searchQuery.value.toLowerCase()) ||
-          item.productName?.toLowerCase().includes(searchQuery.value.toLowerCase())
-        )
-      }
-      
-      periodList.value = list
-    } else {
-      periodList.value = []
+    let list = await db.getInventoryPeriodList()
+
+    // 搜索过滤
+    if (searchQuery.value) {
+      list = list.filter((item: any) =>
+        item.productCode?.toLowerCase().includes(searchQuery.value.toLowerCase()) ||
+        item.productName?.toLowerCase().includes(searchQuery.value.toLowerCase())
+      )
     }
+
+    periodList.value = list
   } catch (error) {
     console.error('加载期初期末列表失败:', error)
+    periodList.value = []
   }
 }
 
@@ -244,22 +238,17 @@ const handleDelete = async (row: any) => {
       cancelButtonText: '取消',
       type: 'warning'
     })
-    
-    const saved = localStorage.getItem('inventory_period')
-    if (saved) {
-      const list = JSON.parse(saved)
-      const filtered = list.filter((item: any) => item.id !== row.id)
-      localStorage.setItem('inventory_period', JSON.stringify(filtered))
-      loadPeriodList()
-      ElMessage.success('删除成功')
-    }
+
+    await db.deleteInventoryPeriod(row.id)
+    await loadPeriodList()
+    ElMessage.success('删除成功')
   } catch {
     // 用户取消删除
   }
 }
 
-// 提交表单
-const handleSubmit = () => {
+// 提交表单（保存到数据库）
+const handleSubmit = async () => {
   // 验证必填字段
   if (!formData.productId) {
     ElMessage.warning('请选择产品')
@@ -269,32 +258,23 @@ const handleSubmit = () => {
     ElMessage.warning('请选择仓库')
     return
   }
-  
+
   // 获取仓库名称
   const warehouse = warehouses.value.find(w => w.id === formData.warehouseId)
   formData.warehouseName = warehouse?.name || ''
-  
+
   try {
-    const saved = localStorage.getItem('inventory_period')
-    let list = saved ? JSON.parse(saved) : []
-    
+    const saved = await db.saveInventoryPeriod({ ...formData })
+
     if (isEdit.value) {
-      // 更新
-      const index = list.findIndex((item: any) => item.id === formData.id)
-      if (index !== -1) {
-        list[index] = { ...formData }
-      }
       ElMessage.success('更新成功')
     } else {
-      // 新增
-      formData.id = Date.now()
-      list.push({ ...formData })
+      formData.id = saved.id
       ElMessage.success('新增成功')
     }
-    
-    localStorage.setItem('inventory_period', JSON.stringify(list))
+
     dialogVisible.value = false
-    loadPeriodList()
+    await loadPeriodList()
   } catch (error) {
     console.error('保存失败:', error)
     ElMessage.error('保存失败')
@@ -306,10 +286,10 @@ const handleSearch = () => {
   loadPeriodList()
 }
 
-onMounted(() => {
-  loadWarehouses()
-  loadProducts()
-  loadPeriodList()
+onMounted(async () => {
+  await loadWarehouses()
+  await loadProducts()
+  await loadPeriodList()
 })
 </script>
 

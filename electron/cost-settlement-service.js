@@ -19,17 +19,22 @@ class MonthlyCostSettlementService {
      */
     settleMonth(year, month, lock = true) {
         try {
-            console.log(`开始结算 ${year}年${month}月 的成本数据...`);
-            // 检查是否已结算
-            if (this.costDb.isSettled(year, month)) {
-                console.log(`${year}年${month}月 已结算，跳过`);
-                return { success: true, count: 0 };
+            console.log(`=== 开始结算 ${year}年${month}月 ===`);
+            const isSettled = this.costDb.isSettled(year, month);
+            console.log(`月份已结算状态：${isSettled}`);
+            if (isSettled) {
+                console.log(`  ⚠️ 月份已结算，无法重复计算`);
+                return {
+                    success: false,
+                    count: 0,
+                    error: `该期间（${year}年${month}月）已经进行成本结转，请勿重复操作。如需查看结转情况，请使用查询功能。`,
+                    alreadySettled: true
+                };
             }
-            // 获取所有产品和仓库组合
             const productWarehouseCombinations = this.getAllProductWarehouseCombinations();
-            console.log(`共有 ${productWarehouseCombinations.length} 个产品仓库组合需要结算`);
+            console.log(`产品仓库组合数量：${productWarehouseCombinations.length}`);
+            productWarehouseCombinations.forEach(c => console.log(`  - ${c.productCode}(${c.productName}) @ ${c.warehouseId}(${c.warehouseName})`));
             const settlements = [];
-            // 逐个计算
             for (const combo of productWarehouseCombinations) {
                 const settlement = this.calculateSettlement(combo.productCode, combo.productName, combo.warehouseId, combo.warehouseName, year, month);
                 if (settlement) {
@@ -39,11 +44,12 @@ class MonthlyCostSettlementService {
                     });
                 }
             }
-            // 批量保存
+            console.log(`最终 settlements 数量：${settlements.length}`);
             if (settlements.length > 0) {
                 this.costDb.saveSettlements(settlements);
-                console.log(`成功结算 ${settlements.length} 条记录`);
             }
+            this.calculateAndSaveSalesCostSummary(year, month, lock);
+            this.calculateAndSaveTransferCostSummary(year, month, lock);
             return { success: true, count: settlements.length };
         }
         catch (error) {
@@ -55,19 +61,30 @@ class MonthlyCostSettlementService {
      * 计算单个产品仓库的月度成本结算
      */
     calculateSettlement(productCode, productName, warehouseId, warehouseName, year, month) {
-        // 将 productCode 转换为 productId（数字）
-        const productId = Number(productCode);
+        // 从产品编码获取产品 ID
+        const product = this.mainDb.prepare('SELECT id FROM products WHERE code = ?').get(productCode);
+        if (!product) {
+            console.error(`  产品编码 ${productCode} 不存在`);
+            return null;
+        }
+        const productId = product.id;
+        console.log(`  计算产品 ${productCode}(${productName}) [ID:${productId}] @ 仓库 ${warehouseId}(${warehouseName}) ${year}年${month}月 的成本`);
         // 1. 获取上月期末数据（作为本期期初）
-        const openingData = this.getOpeningData(productCode, warehouseId, year, month);
+        const openingData = this.getOpeningData(productId, warehouseId, year, month);
         // 2. 获取本月入库数据
         const inboundData = this.getInboundData(productId, warehouseId, year, month);
         // 3. 获取本月出库数据
         const outboundData = this.getOutboundData(productId, warehouseId, year, month);
-        // 4. 计算期末数据
-        const closingQty = openingData.qty + inboundData.qty - outboundData.qty;
-        const closingCost = openingData.cost + inboundData.cost - outboundData.cost;
-        // 5. 计算加权平均单价
-        const avgCost = closingQty > 0 ? closingCost / closingQty : 0;
+        // 4. 计算期初可用数量和成本
+        const availableQty = openingData.qty + inboundData.qty;
+        const availableCost = openingData.cost + inboundData.cost;
+        // 5. 计算加权平均单价（移动加权平均）
+        const avgCost = availableQty > 0 ? availableCost / availableQty : 0;
+        // 6. 计算出库成本（使用加权平均单价）
+        const outboundCost = outboundData.qty * avgCost;
+        // 7. 计算期末结存
+        const closingQty = availableQty - outboundData.qty;
+        const closingCost = availableCost - outboundCost;
         return {
             product_code: productCode,
             product_name: productName,
@@ -80,7 +97,7 @@ class MonthlyCostSettlementService {
             inbound_qty: inboundData.qty,
             inbound_cost: inboundData.cost,
             outbound_qty: outboundData.qty,
-            outbound_cost: outboundData.cost,
+            outbound_cost: outboundCost,
             closing_qty: closingQty,
             closing_cost: closingCost,
             avg_cost: Number(avgCost.toFixed(2))
@@ -89,23 +106,25 @@ class MonthlyCostSettlementService {
     /**
      * 获取期初数据（上月期末）
      */
-    getOpeningData(productCode, warehouseId, year, month) {
-        // 计算上月
+    getOpeningData(productId, warehouseId, year, month) {
         let prevYear = year;
         let prevMonth = month - 1;
         if (prevMonth === 0) {
             prevYear = year - 1;
             prevMonth = 12;
         }
-        // 尝试从数据库获取上月期末
+        console.log(`  查询期初数据 - 产品 ${productId}, 仓库 ${warehouseId}, 上月 ${prevYear}-${prevMonth}`);
+        const product = this.mainDb.prepare('SELECT code FROM products WHERE id = ?').get(productId);
+        const productCode = product?.code || String(productId);
         const prevSettlement = this.costDb.getSettlement(productCode, warehouseId, prevYear, prevMonth);
         if (prevSettlement) {
+            console.log(`    找到上月期末：qty=${prevSettlement.closing_qty}, cost=${prevSettlement.closing_cost}`);
             return {
                 qty: prevSettlement.closing_qty || 0,
                 cost: prevSettlement.closing_cost || 0
             };
         }
-        // 如果上月没有结算，返回 0（说明是年度初始化）
+        console.log(`    上月期末：qty=0, cost=0 (上月未结算)`);
         return { qty: 0, cost: 0 };
     }
     /**
@@ -113,10 +132,26 @@ class MonthlyCostSettlementService {
      */
     getInboundData(productId, warehouseId, year, month) {
         const monthStart = `${year}-${String(month).padStart(2, '0')}-01`;
-        const monthEnd = `${year}-${String(month + 1).padStart(2, '0')}-01`;
-        // 查询采购入库单明细
-        const sql = `
-      SELECT ii.quantity, ii.total_amount_ex, ii.total_amount
+        let nextMonthYear = year;
+        let nextMonth = month + 1;
+        if (nextMonth > 12) {
+            nextMonth = 1;
+            nextMonthYear = year + 1;
+        }
+        const monthEnd = `${nextMonthYear}-${String(nextMonth).padStart(2, '0')}-01`;
+        let totalQty = 0;
+        let totalCost = 0;
+        console.log(`  查询入库数据 - 产品 ${productId}, 仓库 ${warehouseId}, 期间 ${monthStart} ~ ${monthEnd}`);
+        // 1. 采购入库（正数）
+        const purchaseInboundSql = `
+      SELECT
+        ii.quantity,
+        ii.total_amount_ex,
+        ii.total_amount,
+        ii.tax_rate,
+        ii.allow_deduction,
+        pi.invoice_type,
+        pi.invoice_issued
       FROM purchase_inbound_items ii
       JOIN purchase_inbound pi ON ii.inbound_id = pi.id
       WHERE pi.warehouse_id = ?
@@ -124,13 +159,74 @@ class MonthlyCostSettlementService {
         AND pi.inbound_date < ?
         AND ii.product_id = ?
     `;
-        const items = this.mainDb.prepare(sql).all(warehouseId, monthStart, monthEnd, productId);
-        let totalQty = 0;
-        let totalCost = 0;
-        items.forEach(item => {
+        const purchaseInboundItems = this.mainDb.prepare(purchaseInboundSql).all(warehouseId, monthStart, monthEnd, productId);
+        console.log(`    采购入库记录数：${purchaseInboundItems.length}`);
+        purchaseInboundItems.forEach(item => {
             totalQty += Number(item.quantity || 0);
-            totalCost += Number(item.total_amount || item.total_amount_ex || 0);
+            const isSpecialInvoice = (item.invoice_type === '专票' || item.invoice_type === '专用发票');
+            const isInvoiceIssued = item.invoice_issued === 1 || item.invoice_issued === true;
+            const isTaxExempt = (Number(item.tax_rate || 0) === 0);
+            const isDeductionAllowed = item.allow_deduction === 1 || item.allow_deduction === true;
+            let costAmount = 0;
+            if (isSpecialInvoice && isInvoiceIssued) {
+                costAmount = Number(item.total_amount_ex || 0);
+            }
+            else if (isInvoiceIssued && isTaxExempt && isDeductionAllowed) {
+                costAmount = Number(item.total_amount_ex || 0);
+            }
+            else {
+                costAmount = Number(item.total_amount || 0);
+            }
+            totalCost += costAmount;
         });
+        // 2. 采购退货（负数）- 应用与采购入库完全相同的单价提取规则
+        const purchaseReturnSql = `
+      SELECT
+        pri.quantity,
+        CASE 
+          WHEN (pi.invoice_type = '专票' OR pi.invoice_type = '专用发票') AND (pi.invoice_issued = 1 OR pi.invoice_issued = true) THEN ii.unit_price_ex
+          WHEN (pi.invoice_issued = 1 OR pi.invoice_issued = true) AND (ii.tax_rate = 0 OR ii.tax_rate IS NULL OR ii.tax_rate = '0%') AND (ii.allow_deduction = 1 OR ii.allow_deduction = true) THEN ii.unit_price_ex
+          ELSE ii.unit_price
+        END as unit_price,
+        CASE 
+          WHEN (pi.invoice_type = '专票' OR pi.invoice_type = '专用发票') AND (pi.invoice_issued = 1 OR pi.invoice_issued = true) THEN ii.total_amount_ex
+          WHEN (pi.invoice_issued = 1 OR pi.invoice_issued = true) AND (ii.tax_rate = 0 OR ii.tax_rate IS NULL OR ii.tax_rate = '0%') AND (ii.allow_deduction = 1 OR ii.allow_deduction = true) THEN ii.total_amount_ex
+          ELSE ii.total_amount
+        END as total_amount
+      FROM purchase_return_items pri
+      JOIN purchase_returns pr ON pri.return_id = pr.id
+      LEFT JOIN purchase_inbound pi ON pr.original_inbound_no = pi.inbound_no
+      LEFT JOIN purchase_inbound_items ii ON pi.id = ii.inbound_id AND pri.product_id = ii.product_id
+        AND ii.id = (
+          SELECT MIN(ii2.id) FROM purchase_inbound_items ii2
+          WHERE ii2.inbound_id = pi.id AND ii2.product_id = pri.product_id
+        )
+      WHERE pr.warehouse_id = ?
+        AND pr.return_date >= ?
+        AND pr.return_date < ?
+        AND pri.product_id = ?
+    `;
+        const purchaseReturnItems = this.mainDb.prepare(purchaseReturnSql).all(warehouseId, monthStart, monthEnd, productId);
+        purchaseReturnItems.forEach(item => {
+            totalQty -= Number(item.quantity || 0);
+            totalCost -= Number(item.total_amount || 0);
+        });
+        // 3. 调拨入库（正数）
+        const transferInSql = `
+      SELECT tri.quantity, tri.cost, tri.amount
+      FROM transfer_record_items tri
+      JOIN transfer_records tr ON tri.transfer_id = tr.id
+      WHERE tr.to_warehouse_id = ?
+        AND tr.transfer_date >= ?
+        AND tr.transfer_date < ?
+        AND tri.product_id = ?
+    `;
+        const transferInItems = this.mainDb.prepare(transferInSql).all(warehouseId, monthStart, monthEnd, productId);
+        transferInItems.forEach(item => {
+            totalQty += Number(item.quantity || 0);
+            totalCost += Number(item.amount || item.cost * item.quantity || 0);
+        });
+        console.log(`    入库结果：qty=${totalQty}, cost=${totalCost}`);
         return { qty: totalQty, cost: totalCost };
     }
     /**
@@ -138,9 +234,17 @@ class MonthlyCostSettlementService {
      */
     getOutboundData(productId, warehouseId, year, month) {
         const monthStart = `${year}-${String(month).padStart(2, '0')}-01`;
-        const monthEnd = `${year}-${String(month + 1).padStart(2, '0')}-01`;
-        // 查询销售出库单明细
-        const sql = `
+        let nextMonthYear = year;
+        let nextMonth = month + 1;
+        if (nextMonth > 12) {
+            nextMonth = 1;
+            nextMonthYear = year + 1;
+        }
+        const monthEnd = `${nextMonthYear}-${String(nextMonth).padStart(2, '0')}-01`;
+        let totalQty = 0;
+        console.log(`  查询出库数据 - 产品 ${productId}, 仓库 ${warehouseId}, 期间 ${monthStart} ~ ${monthEnd}`);
+        // 1. 销售出库（正数）
+        const salesOutboundSql = `
       SELECT soi.quantity
       FROM sales_outbound_items soi
       JOIN sales_outbound so ON soi.outbound_id = so.id
@@ -149,12 +253,40 @@ class MonthlyCostSettlementService {
         AND so.outbound_date < ?
         AND soi.product_id = ?
     `;
-        const items = this.mainDb.prepare(sql).all(warehouseId, monthStart, monthEnd, productId);
-        let totalQty = 0;
-        items.forEach(item => {
+        const salesOutboundItems = this.mainDb.prepare(salesOutboundSql).all(warehouseId, monthStart, monthEnd, productId);
+        console.log(`    销售出库记录数：${salesOutboundItems.length}`);
+        salesOutboundItems.forEach(item => {
             totalQty += Number(item.quantity || 0);
         });
-        // 出库成本在 calculateSettlement 中统一计算
+        // 2. 销售退货（负数）
+        const salesReturnSql = `
+      SELECT sri.quantity
+      FROM sales_return_items sri
+      JOIN sales_returns sr ON sri.return_id = sr.id
+      WHERE sr.warehouse_id = ?
+        AND sr.return_date >= ?
+        AND sr.return_date < ?
+        AND sri.product_id = ?
+    `;
+        const salesReturnItems = this.mainDb.prepare(salesReturnSql).all(warehouseId, monthStart, monthEnd, productId);
+        salesReturnItems.forEach(item => {
+            totalQty -= Number(item.quantity || 0);
+        });
+        // 3. 调拨出库（正数）
+        const transferOutSql = `
+      SELECT tri.quantity
+      FROM transfer_record_items tri
+      JOIN transfer_records tr ON tri.transfer_id = tr.id
+      WHERE tr.from_warehouse_id = ?
+        AND tr.transfer_date >= ?
+        AND tr.transfer_date < ?
+        AND tri.product_id = ?
+    `;
+        const transferOutItems = this.mainDb.prepare(transferOutSql).all(warehouseId, monthStart, monthEnd, productId);
+        transferOutItems.forEach(item => {
+            totalQty += Number(item.quantity || 0);
+        });
+        console.log(`    出库结果：qty=${totalQty}`);
         return { qty: totalQty, cost: 0 };
     }
     /**
@@ -162,14 +294,13 @@ class MonthlyCostSettlementService {
      */
     getAllProductWarehouseCombinations() {
         const combinations = [];
-        // 从数据库查询所有产品
         const products = this.mainDb.prepare('SELECT id, code, name FROM products WHERE status = 1').all();
-        // 从数据库查询所有仓库
+        console.log(`查询到产品数量：${products.length}`);
         const warehouses = this.mainDb.prepare('SELECT id, name FROM warehouses WHERE status = 1').all();
+        console.log(`查询到仓库数量：${warehouses.length}`);
         if (products.length === 0 || warehouses.length === 0) {
             return combinations;
         }
-        // 查询所有有业务往来的产品仓库组合
         const sql = `
       SELECT DISTINCT product_id, warehouse_id
       FROM (
@@ -179,6 +310,12 @@ class MonthlyCostSettlementService {
         SELECT product_id, warehouse_id FROM sales_outbound_items soi
         JOIN sales_outbound so ON soi.outbound_id = so.id
         UNION
+        SELECT product_id, warehouse_id FROM purchase_return_items pri
+        JOIN purchase_returns pr ON pri.return_id = pr.id
+        UNION
+        SELECT product_id, warehouse_id FROM sales_return_items sri
+        JOIN sales_returns sr ON sri.return_id = sr.id
+        UNION
         SELECT product_id, from_warehouse_id as warehouse_id FROM transfer_record_items iti
         JOIN transfer_records it ON iti.transfer_id = it.id
         UNION
@@ -187,28 +324,34 @@ class MonthlyCostSettlementService {
       )
     `;
         const usedCombinations = this.mainDb.prepare(sql).all();
+        console.log('从单据表中查询到的产品仓库组合:', JSON.stringify(usedCombinations));
         const comboSet = new Set();
         usedCombinations.forEach(combo => {
-            const productId = combo.product_id;
-            const warehouseId = combo.warehouse_id;
+            const productId = Number(combo.product_id);
+            const warehouseId = Number(combo.warehouse_id);
             if (!productId || !warehouseId)
                 return;
             const comboKey = `${productId}-${warehouseId}`;
             if (comboSet.has(comboKey))
                 return;
             comboSet.add(comboKey);
-            // 查找产品和仓库信息
-            const product = products.find(p => String(p.id) === String(productId));
-            const warehouse = warehouses.find(w => String(w.id) === String(warehouseId));
+            // 确保 product_id 在 products 表中存在
+            const product = this.mainDb.prepare('SELECT id, code, name FROM products WHERE id = ? AND status = 1').get(productId);
+            const warehouse = this.mainDb.prepare('SELECT id, name FROM warehouses WHERE id = ? AND status = 1').get(warehouseId);
             if (product && warehouse) {
                 combinations.push({
-                    productCode: String(product.id),
+                    productId: Number(productId),
+                    productCode: product.code,
                     productName: product.name || '',
                     warehouseId: Number(warehouseId),
                     warehouseName: warehouse.name || ''
                 });
             }
+            else {
+                console.log(`  ❌ 跳过无效的产品仓库组合：product_id=${productId} (不存在或已停用), warehouse_id=${warehouseId}`);
+            }
         });
+        console.log(`最终产品仓库组合数量：${combinations.length}`);
         return combinations;
     }
     /**
@@ -219,8 +362,6 @@ class MonthlyCostSettlementService {
             const now = new Date();
             const currentYear = now.getFullYear();
             const currentMonth = now.getMonth() + 1;
-            console.log(`重新结算从 ${year}年${month}月 到 ${currentYear}年${currentMonth}月`);
-            // 解锁所有需要重新结算的月份
             let y = year;
             let m = month;
             while (y < currentYear || (y === currentYear && m <= currentMonth)) {
@@ -231,7 +372,6 @@ class MonthlyCostSettlementService {
                     y++;
                 }
             }
-            // 重新结算
             y = year;
             m = month;
             let totalCount = 0;
@@ -259,16 +399,12 @@ class MonthlyCostSettlementService {
      */
     autoCompleteHistory() {
         try {
-            console.log('开始自动补全历史月份结算数据...');
-            // 获取系统最早的单据日期
             const firstDocumentDate = this.getFirstDocumentDate();
             if (!firstDocumentDate) {
-                console.log('没有找到任何业务单据，跳过自动补全');
                 return { success: true, message: '没有业务数据', settledMonths: 0 };
             }
             const firstYear = firstDocumentDate.getFullYear();
             const firstMonth = firstDocumentDate.getMonth() + 1;
-            // 计算到上月的所有月份
             const now = new Date();
             const currentYear = now.getFullYear();
             const currentMonth = now.getMonth() + 1;
@@ -278,30 +414,23 @@ class MonthlyCostSettlementService {
                 prevYear = currentYear - 1;
                 prevMonth = 12;
             }
-            console.log(`从 ${firstYear}年${firstMonth}月 到 ${prevYear}年${prevMonth}月`);
-            // 逐月检查并结算
             let y = firstYear;
             let m = firstMonth;
             let settledCount = 0;
             let skippedCount = 0;
             while (y < prevYear || (y === prevYear && m <= prevMonth)) {
-                // 检查是否已结算
                 if (this.costDb.isSettled(y, m)) {
-                    console.log(`${y}年${m}月 已结算，跳过`);
                     skippedCount++;
                 }
                 else {
-                    console.log(`结算 ${y}年${m}月 ...`);
                     const result = this.settleMonth(y, m, true);
                     if (result.success) {
                         settledCount++;
-                        console.log(`  ✓ 成功结算 ${result.count} 条记录`);
                     }
                     else {
                         console.error(`  ✗ 结算失败：${result.error}`);
                     }
                 }
-                // 下一个月
                 m++;
                 if (m > 12) {
                     m = 1;
@@ -309,7 +438,6 @@ class MonthlyCostSettlementService {
                 }
             }
             const message = `完成！结算 ${settledCount} 个月，跳过 ${skippedCount} 个月`;
-            console.log(message);
             return { success: true, message, settledMonths: settledCount };
         }
         catch (error) {
@@ -318,80 +446,162 @@ class MonthlyCostSettlementService {
         }
     }
     /**
-     * 获取系统最早的单据日期（从数据库读取）
+     * 计算并保存销售成本统计
      */
-    getFirstDocumentDate() {
-        try {
-            const allDates = [];
-            // 查询所有单据表的最早日期
-            const tables = [
-                { name: 'purchase_inbound', dateField: 'inbound_date' },
-                { name: 'sales_outbound', dateField: 'outbound_date' },
-                { name: 'inventory_transfer', dateField: 'transfer_date' }
-            ];
-            for (const table of tables) {
-                try {
-                    const result = this.mainDb.prepare(`SELECT MIN(${table.dateField}) as min_date FROM ${table.name}`).get();
-                    if (result && result.min_date) {
-                        const date = new Date(result.min_date);
-                        if (!isNaN(date.getTime())) {
-                            allDates.push(date);
-                        }
-                    }
-                }
-                catch (error) {
-                    console.log(`查询 ${table.name} 表失败，跳过`, error);
-                }
-            }
-            if (allDates.length === 0)
-                return null;
-            // 返回最早的日期
-            return new Date(Math.min(...allDates.map(d => d.getTime())));
+    calculateAndSaveSalesCostSummary(year, month, lock) {
+        const monthStart = `${year}-${String(month).padStart(2, '0')}-01`;
+        let nextMonthYear = year;
+        let nextMonth = month + 1;
+        if (nextMonth > 12) {
+            nextMonth = 1;
+            nextMonthYear = year + 1;
         }
-        catch (error) {
-            console.error('获取最早单据日期失败:', error);
-            return null;
+        const monthEnd = `${nextMonthYear}-${String(nextMonth).padStart(2, '0')}-01`;
+        const salesOutbounds = this.mainDb.prepare(`
+      SELECT 
+        so.id as doc_id,
+        so.outbound_no as doc_no,
+        p.code as product_code,
+        p.name as product_name,
+        w.id as warehouse_id,
+        w.name as warehouse_name,
+        soi.quantity as qty,
+        soi.unit_price as unit_price,
+        soi.total_amount as amount,
+        so.outbound_date as date
+      FROM sales_outbound_items soi
+      JOIN sales_outbound so ON soi.outbound_id = so.id
+      JOIN products p ON soi.product_id = p.id
+      JOIN warehouses w ON so.warehouse_id = w.id
+      WHERE so.outbound_date >= ? AND so.outbound_date < ?
+        AND so.status != 'deleted'
+    `).all(monthStart, monthEnd);
+        for (const item of salesOutbounds) {
+            const avgCost = this.getAvgCostAtDate(item.product_code, item.warehouse_id, item.date);
+            const costAmount = Number(item.qty || 0) * avgCost;
+            this.costDb.saveSalesCostItem({
+                doc_type: 'sales_outbound',
+                doc_id: item.doc_id,
+                doc_no: item.doc_no,
+                product_code: item.product_code,
+                product_name: item.product_name,
+                warehouse_id: item.warehouse_id,
+                warehouse_name: item.warehouse_name,
+                quantity: item.qty,
+                unit_price: item.unit_price,
+                sales_amount: item.amount,
+                cost_unit_price: avgCost,
+                cost_amount: costAmount,
+                profit_amount: Number(item.amount || 0) - costAmount,
+                date: item.date,
+                period_year: year,
+                period_month: month,
+                is_locked: lock ? 1 : 0
+            });
         }
     }
     /**
-     * 检测是否需要重新结算
+     * 计算并保存调拨成本统计
      */
-    checkAndRecalculateIfNeeded(productCode, warehouseId, documentDate) {
-        try {
-            const docDate = new Date(documentDate);
-            const docYear = docDate.getFullYear();
-            const docMonth = docDate.getMonth() + 1;
-            console.log(`检查是否需要重新结算：产品 ${productCode}, 仓库 ${warehouseId}, 日期 ${documentDate}`);
-            const now = new Date();
-            const currentYear = now.getFullYear();
-            const currentMonth = now.getMonth() + 1;
-            let y = docYear;
-            let m = docMonth;
-            let hasUnlockedMonth = false;
-            while (y < currentYear || (y === currentYear && m <= currentMonth)) {
-                const isSettled = this.costDb.isSettled(y, m);
-                console.log(`  ${y}年${m}月：已结算=${isSettled}`);
-                if (isSettled) {
-                    hasUnlockedMonth = true;
-                    break;
-                }
-                m++;
-                if (m > 12) {
-                    m = 1;
-                    y++;
-                }
-            }
-            if (hasUnlockedMonth) {
-                console.log(`检测到 ${docYear}年${docMonth}月 之后有未锁定的结算，触发重新结算`);
-                this.recalculateFromMonth(docYear, docMonth);
-                return { needsRecalculation: true, message: `检测到历史单据变更，已重新结算从 ${docYear}年${docMonth}月 开始的数据` };
-            }
-            return { needsRecalculation: false };
+    calculateAndSaveTransferCostSummary(year, month, lock) {
+        const monthStart = `${year}-${String(month).padStart(2, '0')}-01`;
+        let nextMonthYear = year;
+        let nextMonth = month + 1;
+        if (nextMonth > 12) {
+            nextMonth = 1;
+            nextMonthYear = year + 1;
         }
-        catch (error) {
-            console.error('检查重新结算失败:', error);
-            return { needsRecalculation: false };
+        const monthEnd = `${nextMonthYear}-${String(nextMonth).padStart(2, '0')}-01`;
+        const transfers = this.mainDb.prepare(`
+      SELECT 
+        tr.id as doc_id,
+        tr.transfer_no as doc_no,
+        p.code as product_code,
+        p.name as product_name,
+        wf.id as from_warehouse_id,
+        wf.name as from_warehouse_name,
+        wt.id as to_warehouse_id,
+        wt.name as to_warehouse_name,
+        tri.quantity as qty,
+        tri.cost as unit_cost,
+        tri.amount as cost_amount,
+        tr.transfer_date as date
+      FROM transfer_record_items tri
+      JOIN transfer_records tr ON tri.transfer_id = tr.id
+      JOIN products p ON tri.product_id = p.id
+      JOIN warehouses wf ON tr.from_warehouse_id = wf.id
+      JOIN warehouses wt ON tr.to_warehouse_id = wt.id
+      WHERE tr.transfer_date >= ? AND tr.transfer_date < ?
+        AND tr.status != 'deleted'
+    `).all(monthStart, monthEnd);
+        for (const item of transfers) {
+            this.costDb.saveTransferCostItem({
+                doc_type: 'transfer',
+                doc_id: item.doc_id,
+                doc_no: item.doc_no,
+                product_code: item.product_code,
+                product_name: item.product_name,
+                from_warehouse_id: item.from_warehouse_id,
+                from_warehouse_name: item.from_warehouse_name,
+                to_warehouse_id: item.to_warehouse_id,
+                to_warehouse_name: item.to_warehouse_name,
+                quantity: item.qty,
+                unit_cost: item.unit_cost,
+                cost_amount: item.cost_amount || (item.unit_cost * item.qty),
+                date: item.date,
+                period_year: year,
+                period_month: month,
+                is_locked: lock ? 1 : 0
+            });
         }
+    }
+    /**
+     * 获取指定日期的加权平均成本
+     */
+    getAvgCostAtDate(productCode, warehouseId, date) {
+        const product = this.mainDb.prepare('SELECT id FROM products WHERE code = ?').get(productCode);
+        if (!product)
+            return 0;
+        const productId = product.id;
+        const year = parseInt(date.split('-')[0]);
+        const month = parseInt(date.split('-')[1]);
+        const settlement = this.costDb.getSettlement(productId, warehouseId, year, month);
+        if (settlement && settlement.avg_cost) {
+            return settlement.avg_cost;
+        }
+        let prevYear = year;
+        let prevMonth = month - 1;
+        if (prevMonth === 0) {
+            prevYear = year - 1;
+            prevMonth = 12;
+        }
+        const prevSettlement = this.costDb.getSettlement(productId, warehouseId, prevYear, prevMonth);
+        if (prevSettlement && prevSettlement.avg_cost) {
+            return prevSettlement.avg_cost;
+        }
+        return 0;
+    }
+    /**
+     * 获取系统最早的单据日期
+     */
+    getFirstDocumentDate() {
+        const result = this.mainDb.prepare(`
+      SELECT MIN(date) as min_date FROM (
+        SELECT MIN(inbound_date) as date FROM purchase_inbound WHERE status != 'deleted'
+        UNION ALL
+        SELECT MIN(outbound_date) as date FROM sales_outbound WHERE status != 'deleted'
+        UNION ALL
+        SELECT MIN(return_date) as date FROM purchase_returns WHERE status != 'deleted'
+        UNION ALL
+        SELECT MIN(return_date) as date FROM sales_returns WHERE status != 'deleted'
+        UNION ALL
+        SELECT MIN(transfer_date) as date FROM transfer_records WHERE status != 'deleted'
+      )
+    `).get();
+        if (result && result.min_date) {
+            return new Date(result.min_date);
+        }
+        return null;
     }
 }
 exports.MonthlyCostSettlementService = MonthlyCostSettlementService;

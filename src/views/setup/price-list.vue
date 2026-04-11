@@ -54,12 +54,22 @@ const priceList = ref<any[]>([])
 const dialogVisible = ref(false)
 const formData = reactive({ id: 0, productCode: '', productName: '', supplierName: '', purchasePrice: 0, salePrice: 0, effectiveDate: '' })
 
-const loadPriceList = () => {
-  const saved = localStorage.getItem('price_list')
-  priceList.value = saved ? JSON.parse(saved) : []
+const loadPriceList = async () => {
+  try {
+    priceList.value = await db.getPriceList()
+  } catch (error) {
+    console.error('加载价格列表失败:', error)
+    priceList.value = []
+  }
 }
 
-const savePriceList = () => localStorage.setItem('price_list', JSON.stringify(priceList.value))
+const savePriceList = async () => {
+  try {
+    await db.savePriceList(priceList.value)
+  } catch (error) {
+    console.error('保存价格列表失败:', error)
+  }
+}
 
 const handleAdd = () => {
   Object.assign(formData, { id: Date.now(), productCode: '', productName: '', supplierName: '', purchasePrice: 0, salePrice: 0, effectiveDate: '' })
@@ -71,16 +81,16 @@ const handleEdit = (row: any) => {
   dialogVisible.value = true
 }
 
-const handleDelete = (row: any) => {
+const handleDelete = async (row: any) => {
   priceList.value = priceList.value.filter(p => p.id !== row.id)
-  savePriceList()
+  await savePriceList()
 }
 
-const handleSubmit = () => {
+const handleSubmit = async () => {
   const idx = priceList.value.findIndex(p => p.id === formData.id)
   if (idx === -1) priceList.value.push({ ...formData })
   else priceList.value[idx] = { ...formData }
-  savePriceList()
+  await savePriceList()
   dialogVisible.value = false
 }
 

@@ -330,6 +330,7 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import dayjs from 'dayjs'
+import { db } from '../../utils/db-ipc'
 
 // 类型定义
 interface InvoiceItem {
@@ -504,27 +505,25 @@ const getInvoiceStatusText = (status: string) => {
   return texts[status] || '未知'
 }
 
-// 加载客户列表
-const loadCustomers = () => {
+// 加载客户列表（从数据库获取）
+const loadCustomers = async () => {
   try {
-    const savedCustomers = localStorage.getItem('customers')
-    if (savedCustomers) {
-      customers.value = JSON.parse(savedCustomers).filter((c: Customer) => c.status !== 0)
-    }
+    customers.value = await db.getCustomers()
+    console.log('加载客户列表成功（数据库），共', customers.value.length, '个客户')
   } catch (error) {
     console.error('加载客户列表失败:', error)
+    customers.value = []
   }
 }
 
-// 加载仓库列表
-const loadWarehouses = () => {
+// 加载仓库列表（从数据库获取）
+const loadWarehouses = async () => {
   try {
-    const savedWarehouses = localStorage.getItem('warehouses')
-    if (savedWarehouses) {
-      warehouses.value = JSON.parse(savedWarehouses).filter((w: Warehouse) => w.status !== 0)
-    }
+    warehouses.value = await db.getWarehouses()
+    console.log('加载仓库列表成功（数据库），共', warehouses.value.length, '个仓库')
   } catch (error) {
     console.error('加载仓库列表失败:', error)
+    warehouses.value = []
   }
 }
 
@@ -534,26 +533,14 @@ const loadInvoiceList = async () => {
     // 从数据库读取数据
     let allOutbounds: any[] = []
     let allReturns: any[] = []
-    
-    // 检查是否在 Electron 环境
-    if (window.electron && window.electron.outboundList) {
-      // 从数据库获取出库单
-      const outboundResult = await window.electron.outboundList(1, 1000)
-      allOutbounds = outboundResult.data || []
-      
-      // 从数据库获取退货单
-      if (window.electron.salesReturnList) {
-        const returnResult = await window.electron.salesReturnList(1, 1000)
-        allReturns = returnResult.data || []
-      }
-    } else {
-      // 非 Electron 环境，使用 localStorage（兼容开发测试）
-      const outboundsData = localStorage.getItem('sales_outbound_records')
-      const returnsData = localStorage.getItem('salesReturns')
-      
-      allOutbounds = outboundsData ? JSON.parse(outboundsData) : []
-      allReturns = returnsData ? JSON.parse(returnsData) : []
-    }
+
+    // 从数据库获取出库单
+    const outboundResult = await db.getOutboundList(1, 1000)
+    allOutbounds = outboundResult.data || []
+
+    // 从数据库获取退货单
+    const returnResult = await db.getSalesReturnList(1, 1000)
+    allReturns = returnResult.data || []
     
     // 2. 创建出库单记录
     const map = new Map()
@@ -799,29 +786,12 @@ const handleInvoice = async (row: InvoiceRecord) => {
             invoicedAmount: (outbound.invoicedAmount || 0) + invoiceAmount,
             invoiceDate: dayjs().format('YYYY-MM-DD')
           }
-          
-          await window.electron.outboundUpdate(updatedOutbound)
-          
+
+          await db.updateOutbound(updatedOutbound)
+
           // 重新加载列表
           loadInvoiceList()
-          
-          ElMessage.success(`开票成功，开票金额：¥${invoiceAmount.toFixed(2)}`)
-        }
-      } else {
-        // 非 Electron 环境，使用 localStorage
-        const savedOutbounds = localStorage.getItem('sales_outbound_records')
-        const outbounds = savedOutbounds ? JSON.parse(savedOutbounds) : []
-        
-        const outbound = outbounds.find((o: any) => o.voucherNo === row.voucherNo)
-        if (outbound) {
-          outbound.invoicedAmount = (outbound.invoicedAmount || 0) + invoiceAmount
-          outbound.invoiceDate = dayjs().format('YYYY-MM-DD')
-          
-          localStorage.setItem('sales_outbound_records', JSON.stringify(outbounds))
-          
-          // 重新加载列表
-          loadInvoiceList()
-          
+
           ElMessage.success(`开票成功，开票金额：¥${invoiceAmount.toFixed(2)}`)
         }
       }
@@ -835,10 +805,10 @@ const handleInvoice = async (row: InvoiceRecord) => {
 }
 
 // 生命周期
-onMounted(() => {
-  loadCustomers()
-  loadWarehouses()
-  loadInvoiceList()
+onMounted(async () => {
+  await loadCustomers()
+  await loadWarehouses()
+  await loadInvoiceList()
 })
 </script>
 

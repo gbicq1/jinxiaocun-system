@@ -182,7 +182,7 @@ const routes: any[] = [
       {
         path: 'cost-settlement',
         name: 'FinanceCostSettlement',
-        component: () => import('@/views/finance/cost-settlement.vue'),
+        component: () => import('@/views/finance/cost-settlement-v2.vue'),
         meta: { title: '成本结算', icon: 'Money' }
       },
       {
@@ -246,6 +246,12 @@ const routes: any[] = [
         name: 'SystemRecycleBin',
         component: () => import('@/views/system/recycle-bin.vue'),
         meta: { title: '回收站', icon: 'Delete' }
+      },
+      {
+        path: 'backup',
+        name: 'SystemBackup',
+        component: () => import('@/views/system/backup.vue'),
+        meta: { title: '备份与恢复', icon: 'Upload' }
       }
     ]
   }

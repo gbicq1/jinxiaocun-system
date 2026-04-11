@@ -146,6 +146,13 @@
             <el-input v-model="row.unit" disabled />
           </template>
         </el-table-column>
+        <el-table-column label="当前库存" width="100" fixed>
+          <template #default="{ row }">
+            <el-tag :type="row.quantity > (row.currentStock || 0) ? 'danger' : 'success'">
+              {{ row.currentStock || 0 }}
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="成本价" width="130">
           <template #default="{ row }">
             <el-input-number
@@ -277,14 +284,14 @@ const loadTransferList = async () => {
   try {
     const data = await db.getTransfers(1, 100000)
     let list = data.data || []
-    
+
     // 搜索过滤
     if (searchQuery.value) {
-      list = list.filter((item: any) => 
+      list = list.filter((item: any) =>
         item.transfer_no?.toLowerCase().includes(searchQuery.value.toLowerCase())
       )
     }
-    
+
     // 转换数据格式
     transferList.value = list.map((item: any) => ({
       id: item.id,
@@ -306,6 +313,8 @@ const loadTransferList = async () => {
         totalAmountEx: i.amount || 0
       }))
     }))
+
+    console.log('调拨单列表加载成功，共', transferList.value.length, '条记录')
   } catch (error) {
     console.error('加载调拨单列表失败:', error)
   }
@@ -353,19 +362,32 @@ const handleEdit = (row: any) => {
     items: row.items || []
   })
   dialogVisible.value = true
-  
+
+  // 确保仓库名称正确显示
+  if (formData.fromWarehouseId) {
+    const fromWh = warehouses.value.find(w => w.id === formData.fromWarehouseId)
+    if (fromWh) {
+      formData.fromWarehouseName = fromWh.name
+    }
+  }
+  if (formData.toWarehouseId) {
+    const toWh = warehouses.value.find(w => w.id === formData.toWarehouseId)
+    if (toWh) {
+      formData.toWarehouseName = toWh.name
+    }
+  }
+
   // 编辑时，重新获取每个产品的最新成本价
   setTimeout(async () => {
     for (const item of formData.items) {
-      if (item.productId) {
-        // TODO: 从数据库获取成本价
-        // const costPrice = await db.getCostPrice(item.productId, formData.fromWarehouseId, formData.transferDate)
-        // if (costPrice > 0) {
-        //   item.unitPriceEx = costPrice
-        //   if (item.quantity > 0) {
-        //     item.totalAmountEx = Number((item.unitPriceEx * item.quantity).toFixed(2))
-        //   }
-        // }
+      if (item.productId && formData.fromWarehouseId && formData.transferDate) {
+        const costPrice = await db.getProductCost(String(item.productId), formData.fromWarehouseId, formData.transferDate)
+        if (costPrice !== null && costPrice > 0) {
+          item.unitPriceEx = costPrice
+          if (item.quantity > 0) {
+            item.totalAmountEx = Number((item.unitPriceEx * item.quantity).toFixed(2))
+          }
+        }
       }
     }
   }, 100)
@@ -397,15 +419,22 @@ const handleProductChange = async (index: number) => {
     item.productName = product.name
     item.specification = product.specification
     item.unit = product.unit
-    
-    // TODO: 自动从数据库获取成本价
-    // const costPrice = await db.getCostPrice(item.productId, formData.fromWarehouseId, formData.transferDate)
-    // if (costPrice > 0) {
-    //   item.unitPriceEx = costPrice
-    //   if (item.quantity > 0) {
-    //     item.totalAmountEx = Number((item.unitPriceEx * item.quantity).toFixed(2))
-    //   }
-    // }
+
+    // 加载调出仓库的库存
+    if (formData.fromWarehouseId && item.productId) {
+      item.currentStock = await db.getProductStock(item.productId, formData.fromWarehouseId)
+    }
+
+    // 自动从数据库获取成本价
+    if (formData.fromWarehouseId && item.productId && formData.transferDate) {
+      const costPrice = await db.getProductCost(String(item.productId), formData.fromWarehouseId, formData.transferDate)
+      if (costPrice !== null && costPrice > 0) {
+        item.unitPriceEx = costPrice
+        if (item.quantity > 0) {
+          item.totalAmountEx = Number((item.unitPriceEx * item.quantity).toFixed(2))
+        }
+      }
+    }
   }
 }
 
@@ -482,42 +511,24 @@ const handleFocus = (row: any, field: string) => {
 }
 
 // 调出仓库变化
-const handleFromWarehouseChange = () => {
-  // TODO: 重新从成本结算模块获取所有已选产品的成本价
-  // formData.items.forEach((item: any, index: number) => {
-  //   if (item.productId) {
-  //     const costPrice = getCostFromSettlement(item.productId, formData.fromWarehouseId, formData.transferDate)
-  //     if (costPrice > 0) {
-  //       item.unitPriceEx = costPrice
-  //       if (item.quantity > 0) {
-  //         item.totalAmountEx = Number((item.unitPriceEx * item.quantity).toFixed(2))
-  //       }
-  //     }
-  //   }
-  // })
-  
-  // TODO: 仓库变化时，检查所有已添加商品的库存
-  // if (formData.items && formData.items.length > 0) {
-  //   setTimeout(() => {
-  //     formData.items.forEach(item => {
-  //       if (item.productId && item.quantity) {
-  //         const stockBeforeDateTime = getStockBeforeDateTime(
-  //           item.productId, 
-  //           formData.fromWarehouseId, 
-  //           formData.transferDate, 
-  //           formData.createdAt,
-  //           formData.id
-  //         )
-  //         if (item.quantity > stockBeforeDateTime) {
-  //           ElMessage.warning({
-  //             message: `库存不足：${item.productName || '该商品'}，${formData.transferDate}前库存 ${stockBeforeDateTime}，调拨数量 ${item.quantity}`,
-  //             duration: 5000
-  //           })
-  //         }
-  //       }
-  //     })
-  //   }, 100)
-  // }
+const handleFromWarehouseChange = async () => {
+  // 重新加载所有已选产品的库存和成本价
+  await loadItemsStock()
+
+  // 重新获取所有已选产品的成本价
+  if (formData.fromWarehouseId && formData.transferDate) {
+    for (const item of formData.items) {
+      if (item.productId) {
+        const costPrice = await db.getProductCost(String(item.productId), formData.fromWarehouseId, formData.transferDate)
+        if (costPrice !== null && costPrice > 0) {
+          item.unitPriceEx = costPrice
+          if (item.quantity > 0) {
+            item.totalAmountEx = Number((item.unitPriceEx * item.quantity).toFixed(2))
+          }
+        }
+      }
+    }
+  }
 }
 
 // 调入仓库变化
@@ -525,20 +536,30 @@ const handleToWarehouseChange = () => {
   // 可以在这里添加库存检查逻辑
 }
 
+// 加载所有产品项的库存
+const loadItemsStock = async () => {
+  if (!formData.fromWarehouseId) return
+  for (const item of formData.items) {
+    if (item.productId) {
+      item.currentStock = await db.getProductStock(item.productId, formData.fromWarehouseId)
+    }
+  }
+}
+
 // 调拨日期变化
-const handleTransferDateChange = () => {
-  // TODO: 重新从成本结算模块获取所有已选产品的成本价
-  // formData.items.forEach((item: any, index: number) => {
-  //   if (item.productId) {
-  //     const costPrice = getCostFromSettlement(item.productId, formData.fromWarehouseId, formData.transferDate)
-  //     if (costPrice > 0) {
-  //       item.unitPriceEx = costPrice
-  //       if (item.quantity > 0) {
-  //         item.totalAmountEx = Number((item.unitPriceEx * item.quantity).toFixed(2))
-  //       }
-  //     }
-  //   }
-  // })
+const handleTransferDateChange = async () => {
+  // 重新从成本结算模块获取所有已选产品的成本价
+  for (const item of formData.items) {
+    if (item.productId && formData.fromWarehouseId && formData.transferDate) {
+      const costPrice = await db.getProductCost(String(item.productId), formData.fromWarehouseId, formData.transferDate)
+      if (costPrice !== null && costPrice > 0) {
+        item.unitPriceEx = costPrice
+        if (item.quantity > 0) {
+          item.totalAmountEx = Number((item.unitPriceEx * item.quantity).toFixed(2))
+        }
+      }
+    }
+  }
 }
 
 // 删除调拨单
@@ -549,12 +570,15 @@ const handleDelete = async (row: any) => {
       cancelButtonText: '取消',
       type: 'warning'
     })
-    
-    // TODO: 调用数据库删除接口
-    ElMessage.success('删除功能待实现')
+
+    await db.deleteTransfer(row.id)
+    ElMessage.success('删除成功')
     loadTransferList()
-  } catch {
-    // 用户取消删除
+  } catch (error: any) {
+    if (error !== 'cancel') {
+      console.error('删除失败:', error)
+      ElMessage.error('删除失败：' + (error.message || '未知错误'))
+    }
   }
 }
 
@@ -577,6 +601,7 @@ const handleSubmit = async () => {
     ElMessage.warning('请至少添加一个产品')
     return
   }
+
   // 验证产品是否都已选择
   for (const item of formData.items) {
     if (!item.productId) {
@@ -588,7 +613,18 @@ const handleSubmit = async () => {
       return
     }
   }
-  
+
+  // 验证库存是否充足
+  for (const item of formData.items) {
+    if (item.productId && formData.fromWarehouseId) {
+      const stock = await db.getProductStock(item.productId, formData.fromWarehouseId)
+      if (item.quantity > stock) {
+        ElMessage.error(`库存不足：${item.productName || '该产品'}，调出仓库库存仅 ${stock}，调拨数量 ${item.quantity}`)
+        return
+      }
+    }
+  }
+
   // 获取仓库名称
   const fromWarehouse = warehouses.value.find(w => w.id === formData.fromWarehouseId)
   const toWarehouse = warehouses.value.find(w => w.id === formData.toWarehouseId)
@@ -598,12 +634,11 @@ const handleSubmit = async () => {
   try {
     // 准备保存到数据库的数据
     const transferData = {
+      id: formData.id || undefined,
       transfer_no: formData.transferNo,
       transfer_date: formData.transferDate,
       from_warehouse_id: formData.fromWarehouseId,
-      from_warehouse_name: formData.fromWarehouseName,
       to_warehouse_id: formData.toWarehouseId,
-      to_warehouse_name: formData.toWarehouseName,
       remark: formData.remark,
       status: formData.status,
       items: formData.items.map((item: any) => ({
@@ -614,15 +649,17 @@ const handleSubmit = async () => {
         amount: Number(item.totalAmountEx) || 0
       }))
     }
-    
-    if (isEdit.value) {
-      // 更新（暂时简化，实际应该调用 update 接口）
-      ElMessage.success('更新功能待实现')
+
+    if (isEdit.value && formData.id) {
+      // 更新
+      await db.updateTransfer(transferData)
+      ElMessage.success('更新成功')
     } else {
       // 新增
-      const id = await db.db?.insert?.('transfer_records', transferData)
+      const id = await db.addTransfer(transferData)
       ElMessage.success('新增成功')
-      
+      formData.id = id
+
       // 检测是否需要重新结算成本
       await handleDocumentSave(
         DocumentType.INVENTORY_TRANSFER,
@@ -630,12 +667,12 @@ const handleSubmit = async () => {
         formData.transferDate
       )
     }
-    
+
     dialogVisible.value = false
     loadTransferList()
-  } catch (error) {
+  } catch (error: any) {
     console.error('保存调拨单失败:', error)
-    ElMessage.error('保存失败：' + error)
+    ElMessage.error('保存失败：' + (error.message || error))
   }
 }
 

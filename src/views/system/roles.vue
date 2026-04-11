@@ -78,6 +78,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { db } from '@/utils/db-ipc'
 
 interface Role {
   id?: number
@@ -103,13 +104,7 @@ const formData = reactive<Role>({
 // 加载角色列表
 const loadRoles = async () => {
   try {
-    if (window.electron && window.electron.dbQuery) {
-      const result = await window.electron.dbQuery('roles', 'SELECT * FROM roles ORDER BY created_at DESC')
-      roles.value = result
-    } else {
-      const savedData = localStorage.getItem('roles')
-      roles.value = savedData ? JSON.parse(savedData) : []
-    }
+    roles.value = await db.getRoles()
   } catch (error) {
     ElMessage.error('加载角色列表失败')
     console.error(error)
@@ -145,13 +140,8 @@ const handleDelete = async (row: Role) => {
       type: 'warning'
     })
     
-    if (window.electron && window.electron.dbDelete) {
-      await window.electron.dbDelete('roles', 'id = ?', [row.id])
-    } else {
-      const filtered = roles.value.filter((r: Role) => r.id !== row.id)
-      localStorage.setItem('roles', JSON.stringify(filtered))
-    }
-    
+    await db.deleteRole(row.id)
+
     ElMessage.success('删除成功')
     loadRoles()
   } catch {
@@ -168,40 +158,16 @@ const handlePermissions = (row: Role) => {
 const handleSubmit = async () => {
   try {
     await formRef.value.validate()
-    
+
     if (formData.id) {
-      // 更新
-      if (window.electron && window.electron.dbUpdate) {
-        await window.electron.dbUpdate('roles', formData, 'id = ?', [formData.id])
-      } else {
-        const savedData = localStorage.getItem('roles')
-        const allRoles = savedData ? JSON.parse(savedData) : []
-        const index = allRoles.findIndex((r: Role) => r.id === formData.id)
-        if (index !== -1) {
-          allRoles[index] = { ...formData }
-          localStorage.setItem('roles', JSON.stringify(allRoles))
-        }
-      }
+      await db.updateRole(formData)
       ElMessage.success('更新成功')
     } else {
-      // 新增
-      const newRole = {
-        ...formData,
-        id: Date.now()
-      }
-      
-      if (window.electron && window.electron.dbInsert) {
-        await window.electron.dbInsert('roles', newRole)
-      } else {
-        const savedData = localStorage.getItem('roles')
-        const allRoles = savedData ? JSON.parse(savedData) : []
-        allRoles.push(newRole)
-        localStorage.setItem('roles', JSON.stringify(allRoles))
-      }
-      
+      const saved = await db.addRole(formData)
+      formData.id = saved.id
       ElMessage.success('新增成功')
     }
-    
+
     dialogVisible.value = false
     loadRoles()
   } catch (error) {

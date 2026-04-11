@@ -92,14 +92,22 @@ const recycleBinItems = ref<RecycleBinItem[]>([])
 const selectedItems = ref<RecycleBinItem[]>([])
 
 // 加载回收站数据
-const loadRecycleBin = () => {
-  const savedData = localStorage.getItem('recycle_bin')
-  recycleBinItems.value = savedData ? JSON.parse(savedData) : []
+const loadRecycleBin = async () => {
+  try {
+    recycleBinItems.value = await db.getRecycleBinItems()
+  } catch (error) {
+    console.error('加载回收站数据失败:', error)
+    recycleBinItems.value = []
+  }
 }
 
 // 保存回收站数据
-const saveRecycleBin = () => {
-  localStorage.setItem('recycle_bin', JSON.stringify(recycleBinItems.value))
+const saveRecycleBin = async () => {
+  try {
+    await db.saveRecycleBinItems(recycleBinItems.value)
+  } catch (error) {
+    console.error('保存回收站数据失败:', error)
+  }
 }
 
 // 格式化日期时间
@@ -120,17 +128,14 @@ const handleRestore = async (item: RecycleBinItem) => {
       }
     )
 
-    // 从回收站移除
+    if (item.type === 'inbound') {
+      await db.addInbound(item.originalData)
+    } else {
+      await db.addOutbound(item.originalData)
+    }
+
     recycleBinItems.value = recycleBinItems.value.filter(r => r.id !== item.id)
-
-    // 恢复到原始数据存储
-    const storageKey = item.type === 'inbound' ? 'inbound_records' : 'sales_outbound_records'
-    const savedData = localStorage.getItem(storageKey)
-    const records = savedData ? JSON.parse(savedData) : []
-    records.push(item.originalData)
-    localStorage.setItem(storageKey, JSON.stringify(records))
-
-    saveRecycleBin()
+    await saveRecycleBin()
     ElMessage.success('恢复成功')
   } catch {
     ElMessage.info('已取消恢复')
@@ -206,18 +211,16 @@ const handleBatchRestore = async () => {
 
     // 恢复选中的项目
     for (const item of selectedItems.value) {
-      const storageKey = item.type === 'inbound' ? 'inbound_records' : 'sales_outbound_records'
-      const savedData = localStorage.getItem(storageKey)
-      const records = savedData ? JSON.parse(savedData) : []
-      records.push(item.originalData)
-      localStorage.setItem(storageKey, JSON.stringify(records))
-
-      // 从回收站移除
+      if (item.type === 'inbound') {
+        await db.addInbound(item.originalData)
+      } else {
+        await db.addOutbound(item.originalData)
+      }
       recycleBinItems.value = recycleBinItems.value.filter(r => r.id !== item.id)
     }
 
     const restoredCount = selectedItems.value.length
-    saveRecycleBin()
+    await saveRecycleBin()
     selectedItems.value = []
     ElMessage.success(`成功恢复 ${restoredCount} 项`)
   } catch {

@@ -87,6 +87,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import dayjs from 'dayjs'
+import { db } from '@/utils/db-ipc'
 
 interface User {
   id?: number
@@ -123,13 +124,7 @@ const roles = ['admin', 'operator', 'viewer']
 // 加载用户列表
 const loadUsers = async () => {
   try {
-    if (window.electron && window.electron.dbQuery) {
-      const result = await window.electron.dbQuery('system_users', 'SELECT * FROM system_users ORDER BY created_at DESC')
-      users.value = result
-    } else {
-      const savedData = localStorage.getItem('system_users')
-      users.value = savedData ? JSON.parse(savedData) : []
-    }
+    users.value = await db.getUsers()
     total.value = users.value.length
   } catch (error) {
     ElMessage.error('加载用户列表失败')
@@ -169,13 +164,8 @@ const handleDelete = async (row: User) => {
       type: 'warning'
     })
     
-    if (window.electron && window.electron.dbDelete) {
-      await window.electron.dbDelete('system_users', 'id = ?', [row.id])
-    } else {
-      const filtered = users.value.filter(r => r.id !== row.id)
-      localStorage.setItem('system_users', JSON.stringify(filtered))
-    }
-    
+    await db.deleteUser(row.id)
+
     ElMessage.success('删除成功')
     loadUsers()
   } catch {
@@ -202,40 +192,16 @@ const handleResetPassword = async (row: User) => {
 const handleSubmit = async () => {
   try {
     await formRef.value.validate()
-    
+
     if (formData.id) {
-      // 更新
-      if (window.electron && window.electron.dbUpdate) {
-        await window.electron.dbUpdate('system_users', formData, 'id = ?', [formData.id])
-      } else {
-        const savedData = localStorage.getItem('system_users')
-        const allUsers = savedData ? JSON.parse(savedData) : []
-        const index = allUsers.findIndex(r => r.id === formData.id)
-        if (index !== -1) {
-          allUsers[index] = { ...formData }
-          localStorage.setItem('system_users', JSON.stringify(allUsers))
-        }
-      }
+      await db.updateUser(formData)
       ElMessage.success('更新成功')
     } else {
-      // 新增
-      const newUser = {
-        ...formData,
-        id: Date.now()
-      }
-      
-      if (window.electron && window.electron.dbInsert) {
-        await window.electron.dbInsert('system_users', newUser)
-      } else {
-        const savedData = localStorage.getItem('system_users')
-        const allUsers = savedData ? JSON.parse(savedData) : []
-        allUsers.push(newUser)
-        localStorage.setItem('system_users', JSON.stringify(allUsers))
-      }
-      
+      const saved = await db.addUser(formData)
+      formData.id = saved.id
       ElMessage.success('新增成功')
     }
-    
+
     dialogVisible.value = false
     loadUsers()
   } catch (error) {

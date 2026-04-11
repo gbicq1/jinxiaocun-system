@@ -350,6 +350,7 @@ import dayjs from 'dayjs'
 import exportToCsv from '../../utils/exportCsv'
 import { getRealTimeStock, getStockBeforeDateTime } from '@/utils/stock'
 import { handleDocumentSave, DocumentType } from '@/utils/cost-recalculation'
+import { db } from '@/utils/db-ipc'
 
 interface OutboundItem {
   productId?: number
@@ -459,106 +460,61 @@ const generateVoucherNo = () => {
 
 const loadOutboundList = async () => {
   try {
-    if (window.electron && window.electron.outboundList) {
-      const result = await window.electron.outboundList(1, 1000)
-      let allRecords = (result && result.data) ? result.data : []
-      if (searchQuery.value) {
-        const query = searchQuery.value.toLowerCase()
-        allRecords = allRecords.filter((r: OutboundRecord) =>
-          r.voucherNo?.toLowerCase().includes(query) ||
-          r.customerName?.toLowerCase().includes(query)
-        )
-      }
-      total.value = allRecords.length
-      const start = (currentPage.value - 1) * pageSize.value
-      outboundList.value = allRecords.slice(start, start + pageSize.value)
-    } else if (window.electron && window.electron.dbQuery) {
-      const result = await window.electron.dbQuery('sales_outbound', 'SELECT * FROM sales_outbound ORDER BY created_at DESC')
-      let filtered = result
-      if (searchQuery.value) {
-        const query = searchQuery.value.toLowerCase()
-        filtered = result.filter((r: OutboundRecord) =>
-          r.voucherNo?.toLowerCase().includes(query) ||
-          r.customerName?.toLowerCase().includes(query)
-        )
-      }
-      total.value = filtered.length
-      const start = (currentPage.value - 1) * pageSize.value
-      outboundList.value = filtered.slice(start, start + pageSize.value)
-    } else {
-      const possibleKeys = ['sales_outbound_records', 'outbound_records', 'salesOutbounds']
-      let savedData = null
-      
-      for (const key of possibleKeys) {
-        savedData = localStorage.getItem(key)
-        if (savedData) break
-      }
-      
-      const allRecords = savedData ? JSON.parse(savedData) : []
-      let filtered = allRecords
-      if (searchQuery.value) {
-        const query = searchQuery.value.toLowerCase()
-        filtered = allRecords.filter((r: OutboundRecord) =>
-          r.voucherNo?.toLowerCase().includes(query) ||
-          r.customerName?.toLowerCase().includes(query)
-        )
-      }
-      total.value = filtered.length
-      const start = (currentPage.value - 1) * pageSize.value
-      outboundList.value = filtered.slice(start, start + pageSize.value)
+    const result = await db.getOutboundList(1, 1000)
+    let allRecords = (result && result.data) ? result.data : []
+    if (searchQuery.value) {
+      const query = searchQuery.value.toLowerCase()
+      allRecords = allRecords.filter((r: OutboundRecord) =>
+        r.voucherNo?.toLowerCase().includes(query) ||
+        r.customerName?.toLowerCase().includes(query)
+      )
     }
+    total.value = allRecords.length
+    const start = (currentPage.value - 1) * pageSize.value
+    outboundList.value = allRecords.slice(start, start + pageSize.value)
   } catch (error) {
     ElMessage.error('加载出库单列表失败')
     console.error(error)
   }
 }
 
+// 加载产品列表（从数据库获取）
 const loadProducts = async () => {
   try {
-    const saved = localStorage.getItem('products')
-    if (saved) {
-      const all = JSON.parse(saved)
-      // map storage shape to runtime shape used here
-      productList.value = all.map((p: any) => ({
+    const all = await db.getProducts()
+    productList.value = all
+      .filter((p: any) => (p.status as any) === 1 || (p.status as any) === true)
+      .map((p: any) => ({
         id: p.id,
         code: p.code || p.productCode || '',
         name: p.name || p.productName || '',
-        specification: p.specification || p.spec || p.specification || '',
+        specification: p.specification || p.spec || '',
         unit: p.unit || '',
         salePrice: p.salePrice || p.sellPrice || p.costPrice || 0
       }))
-    } else {
-      productList.value = [
-        { id: 1, code: 'P001', name: '测试产品 A', specification: '规格 A', unit: '个', salePrice: 20.0 },
-        { id: 2, code: 'P002', name: '测试产品 B', specification: '规格 B', unit: '个', salePrice: 30.0 }
-      ]
-    }
+    console.log('加载产品列表成功（数据库），共', productList.value.length, '个产品')
   } catch (error) {
-    console.error(error)
+    console.error('加载产品列表失败:', error)
     productList.value = []
   }
 }
 
+// 加载客户列表（从数据库获取）
 const loadCustomers = async () => {
   try {
-    customers.value = [
-      { id: 1, name: '客户 A' },
-      { id: 2, name: '客户 B' }
-    ]
+    customers.value = await db.getCustomers()
+    console.log('加载客户列表成功（数据库），共', customers.value.length, '个客户')
   } catch (error) {
-    console.error(error)
+    console.error('加载客户列表失败:', error)
+    customers.value = []
   }
 }
 
+// 加载仓库列表（从数据库获取）
 const loadWarehouses = async () => {
   try {
-    const savedWarehouses = localStorage.getItem('warehouses')
-    if (savedWarehouses) {
-      const allWarehouses = JSON.parse(savedWarehouses)
-      warehouses.value = allWarehouses.filter((w: Warehouse) => w.status === 1)
-    } else {
-      warehouses.value = []
-    }
+    warehouses.value = await db.getWarehouses()
+    console.log('加载仓库列表成功（数据库），共', warehouses.value.length, '个仓库')
   } catch (error) {
     console.error('加载仓库列表失败:', error)
     warehouses.value = []
@@ -611,27 +567,7 @@ const handleEdit = (row: OutboundRecord) => {
 const handleDelete = async (row: OutboundRecord) => {
   try {
     await ElMessageBox.confirm('确定要删除该出库单吗？', '提示', { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' })
-    if (window.electron && window.electron.dbDelete) {
-      await window.electron.dbDelete('sales_outbound', 'id = ?', [row.id])
-    } else {
-      const possibleKeys = ['sales_outbound_records', 'outbound_records', 'salesOutbounds']
-      let savedData = null
-      let usedKey = ''
-      
-      for (const key of possibleKeys) {
-        savedData = localStorage.getItem(key)
-        if (savedData) {
-          usedKey = key
-          break
-        }
-      }
-      
-      if (savedData) {
-        const allRecords = JSON.parse(savedData)
-        const filtered = allRecords.filter((r: OutboundRecord) => r.id !== row.id)
-        localStorage.setItem(usedKey, JSON.stringify(filtered))
-      }
-    }
+    await db.deleteOutbound(row.id)
     ElMessage.success('删除成功')
     loadOutboundList()
   } catch {
@@ -988,30 +924,7 @@ const handleSubmit = async () => {
           remark: item.remark || ''
         }))
       }
-      if (window.electron && window.electron.outboundUpdate) {
-        await window.electron.outboundUpdate(updateData)
-      } else {
-        const possibleKeys = ['sales_outbound_records', 'outbound_records', 'salesOutbounds']
-        let savedData = null
-        let usedKey = ''
-        
-        for (const key of possibleKeys) {
-          savedData = localStorage.getItem(key)
-          if (savedData) {
-            usedKey = key
-            break
-          }
-        }
-        
-        if (savedData) {
-          const allRecords = JSON.parse(savedData)
-          const index = allRecords.findIndex((r: OutboundRecord) => r.id === formData.id)
-          if (index !== -1) {
-            allRecords[index] = { ...formData }
-            localStorage.setItem(usedKey, JSON.stringify(allRecords))
-          }
-        }
-      }
+      await db.updateOutbound(updateData)
       ElMessage.success('更新成功')
     } else {
       const outboundData = {
@@ -1040,19 +953,8 @@ const handleSubmit = async () => {
           remark: item.remark || ''
         }))
       }
-      
-      if (window.electron && window.electron.outboundAdd) {
-        console.log('🔧 [DEBUG] 即将发送 outboundData:', JSON.stringify(outboundData, null, 2))
-        await window.electron.outboundAdd(outboundData)
-      } else {
-        formData.id = Date.now()
-        formData.createdAt = new Date().toISOString()
-        const key = 'sales_outbound_records'
-        const savedData = localStorage.getItem(key)
-        const allRecords = savedData ? JSON.parse(savedData) : []
-        allRecords.push({ ...formData })
-        localStorage.setItem(key, JSON.stringify(allRecords))
-      }
+
+      await db.addOutbound(outboundData)
       ElMessage.success('新增成功')
     }
     

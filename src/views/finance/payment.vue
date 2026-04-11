@@ -208,10 +208,9 @@ const generatePaymentNo = () => {
   return `PAY${date}${random}`
 }
 
-const loadSuppliers = () => {
+const loadSuppliers = async () => {
   try {
-    const saved = localStorage.getItem('suppliers')
-    suppliers.value = saved ? JSON.parse(saved) : []
+    suppliers.value = await db.getSuppliers()
   } catch (error) {
     console.error('加载供应商数据失败:', error)
     suppliers.value = []
@@ -220,8 +219,7 @@ const loadSuppliers = () => {
 
 const loadPayments = async () => {
   try {
-    const savedData = localStorage.getItem('payments')
-    paymentList.value = savedData ? JSON.parse(savedData) : []
+    paymentList.value = await db.getPaymentList()
   } catch (error) {
     ElMessage.error('加载付款单列表失败')
     console.error(error)
@@ -255,58 +253,47 @@ const handleEdit = (row: Payment) => {
   dialogVisible.value = true
 }
 
-const handleDelete = (row: Payment) => {
-  ElMessageBox.confirm('确定要删除这条付款单吗？', '提示', {
-    confirmButtonText: '确定',
-    cancelButtonText: '取消',
-    type: 'warning'
-  }).then(() => {
-    try {
-      const savedData = localStorage.getItem('payments')
-      const allPayments = savedData ? JSON.parse(savedData) : []
-      const filtered = allPayments.filter((p: Payment) => p.id !== row.id)
-      localStorage.setItem('payments', JSON.stringify(filtered))
-      paymentList.value = filtered
-      ElMessage.success('删除成功')
-    } catch (error) {
-      ElMessage.error('删除失败')
-      console.error(error)
-    }
-  }).catch(() => {})
+const handleDelete = async (row: Payment) => {
+  try {
+    await ElMessageBox.confirm('确定要删除这条付款单吗？', '提示', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+
+    await db.deletePayment(row.id)
+    paymentList.value = paymentList.value.filter((p: Payment) => p.id !== row.id)
+    ElMessage.success('删除成功')
+  } catch {
+  }
 }
 
 const handleSubmit = async () => {
   try {
     await formRef.value.validate()
-    
+
     const supplier = suppliers.value.find(s => s.id === formData.supplierId)
     if (supplier) {
       formData.supplierName = supplier.name
     }
-    
-    const savedData = localStorage.getItem('payments')
-    const allPayments = savedData ? JSON.parse(savedData) : []
-    
+
     if (formData.id) {
-      const index = allPayments.findIndex((p: Payment) => p.id === formData.id)
+      await db.updatePayment(formData)
+      const index = paymentList.value.findIndex((p: Payment) => p.id === formData.id)
       if (index !== -1) {
-        allPayments[index] = { ...formData }
-        ElMessage.success('更新成功')
+        paymentList.value[index] = { ...formData }
       }
+      ElMessage.success('更新成功')
     } else {
-      const newPayment = {
-        ...formData,
-        id: Date.now()
-      }
-      allPayments.push(newPayment)
+      const saved = await db.addPayment(formData)
+      formData.id = saved.id
+      paymentList.value.push({ ...formData })
       ElMessage.success('新增成功')
     }
-    
-    localStorage.setItem('payments', JSON.stringify(allPayments))
-    paymentList.value = allPayments
+
     dialogVisible.value = false
   } catch (error) {
-    console.error('表单验证失败:', error)
+    console.error(error)
   }
 }
 

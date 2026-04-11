@@ -107,23 +107,31 @@ npm run electron
 
 ## 数据存储
 
-当前版本使用 localStorage 进行数据存储，数据保存在浏览器本地。
+当前版本使用 SQLite 数据库进行数据存储。
 
-### 数据键名
+### 数据库文件
 
-- `products`: 产品列表
-- `suppliers`: 供应商列表
-- `customers`: 客户列表
-- `warehouses`: 仓库列表
-- `purchaseOrders`: 采购订单
-- `purchaseInbounds`: 采购入库
-- `purchaseReturns`: 采购退货
-- `salesOrders`: 销售订单
-- `salesOutbounds`: 销售出库
-- `salesReturns`: 销售退货
-- `stockInitial`: 期初库存
-- `stockCounts`: 库存盘点
-- `stockTransfers`: 库存调拨
+- 位置：`data/进销存.db`
+- 成本结算：`data/成本结算.db`
+
+### 数据库表结构
+
+- `products`: 产品表
+- `warehouses`: 仓库表
+- `suppliers`: 供应商表
+- `customers`: 客户表
+- `employees`: 员工表
+- `purchase_inbound`: 采购入库表
+- `purchase_inbound_items`: 采购入库明细表
+- `sales_outbound`: 销售出库表
+- `sales_outbound_items`: 销售出库明细表
+- `transfer_records`: 调拨单表
+- `transfer_record_items`: 调拨单明细表
+- `purchase_returns`: 采购退货表
+- `purchase_return_items`: 采购退货明细表
+- `sales_returns`: 销售退货表
+- `sales_return_items`: 销售退货明细表
+- `inventory_balance`: 库存平衡表
 
 ## 测试
 
@@ -138,18 +146,21 @@ npm run electron
 
 ## 注意事项
 
-1. 当前版本使用 localStorage 存储数据，清除浏览器缓存会导致数据丢失
-2. 建议定期导出数据进行备份
+1. 数据存储在 SQLite 数据库中，位于项目 `data` 目录
+2. 建议定期使用系统自带的备份功能导出数据
 3. 部分功能仍在开发中
 
 ## 开发计划
 
-- [ ] 添加数据库支持（SQLite/MySQL）
+- [x] 添加数据库支持（SQLite）
 - [ ] 添加数据导入导出功能
 - [ ] 完善权限管理
 - [ ] 添加数据报表
 - [ ] 优化用户体验
-- [ ] 添加数据备份恢复功能
+- [x] 添加数据备份恢复功能
+- [ ] 完善采购退货模块
+- [ ] 完善销售退货模块
+- [ ] 实现成本结算功能
 
 ## 许可证
 

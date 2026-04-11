@@ -2,14 +2,18 @@ import { app, BrowserWindow, ipcMain, Menu, dialog } from 'electron'
 import { resolve } from 'path'
 import { InventoryDatabase } from './database'
 import { CostSettlementHandler } from './cost-settlement-handler'
-import { ScheduledTaskService } from './scheduled-task-service'
+import { MonthlyCostSettlementService } from './cost-settlement-service'
+// import { ScheduledTaskService } from './scheduled-task-service'
 import { DatabaseBackup } from './database-backup'
+import { BackupScheduler } from './backup-scheduler'
 
 let mainWindow: BrowserWindow | null = null
 let db: InventoryDatabase
 let costHandler: CostSettlementHandler
-let scheduledTaskService: ScheduledTaskService
+let costSettlementService: MonthlyCostSettlementService | null = null
+// let scheduledTaskService: ScheduledTaskService
 let databaseBackup: DatabaseBackup
+let backupScheduler: BackupScheduler
 
 function createWindow() {
   console.log('创建窗口，preload 路径:', resolve(__dirname, 'preload.js'))
@@ -33,7 +37,6 @@ function createWindow() {
   console.log('是否开发环境:', isDev)
   if (isDev) {
     mainWindow.loadURL('http://localhost:5173')
-    mainWindow.webContents.openDevTools()
   } else {
     mainWindow.loadFile(resolve(__dirname, '../dist/index.html'))
   }
@@ -112,31 +115,32 @@ function initDatabase() {
   const dbPath = resolve(app.getPath('userData'), 'inventory.db')
   db = new InventoryDatabase(dbPath)
   db.initialize()
-  console.log('数据库初始化完成:', dbPath)
-  
+
   // 初始化数据库备份服务
   databaseBackup = new DatabaseBackup(dbPath)
-  
+
   // 启动时自动备份数据库
   const backupPath = databaseBackup.autoBackup()
-  if (backupPath) {
-    console.log('启动时自动备份完成:', backupPath)
-  }
-  
+
   // 清理旧备份（保留最近 10 个）
   databaseBackup.cleanupOldBackups(10)
+
+  // 启动定时备份调度器（首次启动时执行一次备份）
+  backupScheduler = new BackupScheduler(databaseBackup)
+  backupScheduler.start(true) // true 表示首次启动，立即执行一次备份
   
   // 初始化成本结算处理器
-  if (db.costDb) {
+  if (db.costDb && db.db) {
     costHandler = new CostSettlementHandler(db.costDb, mainWindow!)
     costHandler.registerHandlers()
-    console.log('成本结算处理器初始化完成')
+
+    // 初始化成本计算服务
+    costSettlementService = new MonthlyCostSettlementService(db.costDb, db.db)
   }
   
-  // 初始化定时任务服务
-  scheduledTaskService = new ScheduledTaskService(db.costDb, mainWindow!, db.db!)
-  scheduledTaskService.start()
-  console.log('定时任务服务已启动')
+  // 定时任务服务已禁用
+  // scheduledTaskService = new ScheduledTaskService(db.costDb, mainWindow!, db.db!)
+  // scheduledTaskService.start()
 }
 
 // IPC 处理器
@@ -174,33 +178,24 @@ function setupIpcHandlers() {
 
   ipcMain.handle('db-insert', async (event, table: string, data: any) => {
     try {
-      const id = db.insert(table, data)
-      console.log('数据库插入成功:', table, 'ID:', id)
-      return id
+      return db.insert(table, data)
     } catch (error: any) {
-      console.error('数据库插入错误:', error.message, '表:', table, '数据:', data)
       throw error
     }
   })
 
   ipcMain.handle('db-update', async (event, table: string, data: any, where: string, whereParams: any[]) => {
     try {
-      const changes = db.update(table, data, where, whereParams)
-      console.log('数据库更新成功:', table, '影响行数:', changes)
-      return changes
+      return db.update(table, data, where, whereParams)
     } catch (error: any) {
-      console.error('数据库更新错误:', error.message, '表:', table, '数据:', data)
       throw error
     }
   })
 
   ipcMain.handle('db-delete', async (event, table: string, where: string, whereParams: any[]) => {
     try {
-      const changes = db.delete(table, where, whereParams)
-      console.log('数据库删除成功:', table, '影响行数:', changes)
-      return changes
+      return db.delete(table, where, whereParams)
     } catch (error: any) {
-      console.error('数据库删除错误:', error.message, '表:', table)
       throw error
     }
   })
@@ -213,10 +208,8 @@ function setupIpcHandlers() {
         }
       })
       await transaction(operations)
-      console.log('数据库事务执行成功')
       return { success: true }
     } catch (error: any) {
-      console.error('数据库事务错误:', error.message)
       throw error
     }
   })
@@ -241,9 +234,7 @@ function setupIpcHandlers() {
 
   // 获取所有产品（不分页）
   ipcMain.handle('db:products-list', async () => {
-    const products = db.getAllProducts()
-    console.log('获取产品列表:', products)
-    return products
+    return db.getAllProducts()
   })
 
   // 仓库管理
@@ -265,9 +256,7 @@ function setupIpcHandlers() {
 
   // 获取所有仓库（不分页）
   ipcMain.handle('db:warehouses-list', async () => {
-    const warehouses = db.getAllWarehouses()
-    console.log('获取仓库列表:', warehouses)
-    return warehouses
+    return db.getAllWarehouses()
   })
 
   // 供应商管理
@@ -310,15 +299,63 @@ function setupIpcHandlers() {
   })
 
   ipcMain.handle('inbound-add', async (event, inbound: any) => {
+    // 检查新增单据月份是否已结算
+    const inboundDate = new Date(inbound.inbound_date)
+    const year = inboundDate.getFullYear()
+    const month = inboundDate.getMonth() + 1
+
+    if (db.costDb && db.costDb.isSettled(year, month)) {
+      throw new Error(`无法添加单据！${year}年${month}月已进行成本结算，请先反结算后再操作`)
+    }
+
     return db.addInbound(inbound)
   })
 
   ipcMain.handle('inbound-update', async (event, inbound: any) => {
+    // 检查更新单据月份是否已结算
+    if (inbound.id) {
+      const inboundRecord = db.getInboundById(inbound.id)
+      if (inboundRecord && db.costDb) {
+        const inboundDate = new Date(inboundRecord.inbound_date)
+        const year = inboundDate.getFullYear()
+        const month = inboundDate.getMonth() + 1
+
+        if (db.costDb.isSettled(year, month)) {
+          throw new Error(`无法修改单据！${year}年${month}月已进行成本结算，请先反结算后再操作`)
+        }
+      }
+    }
+
     return db.updateInbound(inbound)
   })
 
+  // 开票记录相关 IPC
+  ipcMain.handle('invoice-get-record', async (event, inboundNo: string) => {
+    return db.getInvoiceRecord(inboundNo)
+  })
+
+  ipcMain.handle('invoice-save-record', async (event, recordData: any) => {
+    return db.saveInvoiceRecord(recordData)
+  })
+
   ipcMain.handle('inbound-delete', async (event, id: number) => {
+    // 检查删除单据月份是否已结算
+    const inboundRecord = db.getInboundById(id)
+    if (inboundRecord && db.costDb) {
+      const inboundDate = new Date(inboundRecord.inbound_date)
+      const year = inboundDate.getFullYear()
+      const month = inboundDate.getMonth() + 1
+
+      if (db.costDb.isSettled(year, month)) {
+        throw new Error(`无法删除单据！${year}年${month}月已进行成本结算，请先反结算后再操作`)
+      }
+    }
+
     return db.deleteInbound(id)
+  })
+
+  ipcMain.handle('inbound-by-id', async (event, id: number) => {
+    return db.getInboundById(id)
   })
 
   // 销售出库
@@ -327,19 +364,67 @@ function setupIpcHandlers() {
   })
 
   ipcMain.handle('outbound-add', async (event, outbound: any) => {
+    // 检查新增单据月份是否已结算
+    const outboundDate = new Date(outbound.outbound_date)
+    const year = outboundDate.getFullYear()
+    const month = outboundDate.getMonth() + 1
+
+    if (db.costDb && db.costDb.isSettled(year, month)) {
+      throw new Error(`无法添加单据！${year}年${month}月已进行成本结算，请先反结算后再操作`)
+    }
+
     return db.addOutbound(outbound)
   })
 
   ipcMain.handle('outbound-update', async (event, outbound: any) => {
+    // 检查更新单据月份是否已结算
+    if (outbound.id) {
+      const outboundRecord = db.getOutboundById(outbound.id)
+      if (outboundRecord && db.costDb) {
+        const outboundDate = new Date(outboundRecord.outbound_date)
+        const year = outboundDate.getFullYear()
+        const month = outboundDate.getMonth() + 1
+
+        if (db.costDb.isSettled(year, month)) {
+          throw new Error(`无法修改单据！${year}年${month}月已进行成本结算，请先反结算后再操作`)
+        }
+      }
+    }
+
     return db.updateOutbound(outbound)
   })
 
   ipcMain.handle('outbound-delete', async (event, id: number) => {
+    // 检查删除单据月份是否已结算
+    const outboundRecord = db.getOutboundById(id)
+    if (outboundRecord && db.costDb) {
+      const outboundDate = new Date(outboundRecord.outbound_date)
+      const year = outboundDate.getFullYear()
+      const month = outboundDate.getMonth() + 1
+
+      if (db.costDb.isSettled(year, month)) {
+        throw new Error(`无法删除单据！${year}年${month}月已进行成本结算，请先反结算后再操作`)
+      }
+    }
+
     return db.deleteOutbound(id)
+  })
+
+  ipcMain.handle('outbound-by-id', async (event, id: number) => {
+    return db.getOutboundById(id)
   })
 
   // 采购退货
   ipcMain.handle('purchase-return-add', async (event, returnData: any) => {
+    // 检查新增单据月份是否已结算
+    const returnDate = new Date(returnData.return_date)
+    const year = returnDate.getFullYear()
+    const month = returnDate.getMonth() + 1
+
+    if (db.costDb && db.costDb.isSettled(year, month)) {
+      throw new Error(`无法添加退货单！${year}年${month}月已进行成本结算，请先反结算后再操作`)
+    }
+
     return db.addPurchaseReturn(returnData)
   })
 
@@ -348,15 +433,54 @@ function setupIpcHandlers() {
   })
 
   ipcMain.handle('purchase-return-update', async (event, returnData: any) => {
+    // 检查更新单据月份是否已结算
+    if (returnData.id && db.costDb) {
+      const returnRecord = db.getPurchaseReturnById(returnData.id)
+      if (returnRecord) {
+        const returnDate = new Date(returnRecord.return_date)
+        const year = returnDate.getFullYear()
+        const month = returnDate.getMonth() + 1
+
+        if (db.costDb.isSettled(year, month)) {
+          throw new Error(`无法修改退货单！${year}年${month}月已进行成本结算，请先反结算后再操作`)
+        }
+      }
+    }
+
     return db.updatePurchaseReturn(returnData)
   })
 
   ipcMain.handle('purchase-return-delete', async (event, id: number) => {
+    // 检查删除单据月份是否已结算
+    const returnRecord = db.getPurchaseReturnById(id)
+    if (returnRecord && db.costDb) {
+      const returnDate = new Date(returnRecord.return_date)
+      const year = returnDate.getFullYear()
+      const month = returnDate.getMonth() + 1
+
+      if (db.costDb.isSettled(year, month)) {
+        throw new Error(`无法删除退货单！${year}年${month}月已进行成本结算，请先反结算后再操作`)
+      }
+    }
+
     return db.deletePurchaseReturn(id)
+  })
+
+  ipcMain.handle('purchase-return-by-id', async (event, id: number) => {
+    return db.getPurchaseReturnById(id)
   })
 
   // 销售退货
   ipcMain.handle('sales-return-add', async (event, returnData: any) => {
+    // 检查新增单据月份是否已结算
+    const returnDate = new Date(returnData.return_date)
+    const year = returnDate.getFullYear()
+    const month = returnDate.getMonth() + 1
+
+    if (db.costDb && db.costDb.isSettled(year, month)) {
+      throw new Error(`无法添加退货单！${year}年${month}月已进行成本结算，请先反结算后再操作`)
+    }
+
     return db.addSalesReturn(returnData)
   })
 
@@ -365,11 +489,41 @@ function setupIpcHandlers() {
   })
 
   ipcMain.handle('sales-return-update', async (event, returnData: any) => {
+    // 检查更新单据月份是否已结算
+    if (returnData.id && db.costDb) {
+      const returnRecord = db.getSalesReturnById(returnData.id)
+      if (returnRecord) {
+        const returnDate = new Date(returnRecord.return_date)
+        const year = returnDate.getFullYear()
+        const month = returnDate.getMonth() + 1
+
+        if (db.costDb.isSettled(year, month)) {
+          throw new Error(`无法修改退货单！${year}年${month}月已进行成本结算，请先反结算后再操作`)
+        }
+      }
+    }
+
     return db.updateSalesReturn(returnData)
   })
 
   ipcMain.handle('sales-return-delete', async (event, id: number) => {
+    // 检查删除单据月份是否已结算
+    const returnRecord = db.getSalesReturnById(id)
+    if (returnRecord && db.costDb) {
+      const returnDate = new Date(returnRecord.return_date)
+      const year = returnDate.getFullYear()
+      const month = returnDate.getMonth() + 1
+
+      if (db.costDb.isSettled(year, month)) {
+        throw new Error(`无法删除退货单！${year}年${month}月已进行成本结算，请先反结算后再操作`)
+      }
+    }
+
     return db.deleteSalesReturn(id)
+  })
+
+  ipcMain.handle('sales-return-by-id', async (event, id: number) => {
+    return db.getSalesReturnById(id)
   })
 
   // 库存调拨
@@ -378,15 +532,54 @@ function setupIpcHandlers() {
   })
 
   ipcMain.handle('transfer-add', async (event, transfer: any) => {
+    // 检查新增单据月份是否已结算（调拨涉及两个仓库）
+    const transferDate = new Date(transfer.transfer_date)
+    const year = transferDate.getFullYear()
+    const month = transferDate.getMonth() + 1
+
+    if (db.costDb && db.costDb.isSettled(year, month)) {
+      throw new Error(`无法添加调拨单！${year}年${month}月已进行成本结算，请先反结算后再操作`)
+    }
+
     return db.addTransfer(transfer)
   })
 
   ipcMain.handle('transfer-update', async (event, transfer: any) => {
+    // 检查更新单据月份是否已结算
+    if (transfer.id && db.costDb) {
+      const transferRecord = db.getTransferById(transfer.id)
+      if (transferRecord) {
+        const transferDate = new Date(transferRecord.transfer_date)
+        const year = transferDate.getFullYear()
+        const month = transferDate.getMonth() + 1
+
+        if (db.costDb.isSettled(year, month)) {
+          throw new Error(`无法修改调拨单！${year}年${month}月已进行成本结算，请先反结算后再操作`)
+        }
+      }
+    }
+
     return db.updateTransfer(transfer)
   })
 
   ipcMain.handle('transfer-delete', async (event, id: number) => {
+    // 检查删除单据月份是否已结算
+    const transferRecord = db.getTransferById(id)
+    if (transferRecord && db.costDb) {
+      const transferDate = new Date(transferRecord.transfer_date)
+      const year = transferDate.getFullYear()
+      const month = transferDate.getMonth() + 1
+
+      if (db.costDb.isSettled(year, month)) {
+        throw new Error(`无法删除调拨单！${year}年${month}月已进行成本结算，请先反结算后再操作`)
+      }
+    }
+
     return db.deleteTransfer(id)
+  })
+
+  ipcMain.handle('transfer-by-id', async (event, id: number) => {
+    return db.getTransferById(id)
   })
 
   // 库存查询
@@ -399,12 +592,217 @@ function setupIpcHandlers() {
     return db.getProductStock(productId, warehouseId)
   })
 
+  // 获取所有库存
+  ipcMain.handle('all-stocks', async (event, endDate?: string) => {
+    return db.getAllStocks(endDate)
+  })
+
+  // 获取产品明细账（用于库存明细查询）
+  ipcMain.handle('product-ledger', async (event, productId: number, warehouseId: number, startDate?: string, endDate?: string) => {
+    return db.getProductLedger(productId, warehouseId, startDate, endDate)
+  })
+
+  ipcMain.handle('stock-before-date', async (event, productId: number, warehouseId: number, date: string) => {
+    return db.getStockBeforeDate(productId, warehouseId, date)
+  })
+
+  // 库存盘点 CRUD
+  ipcMain.handle('inventory-period-list', async () => {
+    return db.getInventoryPeriodList()
+  })
+
+  ipcMain.handle('inventory-period-save', async (event, data: any) => {
+    return db.saveInventoryPeriod(data)
+  })
+
+  ipcMain.handle('inventory-period-delete', async (event, id: number) => {
+    return db.deleteInventoryPeriod(id)
+  })
+
   // 成本结算查询
   ipcMain.handle('cost-settlement-query', async (event, year: number, month: number, productCode?: string, warehouseId?: number) => {
     if (!db.costDb) {
       throw new Error('成本结算数据库未初始化')
     }
     return db.costDb.getSettlements(year, month, productCode, warehouseId)
+  })
+
+  // 成本初始化计算
+  ipcMain.handle('cost:initialize', async (event, params?: { year?: number; month?: number }) => {
+    if (!costSettlementService || !db.costDb) {
+      throw new Error('成本结算服务未初始化')
+    }
+
+    try {
+      // 如果没有指定期间，自动补全所有历史月份
+      if (!params?.year || !params?.month) {
+        const result = costSettlementService.autoCompleteHistory()
+        return { success: result.success, message: result.message, count: result.settledMonths }
+      }
+
+      // 指定期间结算
+      const year = params.year
+      const month = params.month
+      const result = costSettlementService.settleMonth(year, month, true)
+
+      return {
+        success: result.success,
+        message: result.error ? result.error : `成功结算${result.count}条记录`,
+        count: result.count
+      }
+    } catch (error: any) {
+      console.error('成本初始化失败:', error)
+      return { success: false, message: error.message, count: 0 }
+    }
+  })
+
+  // 重新结算
+  ipcMain.handle('cost:recalculate', async (event, params: { fromYear: number; fromMonth: number }) => {
+    if (!costSettlementService) {
+      throw new Error('成本结算服务未初始化')
+    }
+
+    try {
+      const result = costSettlementService.recalculateFromMonth(params.fromYear, params.fromMonth)
+      return { success: result.success, message: result.message }
+    } catch (error: any) {
+      console.error('成本重新结算失败:', error)
+      return { success: false, message: error.message }
+    }
+  })
+
+  // 自动补全历史
+  ipcMain.handle('cost:auto-complete', async () => {
+    if (!costSettlementService) {
+      throw new Error('成本结算服务未初始化')
+    }
+
+    try {
+      const result = costSettlementService.autoCompleteHistory()
+      return { success: result.success, message: result.message, settledMonths: result.settledMonths }
+    } catch (error: any) {
+      console.error('自动补全历史失败:', error)
+      return { success: false, message: error.message, settledMonths: 0 }
+    }
+  })
+
+  // 获取成本结算汇总数据
+  ipcMain.handle('cost:settlement-summary', async (event, params: any) => {
+    if (!db.costDb) {
+      throw new Error('成本结算数据库未初始化')
+    }
+    const dateSource = params.periodRange || params.startDate
+    let year: number, month: number
+    if (dateSource) {
+      const dateStr = Array.isArray(dateSource) ? dateSource[0] : String(dateSource)
+      const [y, m] = dateStr.split('-').map(Number)
+      year = y
+      month = m
+    } else {
+      const now = new Date()
+      year = now.getFullYear()
+      month = now.getMonth() + 1
+    }
+    return db.costDb.getSettlements(year, month, params.productSearch, params.warehouseId)
+  })
+
+  // 获取销售成本统计
+  ipcMain.handle('cost:sales-summary', async (event, params: any) => {
+    if (!db.costDb) {
+      throw new Error('成本结算数据库未初始化')
+    }
+    const dateSource = params.periodRange || params.startDate
+    let year: number, month: number
+    if (dateSource) {
+      const dateStr = Array.isArray(dateSource) ? dateSource[0] : String(dateSource)
+      const [y, m] = dateStr.split('-').map(Number)
+      year = y
+      month = m
+    } else {
+      const now = new Date()
+      year = now.getFullYear()
+      month = now.getMonth() + 1
+    }
+    return db.costDb.getSalesCostSummary(year, month, params.productSearch)
+  })
+
+  // 获取调拨成本统计
+  ipcMain.handle('cost:transfer-summary', async (event, params: any) => {
+    if (!db.costDb) {
+      throw new Error('成本结算数据库未初始化')
+    }
+    const dateSource = params.periodRange || params.startDate
+    let year: number, month: number
+    if (dateSource) {
+      const dateStr = Array.isArray(dateSource) ? dateSource[0] : String(dateSource)
+      const [y, m] = dateStr.split('-').map(Number)
+      year = y
+      month = m
+    } else {
+      const now = new Date()
+      year = now.getFullYear()
+      month = now.getMonth() + 1
+    }
+    return db.costDb.getTransferCostSummary(year, month, params.productSearch)
+  })
+
+  // 获取出入库明细数据
+  ipcMain.handle('cost:transaction-details', async (event, params: any) => {
+    if (!db.costDb) {
+      throw new Error('成本结算数据库未初始化')
+    }
+    const dateSource = params.periodRange || params.startDate
+    let year: number, month: number
+    if (dateSource) {
+      const dateStr = Array.isArray(dateSource) ? dateSource[0] : String(dateSource)
+      const [y, m] = dateStr.split('-').map(Number)
+      year = y
+      month = m
+    } else {
+      const now = new Date()
+      year = now.getFullYear()
+      month = now.getMonth() + 1
+    }
+    return db.costDb.getTransactionDetails(year, month, params.productSearch, params.warehouseId)
+  })
+
+  // 获取商品明细账数据
+  ipcMain.handle('cost:product-detail-ledger', async (event, params: any) => {
+    if (!db.costDb) {
+      throw new Error('成本结算数据库未初始化')
+    }
+    try {
+      console.log('[IPC] cost:product-detail-ledger 调用参数:', params)
+      const result = db.costDb.getProductDetailLedger(params)
+      console.log('[IPC] cost:product-detail-ledger 返回结果:', result ? result.length : 'null', '条记录')
+      return result
+    } catch (error: any) {
+      console.error('[IPC] cost:product-detail-ledger 失败:', error)
+      throw error
+    }
+  })
+
+  // 反结算
+  ipcMain.handle('cost:reverse', async (event, params: { year: number; month: number }) => {
+    if (!db.costDb) {
+      throw new Error('成本结算数据库未初始化')
+    }
+
+    try {
+      // 解锁成本结算
+      db.costDb.unlockSettlement(params.year, params.month)
+
+      // 删除销售成本统计
+      db.costDb.deleteSalesCostSummary(params.year, params.month)
+
+      // 删除调拨成本统计
+      db.costDb.deleteTransferCostSummary(params.year, params.month)
+
+      return { success: true, message: '反结算成功' }
+    } catch (error: any) {
+      console.error('反结算失败:', error)
+      return { success: false, message: error.message }
+    }
   })
 
   // 数据库备份管理
@@ -429,11 +827,23 @@ function setupIpcHandlers() {
   ipcMain.handle('db-backup-restore', async () => {
     const result = await databaseBackup.restoreBackup()
     if (result.success) {
-      dialog.showMessageBox(mainWindow!, {
-        type: 'info',
+      // 显示需要重启的确认对话框
+      const { response } = await dialog.showMessageBox(mainWindow!, {
+        type: 'warning',
         title: '恢复成功',
-        message: '数据库已成功恢复，请重启系统以应用更改。'
+        message: '数据库已成功恢复，需要重启应用才能生效。\n\n请点击"确定"按钮后手动关闭并重启应用。',
+        buttons: ['确定'],
+        defaultId: 0
       })
+      
+      if (response === 0) {
+        // 提示用户手动重启
+        dialog.showMessageBox(mainWindow!, {
+          type: 'info',
+          title: '提示',
+          message: '请关闭应用窗口，然后重新运行：npm run electron:dev'
+        })
+      }
     } else if (result.error) {
       dialog.showMessageBox(mainWindow!, {
         type: 'error',
@@ -470,23 +880,242 @@ function setupIpcHandlers() {
     return databaseBackup.getDatabaseInfo()
   })
 
+  // 从指定备份恢复
+  ipcMain.handle('db-backup-restore-from', async (event, backupPath: string) => {
+    const result = await databaseBackup.restoreFromBackup(backupPath)
+    if (result.success) {
+      // 显示需要重启的确认对话框
+      const { response } = await dialog.showMessageBox(mainWindow!, {
+        type: 'warning',
+        title: '恢复成功',
+        message: '数据库已成功恢复，需要重启应用才能生效。\n\n请点击"确定"按钮后手动关闭并重启应用。',
+        buttons: ['确定'],
+        defaultId: 0
+      })
+      
+      if (response === 0) {
+        // 提示用户手动重启
+        dialog.showMessageBox(mainWindow!, {
+          type: 'info',
+          title: '提示',
+          message: '请关闭应用窗口，然后重新运行：npm run electron:dev'
+        })
+      }
+    } else if (result.error) {
+      dialog.showMessageBox(mainWindow!, {
+        type: 'error',
+        title: '恢复失败',
+        message: `恢复失败：${result.error}`
+      })
+    }
+    return result
+  })
+
+  // 删除备份
+  ipcMain.handle('db-backup-delete', async (event, filename: string) => {
+    return databaseBackup.deleteBackup(filename)
+  })
+
+  // 获取备份配置
+  ipcMain.handle('db-backup-config', async () => {
+    return databaseBackup.getBackupConfig()
+  })
+
+  // 保存备份配置
+  ipcMain.handle('db-backup-save-config', async (event, config: { autoBackupEnabled: boolean; autoBackupInterval: number; keepCount: number }) => {
+    databaseBackup.saveBackupConfig(config)
+    // 重新加载配置并重启定时器
+    backupScheduler.reloadConfig()
+    return { success: true }
+  })
+
+  // 获取备份统计
+  ipcMain.handle('db-backup-stats', async () => {
+    return databaseBackup.getBackupStats()
+  })
+
+  // 导出数据库
+  ipcMain.handle('db-backup-export', async () => {
+    const result = await databaseBackup.exportCompressedBackup()
+    if (result.success) {
+      dialog.showMessageBox(mainWindow!, {
+        type: 'info',
+        title: '导出成功',
+        message: `数据库已成功导出到：\n${result.path}\n\n您可以将此文件复制到其他电脑使用。`
+      })
+    } else if (result.error) {
+      dialog.showMessageBox(mainWindow!, {
+        type: 'error',
+        title: '导出失败',
+        message: `导出失败：${result.error}`
+      })
+    }
+    return result
+  })
+
+  // ==================== 客户/供应商 ====================
+
+  ipcMain.handle('customers-list', async () => {
+    return db.getCustomers()
+  })
+
+  ipcMain.handle('suppliers-list', async () => {
+    return db.getSuppliers()
+  })
+
+  // ==================== 收款单 ====================
+
+  ipcMain.handle('receipt-list', async () => {
+    return db.getReceiptList() || []
+  })
+
+  ipcMain.handle('receipt-add', async (event, data: any) => {
+    return db.addReceipt(data)
+  })
+
+  ipcMain.handle('receipt-update', async (event, data: any) => {
+    return db.updateReceipt(data)
+  })
+
+  ipcMain.handle('receipt-delete', async (event, id: number) => {
+    return db.deleteReceipt(id)
+  })
+
+  // ==================== 付款单 ====================
+
+  ipcMain.handle('payment-list', async () => {
+    return db.getPaymentList() || []
+  })
+
+  ipcMain.handle('payment-add', async (event, data: any) => {
+    return db.addPayment(data)
+  })
+
+  ipcMain.handle('payment-update', async (event, data: any) => {
+    return db.updatePayment(data)
+  })
+
+  ipcMain.handle('payment-delete', async (event, id: number) => {
+    return db.deletePayment(id)
+  })
+
+  // ==================== 采购订单 ====================
+
+  ipcMain.handle('purchase-orders-list', async () => {
+    return db.getPurchaseOrders() || []
+  })
+
+  ipcMain.handle('purchase-order-add', async (event, data: any) => {
+    return db.addPurchaseOrder(data)
+  })
+
+  ipcMain.handle('purchase-order-update', async (event, data: any) => {
+    return db.updatePurchaseOrder(data)
+  })
+
+  ipcMain.handle('purchase-order-delete', async (event, id: number) => {
+    return db.deletePurchaseOrder(id)
+  })
+
+  // ==================== 采购申请 ====================
+
+  ipcMain.handle('purchase-requests-list', async () => {
+    return db.getPurchaseRequests() || []
+  })
+
+  ipcMain.handle('purchase-request-add', async (event, data: any) => {
+    return db.addPurchaseRequest(data)
+  })
+
+  ipcMain.handle('purchase-request-update', async (event, data: any) => {
+    return db.updatePurchaseRequest(data)
+  })
+
+  ipcMain.handle('purchase-request-delete', async (event, id: number) => {
+    return db.deletePurchaseRequest(id)
+  })
+
+  // ==================== 角色管理 ====================
+
+  ipcMain.handle('roles-list', async () => {
+    return db.getRoles() || []
+  })
+
+  ipcMain.handle('role-add', async (event, data: any) => {
+    return db.addRole(data)
+  })
+
+  ipcMain.handle('role-update', async (event, data: any) => {
+    return db.updateRole(data)
+  })
+
+  ipcMain.handle('role-delete', async (event, id: number) => {
+    return db.deleteRole(id)
+  })
+
+  // ==================== 用户管理 ====================
+
+  ipcMain.handle('users-list', async () => {
+    return db.getUsers() || []
+  })
+
+  ipcMain.handle('user-add', async (event, data: any) => {
+    return db.addUser(data)
+  })
+
+  ipcMain.handle('user-update', async (event, data: any) => {
+    return db.updateUser(data)
+  })
+
+  ipcMain.handle('user-delete', async (event, id: number) => {
+    return db.deleteUser(id)
+  })
+
+  // ==================== 回收站 ====================
+
+  ipcMain.handle('recycle-bin-list', async () => {
+    return db.getRecycleBinItems() || []
+  })
+
+  ipcMain.handle('recycle-bin-save', async (event, items: any[]) => {
+    return db.saveRecycleBinItems(items)
+  })
+
+  // ==================== 价格列表 ====================
+
+  ipcMain.handle('price-list-get', async () => {
+    return db.getPriceList() || []
+  })
+
+  ipcMain.handle('price-list-save', async (event, items: any[]) => {
+    return db.savePriceList(items)
+  })
+
   console.log('IPC 处理器设置完成')
 }
 
-app.whenReady().then(() => {
-  createWindow()
-  initDatabase()
-  setupIpcHandlers()
+// 请求单实例锁，如果已经有实例在运行，则退出
+const gotTheLock = app.requestSingleInstanceLock()
 
-  // 系统启动完成
-  console.log('\n========== 系统启动完成 ==========')
+if (!gotTheLock) {
+  console.log('已有实例在运行，退出')
+  app.quit()
+} else {
+  app.whenReady().then(() => {
+    createWindow()
+    initDatabase()
+    setupIpcHandlers()
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow()
-    }
+    // 系统启动完成
+    console.log('\n========== 系统启动完成 ==========')
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        createWindow()
+      }
+    })
   })
-})
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {

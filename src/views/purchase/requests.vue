@@ -123,6 +123,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import dayjs from 'dayjs'
+import { db } from '@/utils/db-ipc'
 
 interface PurchaseRequest {
   id?: number
@@ -153,10 +154,17 @@ const formData = reactive<PurchaseRequest>({
   remark: ''
 })
 
-const suppliers = ref([
-  { id: 1, name: '供应商 A' },
-  { id: 2, name: '供应商 B' }
-])
+const suppliers = ref<any[]>([])
+
+// 加载供应商列表
+const loadSuppliers = async () => {
+  try {
+    suppliers.value = await db.getSuppliers()
+    console.log('加载供应商成功:', suppliers.value.length, '个')
+  } catch (error) {
+    console.error('加载供应商失败:', error)
+  }
+}
 
 // 生成申请单号
 const generateRequestNo = () => {
@@ -168,13 +176,7 @@ const generateRequestNo = () => {
 // 加载申请列表
 const loadRequests = async () => {
   try {
-    if (window.electron && window.electron.dbQuery) {
-      const result = await window.electron.dbQuery('purchase_requests', 'SELECT * FROM purchase_requests ORDER BY created_at DESC')
-      requests.value = result
-    } else {
-      const savedData = localStorage.getItem('purchase_requests')
-      requests.value = savedData ? JSON.parse(savedData) : []
-    }
+    requests.value = await db.getPurchaseRequests()
   } catch (error) {
     ElMessage.error('加载申请列表失败')
     console.error(error)
@@ -214,13 +216,8 @@ const handleDelete = async (row: PurchaseRequest) => {
       type: 'warning'
     })
     
-    if (window.electron && window.electron.dbDelete) {
-      await window.electron.dbDelete('purchase_requests', 'id = ?', [row.id])
-    } else {
-      const filtered = requests.value.filter((r: PurchaseRequest) => r.id !== row.id)
-      localStorage.setItem('purchase_requests', JSON.stringify(filtered))
-    }
-    
+    await db.deletePurchaseRequest(row.id)
+
     ElMessage.success('删除成功')
     loadRequests()
   } catch {
@@ -247,46 +244,21 @@ const getStatusType = (status: string) => {
 const handleSubmit = async () => {
   try {
     await formRef.value.validate()
-    
-    // 获取供应商名称
+
     const supplier = suppliers.value.find(s => s.id === formData.supplierId)
     if (supplier) {
       formData.supplierName = supplier.name
     }
-    
+
     if (formData.id) {
-      // 更新
-      if (window.electron && window.electron.dbUpdate) {
-        await window.electron.dbUpdate('purchase_requests', formData, 'id = ?', [formData.id])
-      } else {
-        const savedData = localStorage.getItem('purchase_requests')
-        const allRequests = savedData ? JSON.parse(savedData) : []
-        const index = allRequests.findIndex((r: PurchaseRequest) => r.id === formData.id)
-        if (index !== -1) {
-          allRequests[index] = { ...formData }
-          localStorage.setItem('purchase_requests', JSON.stringify(allRequests))
-        }
-      }
+      await db.updatePurchaseRequest(formData)
       ElMessage.success('更新成功')
     } else {
-      // 新增
-      const newRequest = {
-        ...formData,
-        id: Date.now()
-      }
-      
-      if (window.electron && window.electron.dbInsert) {
-        await window.electron.dbInsert('purchase_requests', newRequest)
-      } else {
-        const savedData = localStorage.getItem('purchase_requests')
-        const allRequests = savedData ? JSON.parse(savedData) : []
-        allRequests.push(newRequest)
-        localStorage.setItem('purchase_requests', JSON.stringify(allRequests))
-      }
-      
+      const saved = await db.addPurchaseRequest(formData)
+      formData.id = saved.id
       ElMessage.success('新增成功')
     }
-    
+
     dialogVisible.value = false
     loadRequests()
   } catch (error) {
@@ -296,6 +268,7 @@ const handleSubmit = async () => {
 
 onMounted(() => {
   loadRequests()
+  loadSuppliers()
 })
 </script>
 

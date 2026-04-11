@@ -417,6 +417,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import dayjs from 'dayjs'
 import exportToCsv from '../../utils/exportCsv'
 import { handleDocumentSave, DocumentType } from '@/utils/cost-recalculation'
+import { db } from '@/utils/db-ipc'
 
 // 定义接口
 interface InboundItem {
@@ -526,50 +527,18 @@ const generateVoucherNo = () => {
   return `RK${date}${random}`
 }
 
-// 加载入库单列表
+// 加载入库单列表（从数据库获取）
 const loadInboundList = async () => {
   try {
     console.log('开始加载入库单列表...')
-    
-    const electron = (window as any).electron
-    if (electron && electron.inboundList) {
-      // 调用 Electron 后端的 inboundList 方法
-      const result = await electron.inboundList(currentPage.value, pageSize.value)
-      console.log('入库单列表结果:', result)
-      
-      // 后端已经返回 camelCase 字段，直接使用
-      inboundList.value = result.data
-      total.value = result.total
-      
-      console.log('处理后的入库单列表:', inboundList.value)
-    } else {
-      // 非 Electron 环境，使用 localStorage（仅用于开发测试）
-      const possibleKeys = ['purchase_inbound_records', 'inbound_records', 'purchaseInbounds']
-      let savedData = null
-      
-      for (const key of possibleKeys) {
-        savedData = localStorage.getItem(key)
-        if (savedData) {
-          console.log(`从 ${key} 加载入库单数据`)
-          break
-        }
-      }
-      
-      const allRecords = savedData ? JSON.parse(savedData) : []
-      
-      // 搜索过滤
-      let filtered = allRecords
-      if (searchQuery.value) {
-        const query = searchQuery.value.toLowerCase()
-        filtered = allRecords.filter((r: InboundRecord) => 
-          r.voucherNo?.toLowerCase().includes(query) || 
-          r.supplierName?.toLowerCase().includes(query)
-        )
-      }
-      
-      inboundList.value = filtered
-      total.value = filtered.length
-    }
+
+    const result = await db.getInboundList(currentPage.value, pageSize.value)
+    console.log('入库单列表结果:', result)
+
+    inboundList.value = result.data || []
+    total.value = result.total || 0
+
+    console.log('处理后的入库单列表:', inboundList.value)
   } catch (error) {
     ElMessage.error('加载入库单列表失败')
     console.error('加载入库单列表出错:', error)
@@ -578,90 +547,48 @@ const loadInboundList = async () => {
   }
 }
 
-// 加载产品列表
+// 加载产品列表（从数据库获取）
 const loadProducts = async () => {
   try {
-    const electron = (window as any).electron
-    if (electron && electron.productList) {
-      // Electron 环境 - 从数据库加载
-      const result = await electron.productList(1, 1000) // 获取更多产品
-      productList.value = result.data || result
-      console.log('加载产品列表:', productList.value)
-    } else {
-      // 前端环境 - 使用 localStorage
-      const savedProducts = localStorage.getItem('products')
-      if (savedProducts) {
-        const allProducts = JSON.parse(savedProducts)
-        // 只加载启用的产品
-        productList.value = allProducts.filter((p: any) => p.status === 1).map((p: any) => ({
-          id: p.id,
-          code: p.code,
-          name: p.name,
-          specification: p.specification || p.spec || '',  // 优先使用 spec 字段
-          unit: p.unit || '',
-          costPrice: p.costPrice || 0
-        }))
-      } else {
-        productList.value = []
-      }
-    }
+    const allProducts = await db.getProducts()
+    productList.value = allProducts
+      .filter((p: any) => (p.status as any) === 1 || (p.status as any) === true)
+      .map((p: any) => ({
+        id: p.id,
+        code: p.code,
+        name: p.name,
+        specification: p.specification || p.spec || '',
+        unit: p.unit || '',
+        costPrice: p.costPrice || 0
+      }))
+    console.log('加载产品列表成功（数据库），共', productList.value.length, '个产品')
   } catch (error) {
     console.error('加载产品列表失败:', error)
     productList.value = []
   }
 }
 
-// 加载供应商列表
+// 加载供应商列表（从数据库获取）
 const loadSuppliers = async () => {
   try {
-    const electron = (window as any).electron
-    if (electron && electron.supplierList) {
-      // Electron 环境 - 从数据库加载
-      suppliers.value = await electron.supplierList()
-      console.log('加载供应商列表:', suppliers.value)
-    } else {
-      // 前端环境 - 使用 localStorage
-      const savedSuppliers = localStorage.getItem('suppliers')
-      if (savedSuppliers) {
-        const allSuppliers = JSON.parse(savedSuppliers)
-        suppliers.value = allSuppliers.filter((s: any) => s.status === 1)
-      } else {
-        // 模拟数据
-        suppliers.value = [
-          { id: 1, name: '供应商 A' },
-          { id: 2, name: '供应商 B' }
-        ]
-      }
-    }
+    suppliers.value = await db.getSuppliers()
+    console.log('加载供应商列表成功（数据库），共', suppliers.value.length, '个供应商')
   } catch (error) {
     console.error('加载供应商列表失败:', error)
     suppliers.value = []
   }
 }
 
-// 加载仓库列表
+// 加载仓库列表（从数据库获取）
 const loadWarehouses = async () => {
   try {
-    const electron = (window as any).electron
-    if (electron && electron.warehouseList) {
-      // Electron 环境 - 从数据库加载
-      warehouses.value = await electron.warehouseList()
-      console.log('加载仓库列表:', warehouses.value)
-      
-      // 加载默认仓库
-      const savedDefaultWarehouse = localStorage.getItem('defaultWarehouseId')
-      if (savedDefaultWarehouse) {
-        defaultWarehouseId.value = parseInt(savedDefaultWarehouse)
-      }
-    } else {
-      // 前端环境 - 使用 localStorage
-      const savedWarehouses = localStorage.getItem('warehouses')
-      if (savedWarehouses) {
-        const allWarehouses = JSON.parse(savedWarehouses)
-        warehouses.value = allWarehouses.filter((w: Warehouse) => w.status === 1)
-      } else {
-        warehouses.value = []
-      }
+    warehouses.value = await db.getWarehouses()
+    console.log('加载仓库列表成功（数据库），共', warehouses.value.length, '个仓库')
+
+    // 从 localStorage 读取用户偏好设置：默认仓库
+    const savedDefaultWarehouse = localStorage.getItem('defaultWarehouseId')
+    if (savedDefaultWarehouse) {
+      defaultWarehouseId.value = parseInt(savedDefaultWarehouse)
     }
   } catch (error) {
     console.error('加载仓库列表失败:', error)
@@ -742,34 +669,9 @@ const handleDelete = async (row: InboundRecord) => {
       cancelButtonText: '取消',
       type: 'warning'
     })
-    
-    if (window.electron && window.electron.inboundDelete) {
-      // Electron 环境 - 使用专门的入库单删除方法
-      await window.electron.inboundDelete(row.id)
-    } else if (window.electron && window.electron.dbDelete) {
-      // 使用通用删除方法，表名应为 purchase_inbound
-      await window.electron.dbDelete('purchase_inbound', 'id = ?', [row.id])
-    } else {
-      // 前端环境 - 使用 localStorage
-      const possibleKeys = ['purchase_inbound_records', 'inbound_records', 'purchaseInbounds']
-      let savedData = null
-      let usedKey = ''
-      
-      for (const key of possibleKeys) {
-        savedData = localStorage.getItem(key)
-        if (savedData) {
-          usedKey = key
-          break
-        }
-      }
-      
-      if (savedData) {
-        const allRecords: InboundRecord[] = JSON.parse(savedData)
-        const filtered = allRecords.filter((r: InboundRecord) => r.id !== row.id)
-        localStorage.setItem(usedKey, JSON.stringify(filtered))
-      }
-    }
-    
+
+    await db.deleteInbound(row.id)
+
     ElMessage.success('删除成功')
     loadInboundList()
   } catch (error) {
@@ -1106,111 +1008,83 @@ const handleSubmit = async () => {
     // 手动转换字段：驼峰 → 下划线
     if (formData.id) {
       // 更新
-      if (window.electron && window.electron.inboundUpdate) {
-        const updateData = {
-          id: formData.id,
-          inbound_no: formData.voucherNo,
-          inbound_date: formData.voucherDate,
-          supplier_id: formData.supplierId || null,
-          warehouse_id: formData.warehouseId || null,
-          total_amount: formData.totalAmount,
-          paid_amount: 0,
-          invoice_type: formData.invoiceType || null,
-          invoice_issued: formData.invoiceIssued ? 1 : 0,
-          status: 'completed',
-          remark: formData.remark || null,
-          items: formData.items.map((item: any) => ({
-            product_id: item.productId || null,
-            quantity: item.quantity || null,
-            unit_price: item.unitPrice || null,
-            unit_price_ex: item.unitPriceEx || null,
-            tax_rate: item.taxRate === '免税' ? 0 : Number(item.taxRate || 0),
-            tax_amount: item.taxAmount || null,
-            total_amount_ex: item.totalAmountEx || null,
-            total_amount: item.totalAmount || null,
-            allow_deduction: item.allowDeduction ? 1 : 0,
-            deduction_amount: item.deductionAmount || null,
-            remark: item.remark || null
-          }))
-        }
-        await window.electron.inboundUpdate(updateData)
-      } else {
-        // 前端环境 - 使用 localStorage
-        const possibleKeys = ['purchase_inbound_records', 'inbound_records', 'purchaseInbounds']
-        let savedData = null
-        let usedKey = ''
-        
-        for (const key of possibleKeys) {
-          savedData = localStorage.getItem(key)
-          if (savedData) {
-            usedKey = key
-            break
-          }
-        }
-        
-        if (savedData) {
-          const allRecords: InboundRecord[] = JSON.parse(savedData)
-          const index = allRecords.findIndex((r: InboundRecord) => r.id === formData.id)
-          if (index !== -1) {
-            allRecords[index] = { ...formData }
-            localStorage.setItem(usedKey, JSON.stringify(allRecords))
-          }
-        }
+      const updateData = {
+        id: formData.id,
+        inbound_no: formData.voucherNo,
+        inbound_date: formData.voucherDate,
+        supplier_id: formData.supplierId || null,
+        warehouse_id: formData.warehouseId || null,
+        total_amount: formData.totalAmount,
+        paid_amount: 0,
+        invoice_type: formData.invoiceType || null,
+        invoice_issued: formData.invoiceIssued ? 1 : 0,
+        status: 'completed',
+        remark: formData.remark || null,
+        items: formData.items.map((item: any) => ({
+          product_id: item.productId || null,
+          quantity: item.quantity || null,
+          unit_price: item.unitPrice || null,
+          unit_price_ex: item.unitPriceEx || null,
+          tax_rate: item.taxRate === '免税' ? 0 : Number(item.taxRate || 0),
+          tax_amount: item.taxAmount || null,
+          total_amount_ex: item.totalAmountEx || null,
+          total_amount: item.totalAmount || null,
+          allow_deduction: item.allowDeduction ? 1 : 0,
+          deduction_amount: item.deductionAmount || null,
+          remark: item.remark || null
+        }))
       }
+      await db.updateInbound(updateData)
       ElMessage.success('更新成功')
     } else {
       // 新增
-      if (window.electron && window.electron.inboundAdd) {
-        const inboundData = {
-          inbound_no: formData.voucherNo,
-          inbound_date: formData.voucherDate,
-          supplier_id: formData.supplierId || null,
-          warehouse_id: formData.warehouseId || null,
-          total_amount: formData.totalAmount,
-          paid_amount: 0,
-          invoice_type: formData.invoiceType || null,
-          invoice_issued: formData.invoiceIssued ? 1 : 0,
-          status: 'completed',
-          remark: formData.remark || null,
-          created_by: formData.operator,
-          items: formData.items.map((item: any) => ({
-            product_id: item.productId || null,
-            quantity: item.quantity || null,
-            unit_price: item.unitPrice || null,
-            unit_price_ex: item.unitPriceEx || null,
-            tax_rate: item.taxRate === '免税' ? 0 : Number(item.taxRate || 0),
-            tax_amount: item.taxAmount || null,
-            total_amount_ex: item.totalAmountEx || null,
-            total_amount: item.totalAmount || null,
-            allow_deduction: item.allowDeduction ? 1 : 0,
-            deduction_amount: item.deductionAmount || null,
-            remark: item.remark || null
-          }))
-        }
-        await window.electron.inboundAdd(inboundData)
-      } else {
-        // 前端环境 - 使用 localStorage
-        const dataToSave = { ...formData, id: Date.now() }
-        const key = 'purchase_inbound_records'
-        const savedData = localStorage.getItem(key)
-        const allRecords = savedData ? JSON.parse(savedData) : []
-        allRecords.push(dataToSave)
-        localStorage.setItem(key, JSON.stringify(allRecords))
+      const inboundData = {
+        inbound_no: formData.voucherNo,
+        inbound_date: formData.voucherDate,
+        supplier_id: formData.supplierId || null,
+        warehouse_id: formData.warehouseId || null,
+        total_amount: formData.totalAmount,
+        paid_amount: 0,
+        invoice_type: formData.invoiceType || null,
+        invoice_issued: formData.invoiceIssued ? 1 : 0,
+        status: 'completed',
+        remark: formData.remark || null,
+        created_by: formData.operator,
+        items: formData.items.map((item: any) => ({
+          product_id: item.productId || null,
+          quantity: item.quantity || null,
+          unit_price: item.unitPrice || null,
+          unit_price_ex: item.unitPriceEx || null,
+          tax_rate: item.taxRate === '免税' ? 0 : Number(item.taxRate || 0),
+          tax_amount: item.taxAmount || null,
+          total_amount_ex: item.totalAmountEx || null,
+          total_amount: item.totalAmount || null,
+          allow_deduction: item.allowDeduction ? 1 : 0,
+          deduction_amount: item.deductionAmount || null,
+          remark: item.remark || null
+        }))
       }
+
+      await db.addInbound(inboundData)
       ElMessage.success('新增成功')
     }
     
     // 检测是否需要重新结算成本
-    await handleDocumentSave(
-      DocumentType.INVENTORY_INBOUND,
-      formData.items || [],
-      formData.voucherDate
-    )
+    try {
+      await handleDocumentSave(
+        DocumentType.INVENTORY_INBOUND,
+        formData.items || [],
+        formData.voucherDate
+      )
+    } catch (costError) {
+      console.warn('成本结算检测跳过:', costError)
+    }
     
     dialogVisible.value = false
     loadInboundList()
-  } catch (error) {
-    console.error(error)
+  } catch (error: any) {
+    console.error('保存入库单失败:', error)
+    ElMessage.error(error?.message || '保存入库单失败，请检查数据后重试')
   }
 }
 

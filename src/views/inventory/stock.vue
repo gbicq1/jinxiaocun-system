@@ -7,7 +7,7 @@
           :fetch-suggestions="querySearch"
           placeholder="搜索产品编码/名称"
           clearable
-          style="width: 300px"
+          style="width: 260px"
           @select="handleSelect"
           @clear="handleClear"
         >
@@ -26,7 +26,7 @@
           placeholder="仓库（全部）"
           clearable
           filterable
-          style="width: 200px; margin-left: 10px;"
+          style="width: 160px; margin-left: 10px;"
           @change="handleWarehouseFilter"
         >
           <el-option
@@ -36,6 +36,16 @@
             :value="warehouse.name"
           />
         </el-select>
+        <el-date-picker
+          v-model="dateRange"
+          type="daterange"
+          range-separator="至"
+          start-placeholder="起始日期"
+          end-placeholder="截止日期"
+          value-format="YYYY-MM-DD"
+          style="width: 280px; margin-left: 10px;"
+          :shortcuts="dateShortcuts"
+        />
         <el-button type="primary" @click="handleExport" style="margin-left: 10px;">
           <el-icon><Download /></el-icon>
           导出库存
@@ -89,24 +99,48 @@
           <div class="stock-detail-table-wrapper">
             <el-table 
               :data="ledgerEntries" 
-              style="width: 100%; min-width: 900px" 
+              style="width: 100%; min-width: 1200px" 
               :height="'100%'"
               :show-summary="false"
               element-loading-text="加载中..."
               border
+              :row-class-name="tableRowClassName"
             >
-              <el-table-column prop="date" label="日期" width="120" min-width="100" fixed />
-              <el-table-column prop="docNo" label="单号" width="170" min-width="140" fixed />
+              <el-table-column prop="date" label="日期" width="120" min-width="100" fixed>
+                <template #default="{ row }">
+                  <span v-if="row._isSummary" style="font-weight: bold; color: #303133">{{ row.docNo }}</span>
+                  <span v-else>{{ row.date }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column prop="docNo" label="单号" width="170" min-width="140" fixed>
+                <template #default="{ row }">
+                  <a v-if="!row._isSummary && row.docNo && row.docType" class="doc-link" @click.stop="handleDocClick(row)">{{ row.docNo }}</a>
+                  <span v-else-if="!row._isSummary">{{ row.docNo }}</span>
+                  <span v-else>-</span>
+                </template>
+              </el-table-column>
               <el-table-column prop="productName" label="产品名称" width="180" min-width="140" />
               <el-table-column prop="specification" label="规格" width="120" min-width="100" />
               <el-table-column prop="unit" label="单位" width="70" min-width="60" />
               
               <!-- 入库数据区域 -->
               <el-table-column label="入库数据" align="center">
-                <el-table-column prop="inboundQty" label="数量" width="120" min-width="100" class-name="inbound-col">
+                <el-table-column prop="inboundQty" label="数量" width="90" min-width="80" class-name="inbound-col">
                   <template #default="{ row }">
-                    <span v-if="row.inboundQty > 0" style="color: #67c23a">{{ row.inboundQty }}</span>
-                    <span v-else-if="row.inboundQty < 0" style="color: #f56c6c">{{ row.inboundQty }}</span>
+                    <span v-if="row.inboundQty > 0" style="color: #67c23a; font-weight: 600">{{ row.inboundQty }}</span>
+                    <span v-else-if="row.inboundQty < 0" style="color: #f56c6c; font-weight: 600">{{ row.inboundQty }}</span>
+                    <span v-else>-</span>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="inboundUnitPrice" label="单价" width="90" min-width="80" class-name="inbound-col">
+                  <template #default="{ row }">
+                    <span v-if="row.inboundUnitPrice !== 0 && row.inboundUnitPrice !== undefined">{{ Math.abs(row.inboundUnitPrice).toFixed(2) }}</span>
+                    <span v-else>-</span>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="inboundAmount" label="金额" width="110" min-width="90" class-name="inbound-col">
+                  <template #default="{ row }">
+                    <span v-if="row.inboundAmount !== 0" :style="{ color: row.inboundAmount > 0 ? '#67c23a' : '#f56c6c', fontWeight: 600 }">{{ row.inboundAmount.toFixed(2) }}</span>
                     <span v-else>-</span>
                   </template>
                 </el-table-column>
@@ -114,10 +148,22 @@
               
               <!-- 出库数据区域 -->
               <el-table-column label="出库数据" align="center">
-                <el-table-column prop="outboundQty" label="数量" width="120" min-width="100" class-name="outbound-col">
+                <el-table-column prop="outboundQty" label="数量" width="90" min-width="80" class-name="outbound-col">
                   <template #default="{ row }">
-                    <span v-if="row.outboundQty > 0" style="color: #f56c6c">{{ row.outboundQty }}</span>
-                    <span v-else-if="row.outboundQty < 0" style="color: #67c23a">{{ row.outboundQty }}</span>
+                    <span v-if="row.outboundQty > 0" style="color: #f56c6c; font-weight: 600">{{ row.outboundQty }}</span>
+                    <span v-else-if="row.outboundQty < 0" style="color: #67c23a; font-weight: 600">{{ row.outboundQty }}</span>
+                    <span v-else>-</span>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="outboundUnitPrice" label="单价" width="90" min-width="80" class-name="outbound-col">
+                  <template #default="{ row }">
+                    <span v-if="row.outboundUnitPrice !== 0 && row.outboundUnitPrice !== undefined">{{ Math.abs(row.outboundUnitPrice).toFixed(2) }}</span>
+                    <span v-else>-</span>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="outboundAmount" label="金额" width="110" min-width="90" class-name="outbound-col">
+                  <template #default="{ row }">
+                    <span v-if="row.outboundAmount !== 0 && row.outboundAmount !== undefined" :style="{ color: row.outboundAmount > 0 ? '#f56c6c' : '#67c23a', fontWeight: 600 }">{{ row.outboundAmount.toFixed(2) }}</span>
                     <span v-else>-</span>
                   </template>
                 </el-table-column>
@@ -125,12 +171,52 @@
               
               <!-- 库存信息区域 -->
               <el-table-column label="库存结余" align="center">
-                <el-table-column prop="runningQty" label="库存数量" width="120" min-width="100" class-name="stock-col" />
+                <el-table-column prop="runningQty" label="库存数量" width="120" min-width="100" class-name="stock-col">
+                  <template #default="{ row }">
+                    <span v-if="row.runningQty === null || row.runningQty === undefined">-</span>
+                    <span v-else>{{ row.runningQty }}</span>
+                  </template>
+                </el-table-column>
               </el-table-column>
               
               <el-table-column prop="counter" label="往来单位" width="150" min-width="120" />
               <el-table-column prop="remark" label="备注" min-width="200" />
             </el-table>
+          </div>
+        </div>
+
+        <!-- 单据查看弹窗 -->
+        <div v-if="docDialogVisible" class="doc-preview-overlay" @click.self="docDialogVisible = false">
+          <div class="doc-preview-dialog">
+            <div class="doc-preview-header">
+              <span class="doc-preview-title">{{ docDialogTitle }}</span>
+              <el-icon class="doc-preview-close" @click="docDialogVisible = false"><Close /></el-icon>
+            </div>
+            <div class="doc-preview-body" v-loading="docLoading">
+              <table class="doc-info-table" v-if="!docLoading && docDetailData">
+                <tr><td class="label">单号</td><td>{{ docDetailData.docNo }}</td></tr>
+                <tr><td class="label">日期</td><td>{{ docDetailData.date }}</td></tr>
+                <tr><td class="label">往来单位</td><td>{{ docDetailData.counter }}</td></tr>
+                <tr><td class="label">仓库</td><td>{{ docDetailData.warehouseName }}</td></tr>
+                <tr><td class="label">备注</td><td>{{ docDetailData.remark || '-' }}</td></tr>
+              </table>
+              <el-table :data="docDetailItems" border size="small" style="width: 100%; margin-top: 12px;" v-if="!docLoading && docDetailItems.length">
+                <el-table-column prop="productCode" label="产品编码" width="120" />
+                <el-table-column prop="productName" label="产品名称" min-width="160" />
+                <el-table-column prop="specification" label="规格" width="120" />
+                <el-table-column prop="unit" label="单位" width="70" />
+                <el-table-column prop="quantity" label="数量" width="90" />
+                <el-table-column prop="unit_price" label="单价" width="100">
+                  <template #default="{ row }">{{ row.unit_price ? Number(row.unit_price).toFixed(2) : '-' }}</template>
+                </el-table-column>
+                <el-table-column prop="total_amount" label="金额" width="120">
+                  <template #default="{ row }">{{ row.total_amount ? Number(row.total_amount).toFixed(2) : '-' }}</template>
+                </el-table-column>
+              </el-table>
+            </div>
+            <div class="doc-preview-footer">
+              <el-button @click="docDialogVisible = false">关闭</el-button>
+            </div>
           </div>
         </div>
 
@@ -147,21 +233,98 @@
 import { ref, onMounted, watch } from 'vue'
 import { Search, Download, Close } from '@element-plus/icons-vue'
 import exportToCsv from '../../utils/exportCsv'
-import { getRealTimeStock } from '@/utils/stock'
+import { db } from '@/utils/db-ipc'
 
 const searchQuery = ref('')
 const selectedWarehouse = ref('')
 const warehouses = ref<any[]>([])
-const products = ref<any[]>([])  // 产品列表用于搜索建议
+const products = ref<any[]>([])
 const stockList = ref<any[]>([])
 const allStock = ref<any[]>([])
 const dialogVisible = ref(false)
-// 打开明细弹窗时禁止页面滚动，避免弹窗随着页面上下移动
+const dateRange = ref<[string, string] | null>(null)
 watch(dialogVisible, (v) => {
   try { document.body.style.overflow = v ? 'hidden' : '' } catch {}
 })
 const selectedRow = ref<any>(null)
 const ledgerEntries = ref<any[]>([])
+
+const docDialogVisible = ref(false)
+const docDialogTitle = ref('')
+const docLoading = ref(false)
+const docDetailData = ref<any>(null)
+const docDetailItems = ref<any[]>([])
+
+const DOC_TYPE_MAP: Record<string, { title: string; fetch: (id: number) => Promise<any> }> = {
+  'purchase_inbound': {
+    title: '采购入库单',
+    fetch: (id) => db.getInboundById(id)
+  },
+  'sales_outbound': {
+    title: '销售出库单',
+    fetch: (id) => db.getOutboundById(id)
+  },
+  'purchase_return': {
+    title: '采购退货单',
+    fetch: (id) => db.getPurchaseReturnById(id)
+  },
+  'sales_return': {
+    title: '销售退货单',
+    fetch: (id) => db.getSalesReturnById(id)
+  },
+  'transfer_out': {
+    title: '调拨单（出库）',
+    fetch: (id) => db.getTransferById(id)
+  },
+  'transfer_in': {
+    title: '调拨单（入库）',
+    fetch: (id) => db.getTransferById(id)
+  }
+}
+
+const handleDocClick = async (row: any) => {
+  const config = DOC_TYPE_MAP[row.docType]
+  if (!config || !row.docId) return
+
+  docDialogVisible.value = true
+  docDialogTitle.value = config.title
+  docLoading.value = true
+  docDetailData.value = null
+  docDetailItems.value = []
+
+  try {
+    const data = await config.fetch(row.docId)
+    if (!data) {
+      ElMessage.warning('未找到该单据信息')
+      docDialogVisible.value = false
+      return
+    }
+
+    const dateField = data.inbound_date || data.outbound_date || data.return_date || data.transfer_date || ''
+    const noField = data.inbound_no || data.outbound_no || data.return_no || data.transfer_no || ''
+
+    docDetailData.value = {
+      docNo: noField,
+      date: dateField,
+      counter: data.supplier_name || data.customer_name || data.from_warehouse_name + ' → ' + data.to_warehouse_name || '',
+      warehouseName: data.warehouse_name || data.to_warehouse_name || '',
+      remark: data.remark || ''
+    }
+    docDetailItems.value = Array.isArray(data.items) ? data.items : []
+  } catch (error) {
+    console.error('[handleDocClick] 获取单据详情失败:', error)
+    ElMessage.error('获取单据详情失败')
+  } finally {
+    docLoading.value = false
+  }
+}
+
+const dateShortcuts = [
+  { text: '本月', value: () => { const now = new Date(); const start = new Date(now.getFullYear(), now.getMonth(), 1); const end = new Date(now.getFullYear(), now.getMonth() + 1, 0); return [start, end] } },
+  { text: '本季', value: () => { const now = new Date(); const q = Math.floor(now.getMonth() / 3); const start = new Date(now.getFullYear(), q * 3, 1); const end = new Date(now.getFullYear(), q * 3 + 3, 0); return [start, end] } },
+  { text: '本年', value: () => { const now = new Date(); return [new Date(now.getFullYear(), 0, 1), new Date(now.getFullYear(), 11, 31)] } },
+  { text: '上月', value: () => { const now = new Date(); const start = new Date(now.getFullYear(), now.getMonth() - 1, 1); const end = new Date(now.getFullYear(), now.getMonth(), 0); return [start, end] } }
+]
 
 const handleSearch = () => {
   const q = (searchQuery.value || '').toLowerCase()
@@ -188,15 +351,12 @@ const handleWarehouseFilter = () => {
   handleSearch()
 }
 
-// 加载仓库列表
-const loadWarehouses = () => {
+// 加载仓库列表（从数据库获取）
+const loadWarehouses = async () => {
   try {
-    const saved = localStorage.getItem('warehouses')
-    if (saved) {
-      warehouses.value = JSON.parse(saved)
-      console.log('加载仓库列表成功，共', warehouses.value.length, '个仓库')
-    } else {
-      // 如果没有仓库数据，使用默认值
+    warehouses.value = await db.getWarehouses()
+    console.log('加载仓库列表成功（数据库），共', warehouses.value.length, '个仓库')
+    if (warehouses.value.length === 0) {
       warehouses.value = [{ id: 1, name: '默认仓库' }]
     }
   } catch (error) {
@@ -205,40 +365,20 @@ const loadWarehouses = () => {
   }
 }
 
-// 从 localStorage 加载仓库列表（用于库存计算）
-const loadWarehousesFromStorage = () => {
+// 加载产品列表（从数据库获取，用于搜索建议）
+const loadProducts = async () => {
   try {
-    const saved = localStorage.getItem('warehouses')
-    if (saved) {
-      return JSON.parse(saved)
-    } else {
-      return [{ id: 1, name: '默认仓库' }]
-    }
-  } catch (error) {
-    console.error('加载仓库列表失败:', error)
-    return [{ id: 1, name: '默认仓库' }]
-  }
-}
-
-// 加载产品列表（用于搜索建议）
-const loadProducts = () => {
-  try {
-    const savedProducts = localStorage.getItem('products')
-    if (savedProducts) {
-      const allProducts = JSON.parse(savedProducts)
-      products.value = allProducts
-        .filter((p: any) => (p.status as any) === 1 || (p.status as any) === true)
-        .map((p: any) => ({
-          value: p.code || p.productCode || '',
-          label: `${p.code || p.productCode || ''} - ${p.name || p.productName || ''}`,
-          code: p.code || p.productCode || '',
-          name: p.name || p.productName || '',
-          id: p.id
-        }))
-      console.log('加载产品列表成功，共', products.value.length, '个产品')
-    } else {
-      products.value = []
-    }
+    const allProducts = await db.getProducts()
+    products.value = allProducts
+      .filter((p: any) => (p.status as any) === 1 || (p.status as any) === true)
+      .map((p: any) => ({
+        value: p.code || p.productCode || '',
+        label: `${p.code || p.productCode || ''} - ${p.name || p.productName || ''}`,
+        code: p.code || p.productCode || '',
+        name: p.name || p.productName || '',
+        id: p.id
+      }))
+    console.log('加载产品列表成功（数据库），共', products.value.length, '个产品')
   } catch (error) {
     console.error('加载产品列表失败:', error)
     products.value = []
@@ -298,7 +438,6 @@ const handleExport = () => {
 
 const handleView = (row: any) => {
   selectedRow.value = row
-  // 构建明细账并展示
   loadLedger(row)
   dialogVisible.value = true
 }
@@ -307,375 +446,214 @@ const handleOverlayClick = () => {
   dialogVisible.value = false
 }
 
-const loadLedger = (row: any) => {
+const loadLedger = async (row: any) => {
   ledgerEntries.value = []
   if (!row) return
-  const code = String(row.productCode || '').trim()
-  const name = String(row.productName || '').trim()
-  const targetWarehouse = String(row.warehouseName || '').trim()
 
-  // 临时存储所有明细记录
-  const tempEntries: any[] = []
-
-  // 先处理库存调拨数据（单独处理，因为调拨单同时影响两个仓库）
   try {
-    const transferRaw = localStorage.getItem('inventory_transfers')
-    if (transferRaw) {
-      const transfers = JSON.parse(transferRaw)
-      if (Array.isArray(transfers)) {
-        for (const rec of transfers) {
-          const fromWarehouse = String(rec.fromWarehouseName || '').trim()
-          const toWarehouse = String(rec.toWarehouseName || '').trim()
-          
-          const items = rec.items || rec.products || rec.details || rec.lines || rec.itemsList
-          if (!Array.isArray(items)) continue
-          
-          for (const it of items) {
-            const itCode = String(it.productCode || it.code || it.sku || '').trim()
-            const itName = String(it.productName || it.name || '').trim()
-            const itId = it.productId || it.id || null
-            const match = (itId && row.productId && itId === row.productId) || (itCode && code && itCode === code) || (itName && name && itName === name)
-            if (!match) continue
+    let rawStartDate = dateRange.value?.[0] || ''
+    let rawEndDate = dateRange.value?.[1] || ''
 
-            const qty = Number(it.quantity || it.qty || it.count || it.num || 0)
-            const docNo = rec.transferNo || ''
-            const date = rec.transferDate || rec.date || rec.createdAt || ''
-            const remark = rec.remark || rec.note || ''
-            
-            const timestamp = rec.createdAt || rec.createdTime || rec.createTime || rec.timestamp || 
-                            (date ? `${date}_${docNo}` : docNo)
+    const startDate = rawStartDate || '1900-01-01'
+    const endDate = rawEndDate || '2099-12-31'
 
-            const unitPriceInc = Number(it.unitPriceInc || it.unitPriceTaxIncluded || it.priceWithTax || it.unitPrice || it.unitPriceEx || it.price || 0)
-            const entryAmount = Number((qty * unitPriceInc).toFixed(2))
+    console.log('[loadLedger] 调用参数:', { productId: row.productId, warehouseId: row.warehouseId, startDate, endDate, originalStart: rawStartDate, originalEnd: rawEndDate })
 
-            // 判断当前仓库是调出还是调入
-            if (fromWarehouse === targetWarehouse) {
-              // 调出仓库：作为出库处理
-              tempEntries.push({
-                productCode: itCode,
-                productName: itName,
-                warehouseName: targetWarehouse,
-                specification: selectedRow.specification || selectedRow.spec || '-',
-                unit: selectedRow.unit || '-',
-                date,
-                type: '调拨出库',
-                docNo,
-                inboundQty: 0,
-                inboundUnitPrice: 0,
-                inboundAmount: 0,
-                outboundQty: qty,
-                outboundUnitPrice: unitPriceInc,
-                outboundAmount: entryAmount,
-                counter: `调入:${toWarehouse}`,
-                remark,
-                _sortDate: date,
-                _timestamp: timestamp
-              })
-            }
-            
-            if (toWarehouse === targetWarehouse) {
-              // 调入仓库：作为入库处理
-              tempEntries.push({
-                productCode: itCode,
-                productName: itName,
-                warehouseName: targetWarehouse,
-                specification: selectedRow.specification || selectedRow.spec || '-',
-                unit: selectedRow.unit || '-',
-                date,
-                type: '调拨入库',
-                docNo,
-                inboundQty: qty,
-                inboundUnitPrice: unitPriceInc,
-                inboundAmount: entryAmount,
-                outboundQty: 0,
-                outboundUnitPrice: 0,
-                outboundAmount: 0,
-                counter: `调出:${fromWarehouse}`,
-                remark,
-                _sortDate: date,
-                _timestamp: timestamp
-              })
-            }
-          }
+    const ledgerData = await db.getProductLedger(row.productId, row.warehouseId, startDate, endDate)
+
+    console.log('[loadLedger] 原始返回数据:', ledgerData)
+    console.log('[loadLedger] 数据条数:', Array.isArray(ledgerData) ? ledgerData.length : '非数组')
+
+    const result: any[] = []
+    let runningQty = 0
+
+    const startMonth = rawStartDate ? new Date(rawStartDate).getMonth() + 1 : null
+    const endYear = rawEndDate ? new Date(rawEndDate).getFullYear() : new Date().getFullYear()
+    const endMonth = rawEndDate ? new Date(rawEndDate).getMonth() + 1 : new Date().getMonth() + 1
+
+    if (startMonth !== null && rawStartDate) {
+      let prevQty = 0
+      if (startMonth === 1) {
+        prevQty = await db.getStockBeforeDate(row.productId, row.warehouseId, `${endYear - 1}-12-31`)
+        result.push({
+          _isSummary: true,
+          _summaryType: 'carryover',
+          date: `${endYear - 1}-12-31`,
+          docNo: '上年结转',
+          productName: row.productName,
+          specification: row.specification || '-',
+          unit: row.unit || '-',
+          inboundQty: 0,
+          inboundUnitPrice: 0,
+          inboundAmount: 0,
+          outboundQty: 0,
+          outboundUnitPrice: 0,
+          outboundAmount: 0,
+          counter: '',
+          remark: '',
+          runningQty: prevQty
+        })
+      } else {
+        const prevMonthLastDay = new Date(endYear, startMonth - 1, 0)
+        const prevDateStr = `${prevMonthLastDay.getFullYear()}-${String(prevMonthLastDay.getMonth() + 1).padStart(2, '0')}-${String(prevMonthLastDay.getDate()).padStart(2, '0')}`
+        prevQty = await db.getStockBeforeDate(row.productId, row.warehouseId, prevDateStr)
+        result.push({
+          _isSummary: true,
+          _summaryType: 'carryover',
+          date: prevDateStr,
+          docNo: '上期结转',
+          productName: row.productName,
+          specification: row.specification || '-',
+          unit: row.unit || '-',
+          inboundQty: 0,
+          inboundUnitPrice: 0,
+          inboundAmount: 0,
+          outboundQty: 0,
+          outboundUnitPrice: 0,
+          outboundAmount: 0,
+          counter: '',
+          remark: '',
+          runningQty: prevQty
+        })
+      }
+      runningQty = prevQty
+    }
+
+    for (const en of ledgerData) {
+      runningQty = Number((runningQty + en.inboundQty - en.outboundQty).toFixed(4))
+      result.push({
+        productCode: row.productCode,
+        productName: row.productName,
+        warehouseName: row.warehouseName,
+        specification: row.specification || '-',
+        unit: row.unit || '-',
+        date: en.date,
+        type: en.type,
+        docNo: en.docNo,
+        docType: en.docType || '',
+        docId: en.docId || 0,
+        inboundQty: en.inboundQty || 0,
+        inboundUnitPrice: en.inboundUnitPrice || 0,
+        inboundAmount: en.inboundAmount || 0,
+        outboundQty: en.outboundQty || 0,
+        outboundUnitPrice: en.outboundUnitPrice || 0,
+        outboundAmount: en.outboundAmount || 0,
+        counter: en.counter || '',
+        remark: en.remark || '',
+        runningQty,
+        _sortDate: en._sortDate || en.date,
+        _timestamp: en._timestamp
+      })
+    }
+
+    const detailStartIdx = startMonth !== null && rawStartDate ? 1 : 0
+    const detailEndIdx = rawEndDate ? result.length - 2 : result.length
+    const detailRows = result.slice(detailStartIdx, detailEndIdx)
+    detailRows.sort((a: any, b: any) => {
+      const da = new Date(a._sortDate || a.date || '1970-01-01').getTime()
+      const db_ = new Date(b._sortDate || b.date || '1970-01-01').getTime()
+      if (da !== db_) return da - db_
+      const ta = a._timestamp ? new Date(a._timestamp).getTime() : 0
+      const tb = b._timestamp ? new Date(b._timestamp).getTime() : 0
+      return ta - tb
+    })
+    result.splice(detailStartIdx, detailEndIdx - detailStartIdx, ...detailRows)
+
+    let finalRunningQty = result.length > 0 && result[0]._isSummary ? result[0].runningQty : 0
+    for (let i = (result[0]?._isSummary ? 1 : 0); i < (rawEndDate ? result.length - 2 : result.length); i++) {
+      finalRunningQty = Number((finalRunningQty + result[i].inboundQty - result[i].outboundQty).toFixed(4))
+      result[i].runningQty = finalRunningQty
+    }
+
+    if (rawEndDate) {
+      const monthStart = `${endYear}-${String(endMonth).padStart(2, '0')}-01`
+      const monthEnd = `${endYear}-${String(endMonth).padStart(2, '0')}-${new Date(endYear, endMonth, 0).getDate()}`
+
+      let monthInQty = 0, monthInAmt = 0, monthOutQty = 0, monthOutAmt = 0
+      for (const en of ledgerData) {
+        if (en.date >= monthStart && en.date <= monthEnd) {
+          if (en.inboundQty) { monthInQty += en.inboundQty; monthInAmt += en.inboundAmount || 0 }
+          if (en.outboundQty) { monthOutQty += en.outboundQty; monthOutAmt += en.outboundAmount || 0 }
         }
       }
-    }
-  } catch {
-    // ignore parsing errors
-  }
+      const monthAvgPrice = (monthInQty + monthOutQty) > 0 ? ((monthInAmt + Math.abs(monthOutAmt)) / (monthInQty + monthOutQty)) : 0
+      result.push({
+        _isSummary: true,
+        _summaryType: 'monthly',
+        date: `${endYear}-${String(endMonth).padStart(2, '0')}`,
+        docNo: '本月合计',
+        productName: row.productName,
+        specification: row.specification || '-',
+        unit: row.unit || '-',
+        inboundQty: Number(monthInQty.toFixed(4)),
+        inboundUnitPrice: Number(monthAvgPrice.toFixed(2)),
+        inboundAmount: Number(monthInAmt.toFixed(2)),
+        outboundQty: Number(monthOutQty.toFixed(4)),
+        outboundUnitPrice: Number(monthAvgPrice.toFixed(2)),
+        outboundAmount: Number(monthOutAmt.toFixed(2)),
+        counter: '',
+        remark: '',
+        runningQty: null
+      })
 
-  // 遍历 localStorage 中可能的数组，查找包含 items 的记录
-  for (let i = 0; i < localStorage.length; i++) {
-    const key = localStorage.key(i)
-    if (!key) continue
-    if (key === 'inventory_transfers') continue // 调拨单已单独处理，跳过
-    const raw = localStorage.getItem(key)
-    if (!raw) continue
-    try {
-      const arr = JSON.parse(raw)
-      if (!Array.isArray(arr)) continue
-      for (const rec of arr) {
-        // 检查记录的仓库是否匹配
-        const recWarehouseName = String(rec.warehouseName || '').trim()
-        // 如果记录有仓库信息，必须匹配目标仓库
-        if (recWarehouseName && recWarehouseName !== targetWarehouse) {
-          continue
-        }
-        
-        const items = rec.items || rec.products || rec.details || rec.lines || rec.itemsList
-        if (!Array.isArray(items)) continue
-        for (const it of items) {
-          const itCode = String(it.productCode || it.code || it.sku || '').trim()
-          const itName = String(it.productName || it.name || '').trim()
-          const itId = it.productId || it.id || null
-          const match = (itId && row.productId && itId === row.productId) || (itCode && code && itCode === code) || (itName && name && itName === name)
-          if (!match) continue
-
-          // 推断单据类型
-          let typeLabel = key
-          let isInbound = false
-          let isOutbound = false
-          let isPurchaseReturn = false  // 采购退货（负数入库）
-          let isSalesReturn = false     // 销售退货（负数出库）
-          
-          const inboundKeys = ['purchaseInbounds','inbound_records','inbounds','purchase_inbounds']
-          const outboundKeys = ['outbound_records','outbounds','sales_outbounds','salesOutbounds','delivery_records']
-          const purchaseReturnsKeys = ['purchaseReturns','purchase_returns']
-          const salesReturnsKeys = ['salesReturns','sales_returns']
-          
-          if (inboundKeys.includes(key) || (key.toLowerCase().includes('inbound') && !key.toLowerCase().includes('return'))) { 
-            typeLabel = '入库'
-            isInbound = true 
-          }
-          else if (outboundKeys.includes(key) || (key.toLowerCase().includes('outbound') && !key.toLowerCase().includes('return')) || key.toLowerCase().includes('delivery')) { 
-            typeLabel = '出库'
-            isOutbound = true 
-          }
-          else if (purchaseReturnsKeys.includes(key) || (key.toLowerCase().includes('return') && key.toLowerCase().includes('purchase'))) { 
-            typeLabel = '采购退货'
-            isPurchaseReturn = true // 采购退货 = 负数入库（减少库存）
-          }
-          else if (salesReturnsKeys.includes(key) || (key.toLowerCase().includes('return') && key.toLowerCase().includes('sales'))) { 
-            typeLabel = '销售退货'
-            isSalesReturn = true // 销售退货 = 负数出库（增加库存）
-          }
-          else if (key.toLowerCase().includes('order')) { 
-            typeLabel = '订单'
-          }
-
-          const qty = Number(it.quantity || it.qty || it.count || it.num || 0)
-          const docNo = rec.voucherNo || rec.orderNo || rec.number || rec.no || ''
-          const date = rec.voucherDate || rec.orderDate || rec.date || rec.createdAt || ''
-          const counter = rec.supplierName || rec.supplier || rec.customerName || rec.customer || ''
-          const remark = rec.remark || rec.note || ''
-          
-          // 获取精确时间戳：优先使用创建时间（包含时分秒），否则使用日期 + 单号模拟
-          const timestamp = rec.createdAt || rec.createdTime || rec.createTime || rec.timestamp || 
-                           (date ? `${date}_${docNo}` : docNo)
-
-          // 直接读取含税单价
-          const unitPriceInc = Number(it.unitPriceInc || it.unitPriceTaxIncluded || it.priceWithTax || it.unitPrice || it.price || 0)
-          const entryAmount = Number((qty * unitPriceInc).toFixed(2))
-
-          // 根据单据类型分别存储入库和出库数据
-          if (isInbound) {
-            // 正常入库：正数
-            tempEntries.push({
-              productCode: itCode,
-              productName: itName,
-              warehouseName: selectedRow.warehouseName || '默认仓库',
-              specification: selectedRow.specification || selectedRow.spec || '-',
-              unit: selectedRow.unit || '-',
-              date,
-              type: typeLabel,
-              docNo,
-              inboundQty: qty,
-              inboundUnitPrice: unitPriceInc,
-              inboundAmount: entryAmount,
-              outboundQty: 0,
-              outboundUnitPrice: 0,
-              outboundAmount: 0,
-              counter,
-              remark,
-              _sortDate: date,
-              _timestamp: timestamp
-            })
-          } else if (isOutbound) {
-            // 正常出库：正数
-            tempEntries.push({
-              productCode: itCode,
-              productName: itName,
-              warehouseName: selectedRow.warehouseName || '默认仓库',
-              specification: selectedRow.specification || selectedRow.spec || '-',
-              unit: selectedRow.unit || '-',
-              date,
-              type: typeLabel,
-              docNo,
-              inboundQty: 0,
-              inboundUnitPrice: 0,
-              inboundAmount: 0,
-              outboundQty: qty,
-              outboundUnitPrice: unitPriceInc,
-              outboundAmount: entryAmount,
-              counter,
-              remark,
-              _sortDate: date,
-              _timestamp: timestamp
-            })
-          } else if (isPurchaseReturn) {
-            // 采购退货：负数入库（减少库存）
-            tempEntries.push({
-              productCode: itCode,
-              productName: itName,
-              warehouseName: selectedRow.warehouseName || '默认仓库',
-              specification: selectedRow.specification || selectedRow.spec || '-',
-              unit: selectedRow.unit || '-',
-              date,
-              type: typeLabel,
-              docNo,
-              inboundQty: -qty,  // 负数
-              inboundUnitPrice: unitPriceInc,
-              inboundAmount: -entryAmount,  // 负数
-              outboundQty: 0,
-              outboundUnitPrice: 0,
-              outboundAmount: 0,
-              counter,
-              remark,
-              _sortDate: date,
-              _timestamp: timestamp
-            })
-          } else if (isSalesReturn) {
-            // 销售退货：负数出库（增加库存）
-            tempEntries.push({
-              productCode: itCode,
-              productName: itName,
-              warehouseName: selectedRow.warehouseName || '默认仓库',
-              specification: selectedRow.specification || selectedRow.spec || '-',
-              unit: selectedRow.unit || '-',
-              date,
-              type: typeLabel,
-              docNo,
-              inboundQty: 0,
-              inboundUnitPrice: 0,
-              inboundAmount: 0,
-              outboundQty: -qty,  // 负数
-              outboundUnitPrice: unitPriceInc,
-              outboundAmount: -entryAmount,  // 负数
-              counter,
-              remark,
-              _sortDate: date,
-              _timestamp: timestamp
-            })
-          }
-        }
+      const yearStartStr = `${endYear}-01-01`
+      const yearData = await db.getProductLedger(row.productId, row.warehouseId, yearStartStr, endDate)
+      let yearInQty = 0, yearInAmt = 0, yearOutQty = 0, yearOutAmt = 0
+      for (const en of yearData) {
+        if (en.inboundQty) { yearInQty += en.inboundQty; yearInAmt += en.inboundAmount || 0 }
+        if (en.outboundQty) { yearOutQty += en.outboundQty; yearOutAmt += en.outboundAmount || 0 }
       }
-    } catch {
-      // ignore parsing errors
+      const yearAvgPrice = (yearInQty + yearOutQty) > 0 ? ((yearInAmt + Math.abs(yearOutAmt)) / (yearInQty + yearOutQty)) : 0
+      result.push({
+        _isSummary: true,
+        _summaryType: 'yearly',
+        date: `${endYear}-${String(endMonth).padStart(2, '0')}`,
+        docNo: '本年累计',
+        productName: row.productName,
+        specification: row.specification || '-',
+        unit: row.unit || '-',
+        inboundQty: Number(yearInQty.toFixed(4)),
+        inboundUnitPrice: Number(yearAvgPrice.toFixed(2)),
+        inboundAmount: Number(yearInAmt.toFixed(2)),
+        outboundQty: Number(yearOutQty.toFixed(4)),
+        outboundUnitPrice: Number(yearAvgPrice.toFixed(2)),
+        outboundAmount: Number(yearOutAmt.toFixed(2)),
+        counter: '',
+        remark: '',
+        runningQty: null
+      })
+    } else {
+      let totalInQty = 0, totalInAmt = 0, totalOutQty = 0, totalOutAmt = 0
+      for (const en of ledgerData) {
+        if (en.inboundQty) { totalInQty += en.inboundQty; totalInAmt += en.inboundAmount || 0 }
+        if (en.outboundQty) { totalOutQty += en.outboundQty; totalOutAmt += en.outboundAmount || 0 }
+      }
+      result.push({
+        _isSummary: true,
+        _summaryType: 'total',
+        date: '',
+        docNo: '合计',
+        productName: row.productName,
+        specification: row.specification || '-',
+        unit: row.unit || '-',
+        inboundQty: Number(totalInQty.toFixed(4)),
+        inboundUnitPrice: totalInQty > 0 ? Number((totalInAmt / totalInQty).toFixed(2)) : 0,
+        inboundAmount: Number(totalInAmt.toFixed(2)),
+        outboundQty: Number(totalOutQty.toFixed(4)),
+        outboundUnitPrice: totalOutQty > 0 ? Number((Math.abs(totalOutAmt) / totalOutQty).toFixed(2)) : 0,
+        outboundAmount: Number(Math.abs(totalOutAmt).toFixed(2)),
+        counter: '',
+        remark: '',
+        runningQty: null
+      })
     }
+
+    ledgerEntries.value = result
+
+  } catch (error) {
+    console.error('[loadLedger] 加载明细失败:', error)
+    ledgerEntries.value = []
   }
-  
-  // 按日期和时间戳正序排序
-  tempEntries.sort((a, b) => {
-    // 先按日期排序
-    const dateA = new Date(a._sortDate || a.date || '1970-01-01').getTime()
-    const dateB = new Date(b._sortDate || b.date || '1970-01-01').getTime()
-    
-    if (dateA !== dateB) {
-      return dateA - dateB
-    }
-    
-    // 日期相同的话，按时间戳排序
-    let timeA = 0
-    let timeB = 0
-    
-    if (a._timestamp) {
-      const tA = new Date(a._timestamp).getTime()
-      if (!isNaN(tA)) timeA = tA
-    }
-    if (b._timestamp) {
-      const tB = new Date(b._timestamp).getTime()
-      if (!isNaN(tB)) timeB = tB
-    }
-    
-    if (timeA > 0 && timeB > 0) {
-      return timeA - timeB
-    }
-    
-    if (timeA > 0) return -1
-    if (timeB > 0) return 1
-    
-    // 如果时间戳无效，按单号排序
-    const docNoA = String(a.docNo || '')
-    const docNoB = String(b.docNo || '')
-    
-    if (docNoA !== docNoB) {
-      return docNoA.localeCompare(docNoB)
-    }
-    
-    // 最后按类型排序作为兜底
-    const typeOrder = ['调拨入库', '入库', '销售退货', '调拨出库', '出库', '采购退货']
-    const typeA = typeOrder.indexOf(a.type)
-    const typeB = typeOrder.indexOf(b.type)
-    
-    if (typeA !== -1 && typeB !== -1) {
-      return typeA - typeB
-    }
-    
-    return 0
-  })
-
-  // 计算初始库存（尝试从 localStorage 中查找初始库存记录）
-  let openingQty = 0
-  let openingAmount = 0
-  try {
-    const openingKeys = ['stock_initial','initial_stock','opening_stock']
-    for (const k of openingKeys) {
-      const raw = localStorage.getItem(k)
-      if (!raw) continue
-      try {
-        const arr = JSON.parse(raw)
-        if (Array.isArray(arr)) {
-          const found = arr.find((r: any) => {
-            const productMatch = String(r.productCode || r.code || r.productCode) === String(row.productCode)
-            const warehouseMatch = !r.warehouseName || String(r.warehouseName).trim() === targetWarehouse
-            return productMatch && warehouseMatch
-          })
-          if (found) {
-            openingQty = Number(found.quantity || found.qty || 0)
-            openingAmount = Number(found.amount || found.total || 0)
-            break
-          }
-        }
-      } catch { }
-    }
-  } catch { }
-
-  // 逐条计算运行数量与运行金额，并计算成本价
-  let runningQty = openingQty
-  let runningAmount = openingAmount
-  let lastCost = runningQty ? runningAmount / runningQty : 0
-  
-  ledgerEntries.value = tempEntries.map((en: any) => {
-    // 处理入库（包括正数入库和负数入库）
-    if (en.inboundQty !== 0) {
-      runningQty = Number((runningQty + en.inboundQty).toFixed(4))
-      runningAmount = Number((runningAmount + en.inboundAmount).toFixed(2))
-    }
-    // 处理出库（包括正数出库和负数出库）
-    if (en.outboundQty !== 0) {
-      // 出库时减少总成本（按当前成本价计算）
-      // 负数出库（销售退货）会增加库存和总成本
-      const outboundCost = lastCost * en.outboundQty
-      runningQty = Number((runningQty - en.outboundQty).toFixed(4))
-      runningAmount = Number((runningAmount - outboundCost).toFixed(2))
-    }
-    
-    // 计算当前成本价（加权平均）
-    const costPrice = runningQty > 0 ? Number((runningAmount / runningQty).toFixed(2)) : lastCost
-    lastCost = costPrice || lastCost
-    
-    return { ...en, runningQty, runningAmount, costPrice }
-  })
 }
 
 const getStockType = (stock: number, warning: number) => {
@@ -684,240 +662,30 @@ const getStockType = (stock: number, warning: number) => {
   return 'success'
 }
 
-// 从出入库交易记录中计算库存
-const calculateStockFromTransactions = (productList: any[]) => {
-  const stockMap = new Map<string, any>()
-  
-  // 获取所有仓库
-  const warehousesList = loadWarehousesFromStorage()
-  
-  // 为每个产品的每个仓库生成库存记录
-  productList.forEach(p => {
-    warehousesList.forEach(wh => {
-      const key = `${p.productCode}_${wh.name}`
-      stockMap.set(key, {
-        ...p,
-        warehouseName: wh.name,
-        warehouseId: wh.id,
-        stockQuantity: 0,
-        costPrice: 0,
-        totalValue: 0,
-        _totalCost: 0, // 总成本
-        _totalQty: 0   // 总数量
-      })
-    })
-  })
-  
-  // 先处理库存调拨数据（单独处理，因为调拨单同时影响两个仓库）
-  try {
-    const transferRaw = localStorage.getItem('inventory_transfers')
-    if (transferRaw) {
-      const transfers = JSON.parse(transferRaw)
-      if (Array.isArray(transfers)) {
-        for (const rec of transfers) {
-          const fromWarehouseId = rec.fromWarehouseId
-          const fromWarehouseName = rec.fromWarehouseName
-          const toWarehouseId = rec.toWarehouseId
-          const toWarehouseName = rec.toWarehouseName
-          
-          const items = rec.items || rec.products || rec.details || rec.lines || rec.itemsList
-          if (!Array.isArray(items)) continue
-          
-          for (const it of items) {
-            const itCode = String(it.productCode || it.code || it.sku || '').trim()
-            const itName = String(it.productName || it.name || '').trim()
-            const itId = it.productId || it.id || null
-            const qty = Number(it.quantity || it.qty || it.count || it.num || 0)
-            const unitPrice = Number(it.unitPriceEx || it.unitPrice || it.unitPriceInc || it.price || it.unit_price || 0)
-            const amount = qty * unitPrice
-            
-            // 匹配产品和仓库
-            for (const [mapKey, stock] of stockMap.entries()) {
-              // 匹配产品
-              const match = (itId && stock.productId && itId === stock.productId) || 
-                           (itCode && stock.productCode && itCode === stock.productCode) || 
-                           (itName && stock.productName && itName === stock.productName)
-              
-              if (!match) continue
-              
-              // 调出仓库：减少库存
-              const fromWarehouseMatch = (fromWarehouseId != null && Number(stock.warehouseId) === Number(fromWarehouseId)) || 
-                                        (fromWarehouseName && stock.warehouseName === fromWarehouseName)
-              
-              if (fromWarehouseMatch) {
-                stock._totalQty -= qty
-                const outboundCost = stock.costPrice * qty
-                stock._totalCost -= outboundCost
-                stock.stockQuantity = Number(stock._totalQty)
-                if (stock._totalQty > 0) {
-                  stock.costPrice = Number((stock._totalCost / stock._totalQty).toFixed(2))
-                }
-                stock.totalValue = Number((stock.stockQuantity * stock.costPrice).toFixed(2))
-              }
-              
-              // 调入仓库：增加库存
-              const toWarehouseMatch = (toWarehouseId != null && Number(stock.warehouseId) === Number(toWarehouseId)) || 
-                                      (toWarehouseName && stock.warehouseName === toWarehouseName)
-              
-              if (toWarehouseMatch) {
-                stock._totalQty += qty
-                stock._totalCost += amount
-                stock.stockQuantity = Number(stock._totalQty)
-                stock.costPrice = stock._totalQty > 0 ? Number((stock._totalCost / stock._totalQty).toFixed(2)) : 0
-                stock.totalValue = Number((stock.stockQuantity * stock.costPrice).toFixed(2))
-              }
-            }
-          }
-        }
-      }
-    }
-  } catch {
-    // ignore parsing errors
+const tableRowClassName = ({ row }: { row: any }) => {
+  if (row._isSummary) {
+    if (row._summaryType === 'carryover') return 'summary-row-carryover'
+    if (row._summaryType === 'monthly') return 'summary-row-monthly'
+    if (row._summaryType === 'yearly') return 'summary-row-yearly'
+    if (row._summaryType === 'total') return 'summary-row-total'
   }
-  
-  // 遍历 localStorage 中所有可能的出入库记录
-  const inboundKeys = ['purchase_inbound_records', 'purchaseInbounds', 'inbound_records', 'inbounds', 'purchase_inbounds']
-  const outboundKeys = ['sales_outbound_records', 'outbound_records', 'outbounds', 'sales_outbounds', 'salesOutbounds', 'delivery_records']
-  const purchaseReturnsKeys = ['purchaseReturns', 'purchase_returns', 'purchase_return_records']
-  const salesReturnsKeys = ['salesReturns', 'sales_returns', 'sales_return_records']
-  
-  for (let i = 0; i < localStorage.length; i++) {
-    const key = localStorage.key(i)
-    if (!key) continue
-    if (key === 'inventory_transfers') continue // 调拨单已单独处理，跳过
-    
-    // 判断单据类型
-    let isInbound = false
-    let isOutbound = false
-    let isPurchaseReturn = false  // 采购退货 = 负数入库
-    let isSalesReturn = false     // 销售退货 = 负数出库
-    
-    if (inboundKeys.some(k => key.includes(k))) {
-      isInbound = true
-    } else if (outboundKeys.some(k => key.includes(k))) {
-      isOutbound = true
-    } else if (purchaseReturnsKeys.some(k => key.includes(k))) {
-      isPurchaseReturn = true
-    } else if (salesReturnsKeys.some(k => key.includes(k))) {
-      isSalesReturn = true
-    } else {
-      continue
-    }
-    
-    const raw = localStorage.getItem(key)
-    if (!raw) continue
-    
-    try {
-      const arr = JSON.parse(raw)
-      if (!Array.isArray(arr)) continue
-      
-      for (const rec of arr) {
-        const items = rec.items || rec.products || rec.details || rec.lines || rec.itemsList
-        if (!Array.isArray(items)) continue
-        
-        // 获取单据的仓库 ID
-        const recWarehouseId = rec.warehouseId
-        const recWarehouseName = rec.warehouseName
-        
-        for (const it of items) {
-          const itCode = String(it.productCode || it.code || it.sku || '').trim()
-          const itName = String(it.productName || it.name || '').trim()
-          const itId = it.productId || it.id || null
-    
-          // 匹配产品和仓库
-          for (const [mapKey, stock] of stockMap.entries()) {
-            // 检查仓库是否匹配 - 使用 Number() 转换确保类型一致
-            const warehouseMatch = (recWarehouseId != null && Number(stock.warehouseId) === Number(recWarehouseId)) || 
-                                  (recWarehouseName && stock.warehouseName === recWarehouseName)
-            
-            if (!warehouseMatch) continue
-            
-            // 匹配产品
-            const match = (itId && stock.productId && itId === stock.productId) || 
-                         (itCode && stock.productCode && itCode === stock.productCode) || 
-                         (itName && stock.productName && itName === stock.productName)
-            
-            if (!match) continue
-            
-            const qty = Number(it.quantity || it.qty || it.count || it.num || 0)
-            const unitPrice = Number(it.unitPrice || it.unitPriceInc || it.price || it.unit_price || 0)
-            const amount = qty * unitPrice
-            
-            if (isInbound) {
-              // 正常入库：增加库存
-              stock._totalQty += qty
-              stock._totalCost += amount
-              stock.stockQuantity = Number(stock._totalQty)
-              stock.costPrice = stock._totalQty > 0 ? Number((stock._totalCost / stock._totalQty).toFixed(2)) : 0
-              stock.totalValue = Number((stock.stockQuantity * stock.costPrice).toFixed(2))
-            } else if (isOutbound) {
-              // 正常出库：减少库存
-              stock._totalQty -= qty
-              const outboundCost = stock.costPrice * qty
-              stock._totalCost -= outboundCost
-              stock.stockQuantity = Number(stock._totalQty)
-              if (stock._totalQty > 0) {
-                stock.costPrice = Number((stock._totalCost / stock._totalQty).toFixed(2))
-              }
-              stock.totalValue = Number((stock.stockQuantity * stock.costPrice).toFixed(2))
-            } else if (isPurchaseReturn) {
-              // 采购退货：负数入库（减少库存）
-              stock._totalQty -= qty
-              stock._totalCost -= amount
-              stock.stockQuantity = Number(stock._totalQty)
-              stock.costPrice = stock._totalQty > 0 ? Number((stock._totalCost / stock._totalQty).toFixed(2)) : 0
-              stock.totalValue = Number((stock.stockQuantity * stock.costPrice).toFixed(2))
-            } else if (isSalesReturn) {
-              // 销售退货：负数出库（增加库存）
-              stock._totalQty += qty
-              stock._totalCost += amount
-              stock.stockQuantity = Number(stock._totalQty)
-              stock.costPrice = stock._totalQty > 0 ? Number((stock._totalCost / stock._totalQty).toFixed(2)) : 0
-              stock.totalValue = Number((stock.stockQuantity * stock.costPrice).toFixed(2))
-            }
-          }
-        }
-      }
-    } catch (e) {
-      console.error(`解析 ${key} 失败:`, e)
-    }
-  }
-  
-  // 转换为数组并清理内部字段
-  return Array.from(stockMap.values()).map(s => {
-    const { _totalCost, _totalQty, ...rest } = s
-    return rest
-  })
+  return ''
 }
 
-const loadStock = () => {
-  // 尝试读取产品列表
-  const savedProducts = localStorage.getItem('products')
-  const products = savedProducts ? JSON.parse(savedProducts) : [
-    { id: 1, code: 'P001', name: '测试产品 A', unit: '个', costPrice: 10, specification: '规格 A' },
-    { id: 2, code: 'P002', name: '测试产品 B', unit: '个', costPrice: 20, specification: '规格 B' }
-  ]
-
-  // 基于产品生成库存数据并计算
-  const initialStock = products.map((p: any) => ({
-    productCode: p.code,
-    productName: p.name,
-    specification: p.specification || p.spec || p.model || '',
-    category: p.category || '-',
-    warehouseName: '默认仓库',
-    unit: p.unit || '-',
-    warningQuantity: 0,
-    productId: p.id
-  }))
-  
-  allStock.value = calculateStockFromTransactions(initialStock)
+const loadStock = async () => {
+  const endDate = dateRange.value?.[1] || ''
+  allStock.value = await db.getStocks(endDate)
   stockList.value = allStock.value.slice()
 }
 
-onMounted(() => {
-  loadWarehouses()
-  loadProducts()
+watch(dateRange, () => {
   loadStock()
+})
+
+onMounted(async () => {
+  await loadWarehouses()
+  await loadProducts()
+  await loadStock()
 })
 </script>
 
@@ -1050,38 +818,157 @@ onMounted(() => {
   background: #f5f7fa;
 }
 
+/* ==================== 表格实线边框 ==================== */
+.stock-detail-table-wrapper :deep(.el-table) {
+  border: 1px solid #909399 !important;
+}
+
+.stock-detail-table-wrapper :deep(.el-table th.el-table__cell),
+.stock-detail-table-wrapper :deep(.el-table td.el-table__cell) {
+  border-right: 1px solid #c0c4cc !important;
+  border-bottom: 1px solid #c0c4cc !important;
+}
+
+.stock-detail-table-wrapper :deep(.el-table .el-table__header-wrapper th),
+.stock-detail-table-wrapper :deep(.el-table .el-table__fixed-header-wrapper th) {
+  border-bottom: 2px solid #909399 !important;
+}
+
+.stock-detail-table-wrapper :deep(.el-table .el-table__inner-wrapper::before),
+.stock-detail-table-wrapper :deep(.el-table::before),
+.stock-detail-table-wrapper :deep(.el-table::after) {
+  display: none !important;
+}
+
+/* 单号链接样式 */
+.doc-link {
+  color: #409eff;
+  cursor: pointer;
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.doc-link:hover {
+  color: #337ecc;
+  text-decoration: underline;
+}
+
+/* ==================== 单据查看弹窗 ==================== */
+.doc-preview-overlay {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.doc-preview-dialog {
+  background: #fff;
+  border-radius: 8px;
+  width: 720px;
+  max-width: 90vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+}
+
+.doc-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid #e4e7ed;
+  flex-shrink: 0;
+}
+
+.doc-preview-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #303133;
+}
+
+.doc-preview-close {
+  font-size: 18px;
+  cursor: pointer;
+  color: #909399;
+  transition: color 0.2s;
+}
+
+.doc-preview-close:hover {
+  color: #303133;
+}
+
+.doc-preview-body {
+  padding: 16px 20px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.doc-info-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.doc-info-table td {
+  padding: 6px 12px;
+  border: 1px solid #ebeef5;
+  font-size: 13px;
+}
+
+.doc-info-table td.label {
+  background: #f5f7fa;
+  color: #606266;
+  width: 100px;
+  font-weight: 600;
+  text-align: right;
+}
+
+.doc-preview-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 12px 20px;
+  border-top: 1px solid #e4e7ed;
+  flex-shrink: 0;
+}
+
 /* ==================== 表格列分组背景色 ==================== */
 /* 入库数据区域 - 浅绿色背景 */
 :deep(.el-table .inbound-col) {
-  background-color: #f1f8e9 !important;
+  background-color: #f0f9eb !important;
 }
 
 :deep(.el-table__header .inbound-col) {
-  background-color: #dcedc8 !important;
-  color: #388e3c !important;
-  font-weight: 600;
+  background-color: #e1f3d8 !important;
+  color: #2e7d32 !important;
+  font-weight: 700;
+  border-left: 2px solid #67c23a;
 }
 
 /* 出库数据区域 - 浅红色背景 */
 :deep(.el-table .outbound-col) {
-  background-color: #ffebee !important;
+  background-color: #fef0f0 !important;
 }
 
 :deep(.el-table__header .outbound-col) {
-  background-color: #ffcdd2 !important;
+  background-color: #fde2e2 !important;
   color: #c62828 !important;
-  font-weight: 600;
+  font-weight: 700;
+  border-left: 2px solid #f56c6c;
 }
 
 /* 库存结余区域 - 浅蓝色背景 */
 :deep(.el-table .stock-col) {
-  background-color: #e3f2fd !important;
+  background-color: #ecf5ff !important;
 }
 
 :deep(.el-table__header .stock-col) {
-  background-color: #bbdefb !important;
+  background-color: #d9ecff !important;
   color: #1565c0 !important;
-  font-weight: 600;
+  font-weight: 700;
+  border-left: 2px solid #409eff;
 }
 
 /* ==================== 底部关闭按钮固定区 ==================== */
@@ -1092,5 +979,41 @@ onMounted(() => {
   background: #fff;
   border-top: 1px solid #e4e7ed;
   flex-shrink: 0;
+}
+
+/* ==================== 汇总行样式（财务账簿格式）==================== */
+:deep(.el-table .summary-row-carryover) {
+  background-color: #fff8e1 !important;
+}
+
+:deep(.el-table .summary-row-carryover:hover > td) {
+  background-color: #ffecb3 !important;
+}
+
+:deep(.el-table .summary-row-monthly) {
+  background-color: #e8f5e9 !important;
+  font-weight: bold;
+}
+
+:deep(.el-table .summary-row-monthly:hover > td) {
+  background-color: #c8e6c9 !important;
+}
+
+:deep(.el-table .summary-row-yearly) {
+  background-color: #e3f2fd !important;
+  font-weight: bold;
+}
+
+:deep(.el-table .summary-row-yearly:hover > td) {
+  background-color: #bbdefb !important;
+}
+
+:deep(.el-table .summary-row-total) {
+  background-color: #f5f5f5 !important;
+  font-weight: bold;
+}
+
+:deep(.el-table .summary-row-total:hover > td) {
+  background-color: #e0e0e0 !important;
 }
 </style>

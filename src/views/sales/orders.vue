@@ -128,6 +128,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import dayjs from 'dayjs'
 import exportToCsv from '../../utils/exportCsv'
 import { dbQuery, dbInsert, dbUpdate, dbDelete } from '@/utils/db'
+import { db } from '@/utils/db-ipc'
 
 interface Order {
   id?: number
@@ -160,10 +161,17 @@ const formData = reactive<Order>({
   status: 'pending'
 })
 
-const customers = ref([
-  { id: 1, name: '客户 A' },
-  { id: 2, name: '客户 B' }
-])
+const customers = ref<any[]>([])
+
+// 加载客户列表
+const loadCustomers = async () => {
+  try {
+    customers.value = await db.getCustomers()
+    console.log('加载客户成功:', customers.value.length, '个')
+  } catch (error) {
+    console.error('加载客户失败:', error)
+  }
+}
 
 // 生成订单号
 const generateOrderNo = () => {
@@ -304,6 +312,7 @@ const handleSubmit = async () => {
 
 onMounted(() => {
   loadOrders()
+  loadCustomers()
 })
 </script>
 
