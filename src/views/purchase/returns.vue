@@ -354,6 +354,7 @@
                 :precision="2"
                 :step="0.01"
                 :controls="false"
+                :step-strictly="false"
                 style="width: 100%"
                 @focus="handleFocus(row, 'unitPrice')"
                 @change="onUnitPriceInclChange(row)"
@@ -1287,8 +1288,8 @@ const handleOriginalVoucherChange = (voucherNo: string) => {
         specification: item.specification,
         quantity: 0,
         unit: item.unit,
-        unitPrice: item.unitPrice || 0,
-        unitPriceEx: item.unitPriceEx || 0,
+        unitPrice: round2(item.unitPrice || 0),  // 确保四舍五入到 2 位小数
+        unitPriceEx: round2(item.unitPriceEx || 0),  // 确保四舍五入到 2 位小数
         taxRate: item.taxRate !== undefined ? item.taxRate : '免税',
         taxAmount: 0,
         totalAmount: 0,
@@ -1402,19 +1403,19 @@ const calculateRowTotal = (item: ReturnItem) => {
     let taxAmount: number
     let totalAmount: number
     let deductionAmount: number
-    
+
     if (isDeduction) {
       // 加计扣除模式：单价（不含税）= 金额 * (1-9%) / 数量
       // 反推：金额 = 单价（不含税）* 数量 / (1-9%)
       totalAmount = round2(unitEx * qty / 0.91)
       unitIncl = round2(totalAmount / qty) // 单价（含税）= 金额 / 数量
-      taxAmount = round2(qty * (unitIncl - unitEx))
+      taxAmount = round2(totalAmount - unitEx * qty)
       deductionAmount = round2(totalAmount * 0.09) // 加计扣除 = 金额 × 9%
     } else {
       // 正常模式
       unitIncl = r === 0 ? unitEx : round2(unitEx * (1 + r))
-      taxAmount = round2(qty * (unitIncl - unitEx))
       totalAmount = round2(unitIncl * qty)
+      taxAmount = round2(totalAmount - unitEx * qty)
       deductionAmount = 0
     }
     item.unitPrice = unitIncl
@@ -1427,18 +1428,18 @@ const calculateRowTotal = (item: ReturnItem) => {
     let taxAmount: number
     let totalAmount: number
     let deductionAmount: number
-    
+
     if (isDeduction) {
       // 加计扣除模式：单价（不含税）= 单价（含税）* (1-9%)
       totalAmount = round2(unitIncl * qty) // 金额 = 单价（含税）* 数量
       unitEx = round2(unitIncl * 0.91) // 单价（不含税）= 单价（含税）* (1-9%)
-      taxAmount = round2(qty * (unitIncl - unitEx))
+      taxAmount = round2(totalAmount - unitEx * qty)
       deductionAmount = round2(totalAmount * 0.09) // 加计扣除 = 金额 × 9%
     } else {
-      // 正常模式
-      unitEx = r === 0 ? unitIncl : round2(unitIncl / (1 + r))
-      taxAmount = round2(qty * (unitIncl - unitEx))
+      // 正常模式：金额直接由含税单价 × 数量得出，避免中间精度损失
       totalAmount = round2(unitIncl * qty)
+      unitEx = r === 0 ? unitIncl : round2(unitIncl / (1 + r))
+      taxAmount = round2(totalAmount - unitEx * qty)
       deductionAmount = 0
     }
     item.unitPriceEx = unitEx
@@ -1457,18 +1458,18 @@ const calculateRowTotal = (item: ReturnItem) => {
       let unitEx: number
       let taxAmount: number
       let deductionAmount: number
-      
+
       if (isDeduction) {
         // 加计扣除模式：单价（不含税）= 金额 * (1-9%) / 数量
         unitIncl = round2(total / qty) // 单价（含税）= 金额 / 数量
         unitEx = round2(total * 0.91 / qty) // 单价（不含税）= 金额 * (1-9%) / 数量
-        taxAmount = round2(qty * (unitIncl - unitEx))
+        taxAmount = round2(total - unitEx * qty)
         deductionAmount = round2(total * 0.09) // 加计扣除 = 金额 × 9%
       } else {
         // 正常模式
         unitIncl = round2(total / qty)
         unitEx = r === 0 ? unitIncl : round2(unitIncl / (1 + r))
-        taxAmount = round2(qty * (unitIncl - unitEx))
+        taxAmount = round2(total - unitEx * qty)
         deductionAmount = 0
       }
       item.unitPrice = unitIncl
@@ -1498,16 +1499,22 @@ const calculateRowTotal = (item: ReturnItem) => {
 }
 
 const onUnitPriceExChange = (item: ReturnItem) => {
+  // 确保不含税单价四舍五入到 2 位小数
+  item.unitPriceEx = round2(item.unitPriceEx)
   item._lastEdited = 'unitEx'
   calculateRowTotal(item)
 }
 
 const onUnitPriceInclChange = (item: ReturnItem) => {
+  // 确保含税单价四舍五入到 2 位小数
+  item.unitPrice = round2(item.unitPrice)
   item._lastEdited = 'unitIncl'
   calculateRowTotal(item)
 }
 
 const onAmountChange = (item: ReturnItem) => {
+  // 确保金额四舍五入到 2 位小数
+  item.totalAmount = round2(item.totalAmount)
   item._lastEdited = 'amount'
   calculateRowTotal(item)
 }
@@ -1614,13 +1621,17 @@ const checkSingleStockAvailability = (item: ReturnItem): boolean => {
 
 // 数量变化时处理
 const onQuantityChange = (item: ReturnItem) => {
+  // 数量变化时，优先使用含税单价作为计算基准
+  if (item.unitPrice !== undefined && item.unitPrice !== null && item.unitPrice !== '') {
+    item._lastEdited = 'unitIncl'
+  }
   calculateRowTotal(item)
-  
+
   // 实时检测：先验证原入库单数量
   if (!validateSingleReturnItem(item)) {
     return
   }
-  
+
   // 实时检测：再检查库存
   checkSingleStockAvailability(item)
 }

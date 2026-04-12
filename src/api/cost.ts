@@ -29,8 +29,19 @@ function normalizeCostParams(params: any): { year: number; month: number; produc
 export async function getCostSettlementList(params: any) {
   try {
     const normalizedParams = normalizeCostParams(params)
-    const result = await db.getCostSettlementSummary(normalizedParams)
-    if (result && Array.isArray(result)) {
+    console.log('成本结算 API 调用参数:', normalizedParams)
+    
+    // 直接使用 cost-settlement-query，参数更明确
+    const result = await db.getCostSettlements(
+      normalizedParams.year,
+      normalizedParams.month,
+      normalizedParams.productSearch,
+      normalizedParams.warehouseId
+    )
+    
+    console.log('成本结算 API 返回结果:', result)
+    
+    if (result && Array.isArray(result) && result.length > 0) {
       const formattedSettlements = result.map(item => ({
         productCode: item.product_code,
         productName: item.product_name,
@@ -51,8 +62,10 @@ export async function getCostSettlementList(params: any) {
         closingUnitPrice: item.closing_unit_price || 0,
         closingCost: item.closing_cost || 0
       }))
+      console.log('格式化后的数据:', formattedSettlements.length, '条')
       return { success: true, data: formattedSettlements }
     }
+    console.warn('无数据或结果不是数组:', result)
     return { success: false, message: '查询失败或无数据', data: [] }
   } catch (error) {
     console.error('获取成本结算列表失败:', error)

@@ -691,6 +691,8 @@ function setupIpcHandlers() {
     if (!db.costDb) {
       throw new Error('成本结算数据库未初始化')
     }
+    console.log('[cost:settlement-summary] 收到参数:', params)
+    
     const dateSource = params.periodRange || params.startDate
     let year: number, month: number
     if (dateSource) {
@@ -703,7 +705,12 @@ function setupIpcHandlers() {
       year = now.getFullYear()
       month = now.getMonth() + 1
     }
-    return db.costDb.getSettlements(year, month, params.productSearch, params.warehouseId)
+    
+    console.log(`[cost:settlement-summary] 查询 ${year}年${month}月，参数:`, { year, month, productSearch: params.productSearch, warehouseId: params.warehouseId })
+    
+    const result = db.costDb.getSettlements(year, month, params.productSearch, params.warehouseId)
+    console.log(`[cost:settlement-summary] 返回 ${result.length} 条记录`)
+    return result
   })
 
   // 获取销售成本统计
@@ -787,20 +794,64 @@ function setupIpcHandlers() {
     if (!db.costDb) {
       throw new Error('成本结算数据库未初始化')
     }
-
+  
     try {
+      console.log(`=== 开始反结算 ${params.year}年${params.month}月 ===`)
+      
+      // 先检查有多少条记录
+      const beforeCount = db.costDb.getSettlements(params.year, params.month)
+      console.log(`  反结算前数据量：${Array.isArray(beforeCount) ? beforeCount.length : 0} 条`)
+      
+      // 删除成本结算主表数据
+      const deleteResult = db.costDb.deleteSettlement(params.year, params.month)
+      console.log(`  已删除成本结算数据，影响行数：${deleteResult.changes}`)
+  
       // 解锁成本结算
       db.costDb.unlockSettlement(params.year, params.month)
-
+      console.log(`  已解锁 ${params.year}年${params.month}月`)
+  
       // 删除销售成本统计
       db.costDb.deleteSalesCostSummary(params.year, params.month)
-
+      console.log(`  已删除销售成本统计`)
+  
       // 删除调拨成本统计
       db.costDb.deleteTransferCostSummary(params.year, params.month)
-
-      return { success: true, message: '反结算成功' }
+      console.log(`  已删除调拨成本统计`)
+      
+      // 验证是否删除成功
+      const afterCount = db.costDb.getSettlements(params.year, params.month)
+      console.log(`  反结算后数据量：${Array.isArray(afterCount) ? afterCount.length : 0} 条`)
+  
+      console.log(`=== 反结算完成 ===`)
+      return { 
+        success: true, 
+        message: '反结算成功',
+        deletedCount: deleteResult.changes,
+        remainingCount: Array.isArray(afterCount) ? afterCount.length : 0
+      }
     } catch (error: any) {
       console.error('反结算失败:', error)
+      return { success: false, message: error.message }
+    }
+  })
+
+  // 系统设置管理
+  ipcMain.handle('system:get-settings', async () => {
+    try {
+      const settings = db.getSystemSettings()
+      return { success: true, data: settings }
+    } catch (error: any) {
+      console.error('获取系统设置失败:', error)
+      return { success: false, message: error.message }
+    }
+  })
+
+  ipcMain.handle('system:save-settings', async (event, settings: any) => {
+    try {
+      db.saveSystemSettings(settings)
+      return { success: true, message: '保存成功' }
+    } catch (error: any) {
+      console.error('保存系统设置失败:', error)
       return { success: false, message: error.message }
     }
   })

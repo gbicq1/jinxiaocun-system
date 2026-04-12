@@ -144,6 +144,10 @@ electron_1.contextBridge.exposeInMainWorld('electron', {
   dbBackupStats: () => electron_1.ipcRenderer.invoke('db-backup-stats'),
   dbBackupRestoreFromPath: (backupPath) => electron_1.ipcRenderer.invoke('db-backup-restore-from', backupPath),
   
+  // ==================== 系统设置 ====================
+  getSystemSettings: () => electron_1.ipcRenderer.invoke('system:get-settings'),
+  saveSystemSettings: (settings) => electron_1.ipcRenderer.invoke('system:save-settings', settings),
+  
   // ==================== 开票记录管理 ====================
   getInvoiceRecord: (inboundNo) => electron_1.ipcRenderer.invoke('invoice-get-record', inboundNo),
   saveInvoiceRecord: (recordData) => electron_1.ipcRenderer.invoke('invoice-save-record', recordData)

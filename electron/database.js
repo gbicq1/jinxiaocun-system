@@ -2434,7 +2434,13 @@ class InventoryDatabase {
             });
         });
         const salesReturnItems = this.db.prepare(`
-      SELECT sri.*, sr.return_no, sr.return_date, sr.customer_id,
+      SELECT sri.*, sr.return_no, sr.return_date, sr.customer_id, sr.original_order_no,
+             -- 备注：显示原出库单号
+             CASE 
+               WHEN sr.original_order_no IS NOT NULL AND sr.original_order_no != '' 
+               THEN '原出库单：' || sr.original_order_no
+               ELSE ''
+             END as remark,
              c.name as customer_name, w.name as warehouse_name,
              'sales_return' as doc_type, sr.created_at as _timestamp
       FROM sales_return_items sri
@@ -2449,16 +2455,17 @@ class InventoryDatabase {
         if (salesReturnItems.length > 0) {
             console.log('[getProductLedger] 销售退货原始数据:', JSON.stringify(salesReturnItems[0]));
         }
-        // 销售退货：数量以负数表示在出库数据中，单价显示，金额显示为负数（冲减）
+        // 销售退货：数量以负数表示在出库数据中，单价和金额使用含税单价和含税金额（与其他单据保持一致）
         salesReturnItems.forEach(item => {
-            let unitPrice = item.unit_price || 0;
-            let totalAmount = item.amount || 0;
+            // 优先使用含税单价和含税金额（与采购入库、销售出库保持一致）
+            let unitPrice = item.unit_price_incl || item.unit_price || 0;
+            let totalAmount = item.total_inc || item.total_amount || 0;
             console.log(`[getProductLedger] 销售退货处理: quantity=${item.quantity}, unit_price=${item.unit_price}, amount=${item.amount}, original_item_index=${item.original_item_index}`);
             // 如果没有保存单价和金额，尝试从原出库单查询
             if ((!unitPrice || !totalAmount) && item.original_item_index !== undefined) {
                 // 需要先找到原出库单（通过 original_order_no）
                 const originalOutbound = this.db.prepare(`
-          SELECT soi.unit_price, soi.amount
+          SELECT soi.unit_price, soi.total_amount
           FROM sales_outbound_items soi
           INNER JOIN sales_outbound so ON soi.outbound_id = so.id
           WHERE so.outbound_no = (
@@ -2469,7 +2476,7 @@ class InventoryDatabase {
                 console.log(`[getProductLedger] 原出库单查询结果:`, originalOutbound);
                 if (originalOutbound) {
                     unitPrice = originalOutbound.unit_price || unitPrice;
-                    totalAmount = originalOutbound.amount || totalAmount;
+                    totalAmount = originalOutbound.total_amount || totalAmount;
                 }
             }
             console.log(`[getProductLedger] 销售退货最终: qty=${-item.quantity}, price=${-unitPrice}, amount=${-totalAmount}`);
@@ -2730,6 +2737,55 @@ class InventoryDatabase {
     close() {
         if (this.db) {
             this.db.close();
+        }
+    }
+    // ==================== 系统设置管理 ====================
+    getSystemSettings() {
+        try {
+            // 确保系统设置表存在
+            this.db.exec(`
+        CREATE TABLE IF NOT EXISTS system_settings (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          setting_key TEXT UNIQUE NOT NULL,
+          setting_value TEXT,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+            const settings = {};
+            const rows = this.db.prepare('SELECT setting_key, setting_value FROM system_settings').all();
+            rows.forEach(row => {
+                settings[row.setting_key] = row.setting_value;
+            });
+            return settings;
+        }
+        catch (error) {
+            console.error('获取系统设置失败:', error);
+            return {};
+        }
+    }
+    saveSystemSettings(settings) {
+        try {
+            // 确保系统设置表存在
+            this.db.exec(`
+        CREATE TABLE IF NOT EXISTS system_settings (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          setting_key TEXT UNIQUE NOT NULL,
+          setting_value TEXT,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+            const insert = this.db.prepare(`
+        INSERT OR REPLACE INTO system_settings (setting_key, setting_value, updated_at)
+        VALUES (?, ?, CURRENT_TIMESTAMP)
+      `);
+            for (const [key, value] of Object.entries(settings)) {
+                insert.run(key, String(value));
+            }
+            return true;
+        }
+        catch (error) {
+            console.error('保存系统设置失败:', error);
+            return false;
         }
     }
 }

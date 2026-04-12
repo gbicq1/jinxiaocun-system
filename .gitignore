@@ -47,3 +47,7 @@ memories/
 test-*.js
 test-*.html
 debug-*.js
+
+# Release builds (too large for GitHub)
+release*/
+*.exe

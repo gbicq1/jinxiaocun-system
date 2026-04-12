@@ -310,13 +310,15 @@ class DatabaseIPC {
   // ==================== 成本结算 ====================
 
   async getCostSettlement(
-    productCode: string,
-    warehouseId: number,
-    year: number,
-    month: number
+    params: {
+      year: number,
+      month: number,
+      productCode?: string,
+      warehouseId?: number
+    }
   ): Promise<CostSettlement | null> {
     try {
-      return await this.electron.costSettlementQuery(year, month, productCode, warehouseId)
+      return await this.electron.costSettlementQuery(params.year, params.month, params.productCode, params.warehouseId)
     } catch (error) {
       console.error('[DB-IPC] 获取成本结算数据失败:', error)
       return null
@@ -1128,6 +1130,28 @@ class DatabaseIPC {
     } catch (error) {
       console.error('[DB-IPC] 保存开票记录失败:', error)
       throw error
+    }
+  }
+
+  // ==================== 系统设置 ====================
+
+  async getSystemSettings(): Promise<any> {
+    try {
+      const result = await this.electron.getSystemSettings()
+      return result?.data || {}
+    } catch (error) {
+      console.error('[DB-IPC] 获取系统设置失败:', error)
+      return {}
+    }
+  }
+
+  async saveSystemSettings(settings: any): Promise<boolean> {
+    try {
+      const result = await this.electron.saveSystemSettings(settings)
+      return result?.success || false
+    } catch (error) {
+      console.error('[DB-IPC] 保存系统设置失败:', error)
+      return false
     }
   }
 }

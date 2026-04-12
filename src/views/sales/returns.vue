@@ -809,24 +809,32 @@ const handleEdit = async (row: ReturnRecord) => {
   if (formData.originalOrderNo) {
     const order = orderList.value.find(item => item.voucherNo === formData.originalOrderNo)
     if (order) {
-      // 先从原订单加载所有商品
-      formData.items = order.items.map((item: any, index: number) => ({
-        productId: item.productId,
-        productName: item.productName || '',
-        specification: item.specification || '',
-        quantity: 0,
-        unit: item.unit || '',
-        unitPrice: item.unitPrice || 0,
-        unitPriceEx: item.unitPriceEx || 0,
-        taxRate: item.taxRate !== undefined ? item.taxRate : 13,
-        taxAmount: 0,
-        totalAmount: 0,
-        deductionAmount: item.deductionAmount || 0,
-        allowDeduction: item.allowDeduction || false,
-        originalQuantity: item.quantity,  // 保存原订单中的数量
-        originalItemIndex: index,         // 保存原订单中的索引
-        _lastEdited: 'unitIncl'
-      }))
+      // 先从原订单加载所有商品（优先使用含税单价计算）
+      formData.items = order.items.map((item: any, index: number) => {
+        // 优先从原出库单提取含税单价，然后计算不含税单价
+        const unitPriceIncl = item.unitPrice || 0      // 含税单价（出库单字段）
+        const taxRate = item.taxRate !== undefined ? item.taxRate : 13
+        const r = taxRate / 100
+        const unitPriceEx = taxRate === 0 ? unitPriceIncl : round2(unitPriceIncl / (1 + r))  // 计算不含税单价
+
+        return {
+          productId: item.productId,
+          productName: item.productName || '',
+          specification: item.specification || '',
+          quantity: 0,
+          unit: item.unit || '',
+          unitPrice: unitPriceEx,        // 不含税单价（退货单字段）
+          unitPriceEx: unitPriceEx,
+          unitPriceIncl: unitPriceIncl,  // 含税单价（退货单字段）
+          taxRate: taxRate,
+          taxAmount: 0,
+          totalAmount: 0,
+          deductionAmount: item.deductionAmount || 0,
+          allowDeduction: item.allowDeduction || false,
+          originalQuantity: item.quantity,  // 保存原订单中的数量
+          originalItemIndex: index          // 保存原订单中的索引
+        }
+      })
 
       // 然后根据已保存的数据填充数量（通过原索引匹配）
       const savedItems = row.items || []
@@ -880,24 +888,32 @@ const handleView = async (row: ReturnRecord) => {
   if (formData.originalOrderNo) {
     const order = orderList.value.find(item => item.voucherNo === formData.originalOrderNo)
     if (order) {
-      // 先从原订单加载所有商品
-      formData.items = order.items.map((item: any, index: number) => ({
-        productId: item.productId,
-        productName: item.productName || '',
-        specification: item.specification || '',
-        quantity: 0,
-        unit: item.unit || '',
-        unitPrice: item.unitPrice || 0,
-        unitPriceEx: item.unitPriceEx || 0,
-        taxRate: item.taxRate !== undefined ? item.taxRate : 13,
-        taxAmount: 0,
-        totalAmount: 0,
-        deductionAmount: item.deductionAmount || 0,
-        allowDeduction: item.allowDeduction || false,
-        originalQuantity: item.quantity,  // 保存原订单中的数量
-        originalItemIndex: index,         // 保存原订单中的索引
-        _lastEdited: 'unitIncl'
-      }))
+      // 先从原订单加载所有商品（优先使用含税单价计算）
+      formData.items = order.items.map((item: any, index: number) => {
+        // 优先从原出库单提取含税单价，然后计算不含税单价
+        const unitPriceIncl = item.unitPrice || 0      // 含税单价（出库单字段）
+        const taxRate = item.taxRate !== undefined ? item.taxRate : 13
+        const r = taxRate / 100
+        const unitPriceEx = taxRate === 0 ? unitPriceIncl : round2(unitPriceIncl / (1 + r))  // 计算不含税单价
+
+        return {
+          productId: item.productId,
+          productName: item.productName || '',
+          specification: item.specification || '',
+          quantity: 0,
+          unit: item.unit || '',
+          unitPrice: unitPriceEx,        // 不含税单价（退货单字段）
+          unitPriceEx: unitPriceEx,
+          unitPriceIncl: unitPriceIncl,  // 含税单价（退货单字段）
+          taxRate: taxRate,
+          taxAmount: 0,
+          totalAmount: 0,
+          deductionAmount: item.deductionAmount || 0,
+          allowDeduction: item.allowDeduction || false,
+          originalQuantity: item.quantity,  // 保存原订单中的数量
+          originalItemIndex: index          // 保存原订单中的索引
+        }
+      })
 
       // 然后根据已保存的数据填充数量（通过原索引匹配）
       const savedItems = row.items || []
@@ -1008,23 +1024,26 @@ const handleSubmit = async () => {
         remark: formData.remark,
         items: formData.items
           .filter((item: any) => item.quantity > 0) // 只保存数量>0 的商品
-          .map((item: any) => ({
-            product_id: item.productId,
-            product_name: item.productName || '',
-            specification: item.specification || '',
-            unit: item.unit || '',
-            quantity: item.quantity,
-            original_quantity: item.originalQuantity || 0,  // 保存原出库数量
-            unit_price: item.unitPrice || 0,           // 不含税单价
-            unit_price_incl: item.unitPriceIncl || 0,  // 含税单价
-            tax_rate: item.taxRate || 0,               // 税率
-            tax_amount: item.taxAmount || 0,           // 税额
-            total_inc: item.totalInc || 0,             // 含税金额
-            amount: item.amount || 0,                  // 不含税金额
-            cost_price: item.costPrice || 0,           // 成本价
-            remark: item.remark || '',
-            original_item_index: item.originalItemIndex // 保存原订单中的索引，用于重新加载时匹配
-          }))
+          .map((item: any) => {
+            console.log('[销售退货保存前] item.unitPrice:', item.unitPrice, 'unitPriceIncl:', item.unitPriceIncl, 'totalInc:', item.totalInc, 'taxRate:', item.taxRate)
+            return {
+              product_id: item.productId,
+              product_name: item.productName || '',
+              specification: item.specification || '',
+              unit: item.unit || '',
+              quantity: item.quantity,
+              original_quantity: item.originalQuantity || 0,  // 保存原出库数量
+              unit_price: item.unitPrice || 0,           // 不含税单价
+              unit_price_incl: item.unitPriceIncl || 0,  // 含税单价
+              tax_rate: item.taxRate || 0,               // 税率
+              tax_amount: item.taxAmount || 0,           // 税额
+              total_inc: item.totalInc || 0,             // 含税金额
+              amount: item.amount || 0,                  // 不含税金额
+              cost_price: item.costPrice || 0,           // 成本价
+              remark: item.remark || '',
+              original_item_index: item.originalItemIndex // 保存原订单中的索引，用于重新加载时匹配
+            }
+          })
       }
 
       const resultId = formData.id ?
@@ -1083,22 +1102,28 @@ const handleOriginalOrderChange = (voucherNo: string) => {
       const count = productMatchCount.get(productId) || 0
       productMatchCount.set(productId, count + 1)
 
+      // 优先从原出库单提取含税单价，然后计算不含税单价
+      const unitPriceIncl = item.unitPrice || 0      // 含税单价（出库单字段）
+      const taxRate = item.taxRate !== undefined ? item.taxRate : 13
+      const r = taxRate / 100
+      const unitPriceEx = taxRate === 0 ? unitPriceIncl : round2(unitPriceIncl / (1 + r))  // 计算不含税单价
+
       return {
         productId: item.productId,
         productName: item.productName || '',
         specification: item.specification || '',
         quantity: 0,
         unit: item.unit || '',
-        unitPrice: item.unitPrice || 0,
-        unitPriceEx: item.unitPriceEx || 0,
-        taxRate: item.taxRate !== undefined ? item.taxRate : 13,
+        unitPrice: unitPriceEx,        // 不含税单价（退货单字段）
+        unitPriceEx: unitPriceEx,
+        unitPriceIncl: unitPriceIncl,  // 含税单价（退货单字段）
+        taxRate: taxRate,
         taxAmount: 0,
         totalAmount: 0,
         deductionAmount: item.deductionAmount || 0,
         allowDeduction: item.allowDeduction || false,
         originalQuantity: item.quantity,  // 显示原订单中的数量
-        originalItemIndex: index,         // 保存原订单中的索引，用于匹配数量
-        _lastEdited: 'unitIncl'           // 使用含税价作为基准，保持与原订单一致
+        originalItemIndex: index          // 保存原订单中的索引，用于匹配数量
       }
     })
     
@@ -1177,11 +1202,25 @@ const updateFormTotals = () => {
 
 const calculateRowTotalss = (row: ReturnItem) => {
   const qty = row.quantity || 0
-  const price = row.unitPrice || 0
-  row.amount = Number((qty * price).toFixed(2))
-  row.taxAmount = Number((row.amount * ((row.taxRate || 0) / 100)).toFixed(2))
-  row.totalInc = Number((row.amount + row.taxAmount).toFixed(2))
-  row.unitPriceIncl = (row.taxRate || 0) === 0 ? price : round2(price * (1 + (row.taxRate || 0) / 100))
+  const taxRate = row.taxRate || 0
+  const r = taxRate / 100
+
+  // 优先使用含税单价计算（如果存在）
+  if (row.unitPriceIncl && row.unitPriceIncl > 0) {
+    const unitPriceIncl = row.unitPriceIncl
+    row.totalInc = round2(unitPriceIncl * qty)  // 含税金额 = 含税单价 × 数量
+    row.amount = taxRate === 0 ? row.totalInc : round2(row.totalInc / (1 + r))  // 不含税金额 = 含税金额 / (1+ 税率)
+    row.unitPrice = taxRate === 0 ? round2(row.totalInc / qty) : round2(row.amount / qty)  // 不含税单价 = 不含税金额 / 数量
+    row.taxAmount = round2(row.totalInc - row.amount)  // 税额 = 含税金额 - 不含税金额
+  } else {
+    // 否则使用不含税单价计算
+    const price = row.unitPrice || 0
+    row.amount = round2(qty * price)
+    row.taxAmount = round2(row.amount * r)
+    row.totalInc = round2(row.amount + row.taxAmount)
+    row.unitPriceIncl = taxRate === 0 ? price : round2(price * (1 + r))
+  }
+
   updateFormTotals()
 }
 
