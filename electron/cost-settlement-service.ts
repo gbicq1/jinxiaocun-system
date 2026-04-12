@@ -41,13 +41,13 @@ export class MonthlyCostSettlementService {
     alreadySettled?: boolean
   } {
     try {
-      console.log(`=== 开始结算 ${year}年${month}月 ===`)
+      try { console.log(`=== 开始结算 ${year}年${month}月 ===`) } catch {}
 
       const isSettled = this.costDb.isSettled(year, month)
-      console.log(`月份已结算状态：${isSettled}`)
-      
+      try { console.log(`月份已结算状态：${isSettled}`) } catch {}
+
       if (isSettled) {
-        console.log(`  ⚠️ 月份已结算，无法重复计算`)
+        try { console.log(`  ⚠️ 月份已结算，无法重复计算`) } catch {}
         return { 
           success: false, 
           count: 0, 
@@ -264,7 +264,7 @@ export class MonthlyCostSettlementService {
       totalCost += costAmount
     })
 
-    // 2. 采购退货（负数）- 应用与采购入库完全相同的单价提取规则
+    // 2. 采购退货（负数）- 按退货数量占原入库数量的比例计算成本
     const purchaseReturnSql = `
       SELECT
         pri.quantity,
@@ -273,11 +273,12 @@ export class MonthlyCostSettlementService {
           WHEN (pi.invoice_issued = 1 OR pi.invoice_issued = true) AND (ii.tax_rate = 0 OR ii.tax_rate IS NULL OR ii.tax_rate = '0%') AND (ii.allow_deduction = 1 OR ii.allow_deduction = true) THEN ii.unit_price_ex
           ELSE ii.unit_price
         END as unit_price,
+        ii.quantity as inbound_qty,
         CASE 
           WHEN (pi.invoice_type = '专票' OR pi.invoice_type = '专用发票') AND (pi.invoice_issued = 1 OR pi.invoice_issued = true) THEN ii.total_amount_ex
           WHEN (pi.invoice_issued = 1 OR pi.invoice_issued = true) AND (ii.tax_rate = 0 OR ii.tax_rate IS NULL OR ii.tax_rate = '0%') AND (ii.allow_deduction = 1 OR ii.allow_deduction = true) THEN ii.total_amount_ex
           ELSE ii.total_amount
-        END as total_amount
+        END as inbound_total_amount
       FROM purchase_return_items pri
       JOIN purchase_returns pr ON pri.return_id = pr.id
       LEFT JOIN purchase_inbound pi ON pr.original_inbound_no = pi.inbound_no
@@ -295,8 +296,18 @@ export class MonthlyCostSettlementService {
       warehouseId, monthStart, monthEnd, productId
     ) as any[]
     purchaseReturnItems.forEach(item => {
-      totalQty -= Number(item.quantity || 0)
-      totalCost -= Number(item.total_amount || 0)
+      const returnQty = Number(item.quantity || 0)
+      const inboundQty = Number(item.inbound_qty || 0)
+      const inboundTotalAmt = Number(item.inbound_total_amount || 0)
+      
+      // 按退货数量占原入库数量的比例计算成本
+      let costAmt = 0
+      if (inboundQty > 0) {
+        costAmt = inboundTotalAmt * (returnQty / inboundQty)
+      }
+      
+      totalQty -= returnQty
+      totalCost -= costAmt
     })
 
     // 3. 调拨入库（正数）

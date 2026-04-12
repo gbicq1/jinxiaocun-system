@@ -138,7 +138,7 @@ export class CostSettlementDatabase {
         END AS inbound_unit_price,
         cs.avg_cost AS closing_unit_price
       FROM cost_settlements cs
-      INNER JOIN products p ON cs.product_code = p.code AND p.status = 1
+      INNER JOIN products p ON cs.product_code = p.code
       ${whereClause}
       ORDER BY cs.warehouse_id, cs.product_code
     `)
@@ -753,19 +753,26 @@ export class CostSettlementDatabase {
         outboundPrice: 0,
         outboundAmount: 0
       })),
-      ...purchaseReturnItems.map(item => ({
-        date: item.date,
-        docNo: item.docNo,
-        type: item.type,
-        direction: 'in' as const,
-        inboundQty: -Math.abs(Number(item.qty || 0)),
-        inboundPrice: Number(item.unit_price || (Number(item.qty || 0) !== 0 ? Number(item.amount || 0) / Number(item.qty || 0) : 0)),
-        inboundAmount: -Math.abs(Number(item.amount || 0)),
-        remark: buildReturnRemark(item.remark, item.original_inbound_no, '入库'),
-        outboundQty: 0,
-        outboundPrice: 0,
-        outboundAmount: 0
-      }))
+      ...purchaseReturnItems.map(item => {
+        // 采购退货：金额 = 退货数量（负数）× 单价
+        const unitPrice = Number(item.unit_price || 0)
+        const qty = -Math.abs(Number(item.qty || 0))  // 退货数量为负数
+        const amount = qty * unitPrice  // 金额 = 数量 × 单价（自动为负数）
+
+        return {
+          date: item.date,
+          docNo: item.docNo,
+          type: item.type,
+          direction: 'in' as const,
+          inboundQty: qty,
+          inboundPrice: unitPrice,
+          inboundAmount: amount,  // 金额 = 数量 × 单价
+          remark: buildReturnRemark(item.remark, item.original_inbound_no, '入库'),
+          outboundQty: 0,
+          outboundPrice: 0,
+          outboundAmount: 0
+        }
+      })
     ].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
 
     // 3. 获取销售出库单数据
@@ -910,114 +917,35 @@ export class CostSettlementDatabase {
         type: 'monthly',
         direction: '',
         inboundQty: Number(monthInQty.toFixed(4)),
-        inboundPrice: Number(monthAvgPrice.toFixed(2)),
+        inboundPrice: Number(monthInQty !== 0 ? (monthInAmt / monthInQty).toFixed(2) : 0),
         inboundAmount: Number(monthInAmt.toFixed(2)),
         outboundQty: Number(monthOutQty.toFixed(4)),
-        outboundPrice: Number(monthAvgPrice.toFixed(2)),
+        outboundPrice: Number(monthOutQty !== 0 ? (monthOutAmt / monthOutQty).toFixed(2) : 0),
         outboundAmount: Number(monthOutAmt.toFixed(2)),
-        balanceQty: settlement.closing_qty,
-        balanceAmount: settlement.closing_cost,
-        balanceUnitPrice: settlement.avg_cost,
+        balanceQty: null,  // 本月合计不显示库存结余
+        balanceAmount: null,
+        balanceUnitPrice: null,
         remark: ''
       })
       
-      // 添加本年累计数据
-      const yearStart = `${year}-01-01`
-      const yearEnd = `${year}-12-31`
-      
-      // 获取本年累计数据
-      const yearSql = `
-        SELECT 
-          ii.quantity as inboundQty,
-          CASE 
-            WHEN (pi.invoice_type = '专票' OR pi.invoice_type = '专用发票') AND (pi.invoice_issued = 1 OR pi.invoice_issued = true) THEN ii.total_amount_ex
-            WHEN (pi.invoice_issued = 1 OR pi.invoice_issued = true) AND (ii.tax_rate = 0 OR ii.tax_rate IS NULL OR ii.tax_rate = '0%') AND (ii.allow_deduction = 1 OR ii.allow_deduction = true) THEN ii.total_amount_ex
-            ELSE ii.total_amount
-          END as inboundAmount,
-          'in' as direction
-        FROM purchase_inbound_items ii
-        JOIN purchase_inbound pi ON ii.inbound_id = pi.id
-        WHERE pi.warehouse_id = ?
-          AND pi.inbound_date >= ?
-          AND pi.inbound_date <= ?
-          AND ii.product_id = ?
-          AND pi.status != 'deleted'
-        UNION ALL
-        SELECT 
-          -ABS(pri.quantity) as inboundQty,
-          -ABS(CASE 
-            WHEN (pi.invoice_type = '专票' OR pi.invoice_type = '专用发票') AND (pi.invoice_issued = 1 OR pi.invoice_issued = true) THEN ii.total_amount_ex
-            WHEN (pi.invoice_issued = 1 OR pi.invoice_issued = true) AND (ii.tax_rate = 0 OR ii.tax_rate IS NULL OR ii.tax_rate = '0%') AND (ii.allow_deduction = 1 OR ii.allow_deduction = true) THEN ii.total_amount_ex
-            ELSE ii.total_amount
-          END) as inboundAmount,
-          'in' as direction
-        FROM purchase_return_items pri
-        JOIN purchase_returns pr ON pri.return_id = pr.id
-        LEFT JOIN purchase_inbound pi ON pr.original_inbound_no = pi.inbound_no
-        LEFT JOIN purchase_inbound_items ii ON pi.id = ii.inbound_id AND pri.product_id = ii.product_id
-          AND ii.id = (
-            SELECT MIN(ii2.id) FROM purchase_inbound_items ii2 
-            WHERE ii2.inbound_id = pi.id AND ii2.product_id = pri.product_id
-          )
-        WHERE pr.warehouse_id = ?
-          AND pr.return_date >= ?
-          AND pr.return_date <= ?
-          AND pri.product_id = ?
-          AND pr.status != 'deleted'
-      `
-      const yearInboundData = this.db.prepare(yearSql).all(
-        warehouseId, yearStart, yearEnd, productId,
-        warehouseId, yearStart, yearEnd, productId
-      ) as any[]
-      
+      // 添加本年累计数据 - 直接从成本结算表中累加 1 月到当前月的本月合计数据
       let yearInQty = 0
       let yearInAmt = 0
-      for (const row of yearInboundData) {
-        yearInQty += Number(row.inboundQty || 0)
-        yearInAmt += Number(row.inboundAmount || 0)
-      }
-      
-      // 获取本年出库数据
-      const yearOutboundSql = `
-        SELECT 
-          oi.quantity as outboundQty,
-          oi.cost_price as unit_price,
-          'out' as direction
-        FROM sales_outbound_items oi
-        JOIN sales_outbound so ON oi.outbound_id = so.id
-        WHERE so.warehouse_id = ?
-          AND so.outbound_date >= ?
-          AND so.outbound_date <= ?
-          AND oi.product_id = ?
-          AND so.status != 'deleted'
-        UNION ALL
-        SELECT 
-          -ABS(sri.quantity) as outboundQty,
-          sri.cost_price as unit_price,
-          'out' as direction
-        FROM sales_return_items sri
-        JOIN sales_returns sr ON sri.return_id = sr.id
-        WHERE sr.warehouse_id = ?
-          AND sr.return_date >= ?
-          AND sr.return_date <= ?
-          AND sri.product_id = ?
-          AND sr.status != 'deleted'
-      `
-      const yearOutboundData = this.db.prepare(yearOutboundSql).all(
-        warehouseId, yearStart, yearEnd, productId,
-        warehouseId, yearStart, yearEnd, productId
-      ) as any[]
-      
       let yearOutQty = 0
       let yearOutAmt = 0
-      for (const row of yearOutboundData) {
-        const qty = Number(row.outboundQty || 0)
-        const price = Number(row.unit_price || 0)
-        yearOutQty += qty
-        yearOutAmt += Math.abs(qty * price)
+      
+      // 查询本年 1 月到当前月的所有成本结算记录
+      for (let m = 1; m <= month; m++) {
+        const prevSettlement = this.getSettlement(productCode, warehouseId, year, m)
+        if (prevSettlement) {
+          yearInQty += prevSettlement.inbound_qty || 0
+          yearInAmt += prevSettlement.inbound_cost || 0
+          yearOutQty += prevSettlement.outbound_qty || 0
+          yearOutAmt += prevSettlement.outbound_cost || 0
+        }
       }
       
-      const yearAvgPrice = (yearInQty + yearOutQty) > 0 ? ((yearInAmt + Math.abs(yearOutAmt)) / (yearInQty + yearOutQty)) : 0
+      const yearAvgPrice = (yearInQty + Math.abs(yearOutQty)) > 0 ? ((yearInAmt + Math.abs(yearOutAmt)) / (yearInQty + Math.abs(yearOutQty))) : 0
       
       items.push({
         date: `${year}-${String(month).padStart(2, '0')}`,
@@ -1025,14 +953,14 @@ export class CostSettlementDatabase {
         type: 'yearly',
         direction: '',
         inboundQty: Number(yearInQty.toFixed(4)),
-        inboundPrice: Number(yearAvgPrice.toFixed(2)),
+        inboundPrice: Number(yearInQty !== 0 ? (yearInAmt / yearInQty).toFixed(2) : 0),
         inboundAmount: Number(yearInAmt.toFixed(2)),
         outboundQty: Number(yearOutQty.toFixed(4)),
-        outboundPrice: Number(yearAvgPrice.toFixed(2)),
+        outboundPrice: Number(yearOutQty !== 0 ? (yearOutAmt / yearOutQty).toFixed(2) : 0),
         outboundAmount: Number(yearOutAmt.toFixed(2)),
-        balanceQty: settlement.closing_qty,
-        balanceAmount: settlement.closing_cost,
-        balanceUnitPrice: settlement.avg_cost,
+        balanceQty: null,  // 本年累计不显示库存结余
+        balanceAmount: null,
+        balanceUnitPrice: null,
         remark: ''
       })
     }
