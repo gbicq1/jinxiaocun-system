@@ -3,7 +3,7 @@
   "productName": "JXC Inventory System",
   "copyright": "Copyright © 2024 进销存开发团队",
   "directories": {
-    "output": "release",
+    "output": "release2",
     "buildResources": "build"
   },
   "files": [
@@ -33,6 +33,11 @@
       "from": "electron/database.db",
       "to": "database.db",
       "filter": ["**/*"]
+    },
+    {
+      "from": "build/icon.ico",
+      "to": "icon.ico",
+      "filter": ["**/*"]
     }
   ],
   "win": {
@@ -57,8 +62,8 @@
     "allowElevation": true,
     "allowToChangeInstallationDirectory": true,
     "deleteAppDataOnUninstall": true,
-    "createDesktopShortcut": true,
-    "createStartMenuShortcut": true,
+    "createDesktopShortcut": false,
+    "createStartMenuShortcut": false,
     "shortcutName": "进销存管理系统",
     "installerLanguages": ["zh_CN", "en_US"],
     "language": "2052",
