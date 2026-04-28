@@ -40,6 +40,7 @@ const dbToCamelMappings: Record<string, string> = {
   unit_price: 'unitPrice',
   stock_quantity: 'stockQuantity',
   warning_quantity: 'warningQuantity',
+  tax_rate: 'taxRate',
   contact_person: 'contactPerson',
   contact_phone: 'contactPhone',
   contact_email: 'contactEmail',
@@ -103,6 +104,7 @@ const fieldMappings: Record<string, string> = {
   sellPrice: 'sell_price',
   stockQuantity: 'stock_quantity',
   warningQuantity: 'warning_quantity',
+  taxRate: 'tax_rate',
   // 仓库
   contactPerson: 'contact_person',
   contactPhone: 'contact_phone',
@@ -123,7 +125,7 @@ const keepOnlyExistingFields = (data: any, table: string) => {
   const existingFields: Record<string, string[]> = {
     purchase_inbound: ['inbound_no', 'order_id', 'warehouse_id', 'inbound_date', 'total_amount', 'status', 'remark', 'created_by'],
     sales_outbound: ['outbound_no', 'customer_id', 'warehouse_id', 'outbound_date', 'total_amount', 'status', 'remark', 'created_by', 'handler_name'],
-    products: ['code', 'name', 'category', 'unit', 'barcode', 'spec', 'cost_price', 'sell_price', 'stock_quantity', 'warning_quantity', 'status', 'remark'],
+    products: ['code', 'name', 'category', 'unit', 'barcode', 'spec', 'tax_rate', 'cost_price', 'sell_price', 'stock_quantity', 'warning_quantity', 'status', 'remark'],
     warehouses: ['code', 'name', 'address', 'contact_person', 'contact_phone', 'status', 'remark'],
     suppliers: ['code', 'name', 'contact_person', 'contact_phone', 'contact_email', 'address', 'bank_name', 'bank_account', 'status', 'remark'],
     customers: ['code', 'name', 'contact_person', 'contact_phone', 'contact_email', 'address', 'credit_limit', 'status', 'remark']

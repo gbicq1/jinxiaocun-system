@@ -14,25 +14,72 @@
           <el-icon><Download /></el-icon>
           导出 Excel
         </el-button>
-        
-        <!-- 查询凭证 -->
-        <el-input
-          v-model="searchQuery"
-          placeholder="搜索凭证号/产品编码/名称"
-          style="width: 300px; margin-left: auto"
-          clearable
-          @clear="handleSearch"
-        >
-          <template #append>
-            <el-button @click="handleSearch">
-              <el-icon><Search /></el-icon>
-            </el-button>
-          </template>
-        </el-input>
       </div>
 
+      <el-card style="margin-bottom: 20px;">
+        <template #header>
+          <div class="card-header">
+            <span>查询条件</span>
+            <el-button style="float: right; padding: 3px 0" type="text" @click="clearFilters">清空</el-button>
+          </div>
+        </template>
+        <el-form :inline="true" :model="queryForm" class="query-form">
+          <el-form-item label="日期范围">
+            <el-date-picker
+              v-model="queryForm.dateRange"
+              type="daterange"
+              range-separator="至"
+              start-placeholder="开始日期"
+              end-placeholder="结束日期"
+              value-format="YYYY-MM-DD"
+              style="width: 240px"
+            />
+          </el-form-item>
+          <el-form-item label="供应商">
+            <el-select
+              v-model="queryForm.supplierId"
+              placeholder="请选择供应商"
+              clearable
+              filterable
+              style="width: 150px"
+            >
+              <el-option
+                v-for="supplier in suppliers"
+                :key="supplier.id"
+                :label="supplier.name"
+                :value="supplier.id"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="金额范围">
+            <el-input-number
+              v-model="queryForm.minAmount"
+              :min="0"
+              :precision="2"
+              :step="0.01"
+              controls-position="right"
+              placeholder="最小金额"
+              style="width: 120px"
+            />
+            <span style="margin: 0 10px">-</span>
+            <el-input-number
+              v-model="queryForm.maxAmount"
+              :min="0"
+              :precision="2"
+              :step="0.01"
+              controls-position="right"
+              placeholder="最大金额"
+              style="width: 120px"
+            />
+          </el-form-item>
+          <el-form-item>
+            <el-button type="primary" @click="handleQuery">查询</el-button>
+          </el-form-item>
+        </el-form>
+      </el-card>
+
       <el-table
-        :data="inboundList"
+        :data="filteredInbounds"
         style="width: 100%"
         @selection-change="handleSelectionChange"
       >
@@ -53,6 +100,13 @@
         <el-table-column prop="totalAmount" label="总金额" width="120">
           <template #default="{ row }">
             ¥{{ row.totalAmount?.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="paidAmount" label="已付款" width="120">
+          <template #default="{ row }">
+            <span :style="{ color: (row.paidAmount || 0) > 0 ? '#67c23a' : '#999' }">
+              ¥{{ (row.paidAmount || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
+            </span>
           </template>
         </el-table-column>
         <el-table-column prop="operator" label="经办人" width="100" />
@@ -203,7 +257,7 @@
           border
         >
           <el-table-column label="序号" width="60" type="index" />
-          <el-table-column label="商品" min-width="200">
+          <el-table-column label="商品" min-width="130">
             <template #default="{ row, $index }">
               <el-select
                 v-model="row.productId"
@@ -221,7 +275,7 @@
               </el-select>
             </template>
           </el-table-column>
-          <el-table-column label="商品名称" min-width="150">
+          <el-table-column label="商品名称" min-width="100">
             <template #default="{ row }">
               <el-input v-model="row.productName" disabled />
             </template>
@@ -361,7 +415,12 @@
         <el-alert title="单据汇总" type="success" :closable="false" show-icon style="margin: 20px 0" />
 
         <el-row :gutter="20" style="margin-bottom: 10px">
-          <el-col :span="24" style="text-align: right">
+          <el-col :span="12">
+            <div style="font-size: 14px">已付款：
+              <el-input-number v-model="formData.paidAmount" :min="0" :precision="2" :controls="false" style="width:160px" @focus="handlePaidAmountFocus" /> 元
+            </div>
+          </el-col>
+          <el-col :span="12" style="text-align: right">
             <div style="font-size: 14px">发票：
               <el-switch v-model="formData.invoiceIssued" active-text="已开票" inactive-text="未开票" active-color="#13ce66" inactive-color="#ff4949" @change="handleInvoiceIssuedChange" />
               <span v-if="formData.invoiceIssued" style="margin-left: 20px">
@@ -382,12 +441,17 @@
         </el-row>
 
         <el-row :gutter="20" style="background: #f5f7fa; padding: 15px; border-radius: 4px">
-          <el-col :span="12">
+          <el-col :span="8">
             <div style="font-size: 16px; font-weight: bold">
               商品行数：{{ formData.items?.length || 0 }}
             </div>
           </el-col>
-          <el-col :span="12" style="text-align: right">
+          <el-col :span="8" style="text-align: center">
+            <div style="font-size: 16px; font-weight: bold; color: #67c23a">
+              已付款：¥{{ (formData.paidAmount || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
+            </div>
+          </el-col>
+          <el-col :span="8" style="text-align: right">
             <div style="font-size: 18px; font-weight: bold; color: #f56c6c">
               合计金额：¥{{ totalAmount.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
             </div>
@@ -416,6 +480,7 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import dayjs from 'dayjs'
 import exportToCsv from '../../utils/exportCsv'
+import * as XLSX from 'xlsx'
 import { handleDocumentSave, DocumentType } from '@/utils/cost-recalculation'
 import { db } from '@/utils/db-ipc'
 
@@ -448,6 +513,7 @@ interface InboundRecord {
   operator: string
   items: InboundItem[]
   totalAmount: number
+  paidAmount: number
   remark?: string
   invoiceIssued?: boolean
   invoiceType?: string
@@ -491,6 +557,50 @@ const selectedRow = ref<InboundRecord | null>(null)
 const defaultWarehouseId = ref<number | undefined>()
 const defaultHandlerId = ref<number | undefined>()
 
+const queryForm = reactive({
+  dateRange: [] as string[],
+  supplierId: undefined as number | undefined,
+  minAmount: undefined as number | undefined,
+  maxAmount: undefined as number | undefined
+})
+
+const filteredInbounds = computed(() => {
+  const sourceArray = inboundList.value || []
+  let filtered = [...sourceArray]
+
+  if (queryForm.dateRange && Array.isArray(queryForm.dateRange) && queryForm.dateRange.length === 2) {
+    const [startDate, endDate] = queryForm.dateRange
+    if (startDate && endDate) {
+      filtered = filtered.filter(record => {
+        if (!record.voucherDate) return false
+        return record.voucherDate >= startDate && record.voucherDate <= endDate
+      })
+    }
+  }
+
+  if (queryForm.supplierId !== undefined && queryForm.supplierId !== null) {
+    filtered = filtered.filter(record => record.supplierId === queryForm.supplierId)
+  }
+
+  if (typeof queryForm.minAmount === 'number' && !isNaN(queryForm.minAmount)) {
+    filtered = filtered.filter(record => record.totalAmount >= queryForm.minAmount)
+  }
+  if (typeof queryForm.maxAmount === 'number' && !isNaN(queryForm.maxAmount)) {
+    filtered = filtered.filter(record => record.totalAmount <= queryForm.maxAmount)
+  }
+
+  filtered.sort((a: any, b: any) => {
+    const dateA = new Date(a.voucherDate || '1970-01-01').getTime()
+    const dateB = new Date(b.voucherDate || '1970-01-01').getTime()
+    if (dateA !== dateB) return dateB - dateA
+    const timeA = a.createdAt || a.voucherDate || '1970-01-01'
+    const timeB = b.createdAt || b.voucherDate || '1970-01-01'
+    return new Date(timeB).getTime() - new Date(timeA).getTime()
+  })
+
+  return filtered
+})
+
 // 表单数据
 const formData = reactive<InboundRecord>({
   voucherNo: '',
@@ -502,6 +612,7 @@ const formData = reactive<InboundRecord>({
   operator: '',
   items: [],
   totalAmount: 0,
+  paidAmount: 0,
   remark: '',
   invoiceIssued: false,
   invoiceType: '普票'
@@ -512,6 +623,7 @@ const rules = {
   voucherNo: [{ required: true, message: '请输入凭证号', trigger: 'blur' }],
   voucherDate: [{ required: true, message: '请选择入库日期', trigger: 'change' }],
   supplierId: [{ required: true, message: '请选择供应商', trigger: 'change' }],
+  warehouseId: [{ required: true, message: '请选择仓库', trigger: 'change' }],
   items: [{ required: true, message: '请至少添加一行商品', trigger: 'blur' }]
 }
 
@@ -559,7 +671,8 @@ const loadProducts = async () => {
         name: p.name,
         specification: p.specification || p.spec || '',
         unit: p.unit || '',
-        costPrice: p.costPrice || 0
+        costPrice: p.costPrice || 0,
+        taxRate: p.taxRate || p.tax_rate || ''
       }))
     console.log('加载产品列表成功（数据库），共', productList.value.length, '个产品')
   } catch (error) {
@@ -627,6 +740,7 @@ const handleAdd = () => {
     operator: localStorage.getItem('currentUser') ? JSON.parse(localStorage.getItem('currentUser')!).name : '系统用户',
     items: [],
     totalAmount: 0,
+    paidAmount: 0,
     remark: '',
     invoiceIssued: false,
     invoiceType: '普票'
@@ -741,6 +855,12 @@ const handleFocus = (row: any, field: string) => {
   }
 }
 
+const handlePaidAmountFocus = () => {
+  if (formData.paidAmount === 0 || formData.paidAmount === '0') {
+    formData.paidAmount = '' as any
+  }
+}
+
 // 处理商品选择变化
 const handleProductChange = (index: number, productId: number) => {
   const product = productList.value.find(p => p.id === productId)
@@ -750,6 +870,10 @@ const handleProductChange = (index: number, productId: number) => {
     item.specification = product.spec || product.specification || product.code || ''
     item.unit = product.unit || ''
     item.unitPrice = product.costPrice || 0
+    const productTaxRate = product.taxRate || product.tax_rate || ''
+    if (productTaxRate && productTaxRate !== '') {
+      item.taxRate = productTaxRate
+    }
     item._lastEdited = 'unitIncl'
     calculateRowTotal(item)
   }
@@ -1000,6 +1124,10 @@ const handleSubmit = async () => {
         ElMessage.warning(`第 ${i + 1} 行请选择商品`)
         return
       }
+      if (!formData.items[i].quantity || Number(formData.items[i].quantity) <= 0) {
+        ElMessage.warning(`第 ${i + 1} 行商品数量必须大于0`)
+        return
+      }
     }
     
     // 计算总金额
@@ -1007,7 +1135,6 @@ const handleSubmit = async () => {
     
     // 手动转换字段：驼峰 → 下划线
     if (formData.id) {
-      // 更新
       const updateData = {
         id: formData.id,
         inbound_no: formData.voucherNo,
@@ -1015,7 +1142,7 @@ const handleSubmit = async () => {
         supplier_id: formData.supplierId || null,
         warehouse_id: formData.warehouseId || null,
         total_amount: formData.totalAmount,
-        paid_amount: 0,
+        paid_amount: formData.paidAmount || 0,
         invoice_type: formData.invoiceType || null,
         invoice_issued: formData.invoiceIssued ? 1 : 0,
         status: 'completed',
@@ -1037,14 +1164,13 @@ const handleSubmit = async () => {
       await db.updateInbound(updateData)
       ElMessage.success('更新成功')
     } else {
-      // 新增
       const inboundData = {
         inbound_no: formData.voucherNo,
         inbound_date: formData.voucherDate,
         supplier_id: formData.supplierId || null,
         warehouse_id: formData.warehouseId || null,
         total_amount: formData.totalAmount,
-        paid_amount: 0,
+        paid_amount: formData.paidAmount || 0,
         invoice_type: formData.invoiceType || null,
         invoice_issued: formData.invoiceIssued ? 1 : 0,
         status: 'completed',
@@ -1094,6 +1220,17 @@ const handleSearch = () => {
   loadInboundList()
 }
 
+const handleQuery = () => {
+  currentPage.value = 1
+}
+
+const clearFilters = () => {
+  queryForm.dateRange = []
+  queryForm.supplierId = undefined
+  queryForm.minAmount = undefined
+  queryForm.maxAmount = undefined
+}
+
 // 分页处理
 const handleSizeChange = (size: number) => {
   pageSize.value = size
@@ -1124,13 +1261,54 @@ const handlePrintCurrent = () => {
 
 // 导出 Excel
 const handleExport = () => {
-  const columns = [
-    { label: '单号', key: 'voucherNo' },
-    { label: '入库日期', key: 'voucherDate' },
-    { label: '供应商', key: 'supplierName' },
-    { label: '总金额', key: 'totalAmount' }
+  const exportData = selectedRecords.value.length > 0 ? selectedRecords.value : inboundList.value
+  if (exportData.length === 0) {
+    ElMessage.warning('没有可导出的单据，请先勾选要导出的单据')
+    return
+  }
+
+  const headers = [
+    '入库单号', '入库日期', '供应商', '仓库', '经办人',
+    '商品编码', '商品名称', '规格型号', '单位', '数量',
+    '单价(不含税)', '单价(含税)', '税率', '税额', '金额(不含税)', '金额(含税)',
+    '是否开票', '发票类型', '加计扣除',
+    '已付款', '合计金额', '备注'
   ]
-  exportToCsv('inventory-inbounds.csv', columns, inboundList.value)
+
+  const rows: any[][] = []
+  for (const record of exportData) {
+    const items = record.items || []
+    const invoiceIssuedStr = record.invoiceIssued ? '已开票' : '未开票'
+    const invoiceTypeStr = record.invoiceIssued ? (record.invoiceType || '普票') : ''
+    if (items.length === 0) {
+      rows.push([
+        record.voucherNo, record.voucherDate, record.supplierName,
+        record.warehouseName || '', record.operator || '',
+        '', '', '', '', '',
+        '', '', '', '', '', '',
+        invoiceIssuedStr, invoiceTypeStr, '',
+        record.paidAmount || 0, record.totalAmount, record.remark || ''
+      ])
+    } else {
+      for (const item of items) {
+        rows.push([
+          record.voucherNo, record.voucherDate, record.supplierName,
+          record.warehouseName || '', record.operator || '',
+          item.productCode || '', item.productName, item.specification, item.unit, item.quantity,
+          item.unitPriceEx || 0, item.unitPrice || 0, item.taxRate, item.taxAmount || 0, item.totalAmountEx || 0, item.totalAmount || 0,
+          invoiceIssuedStr, invoiceTypeStr, item.allowDeduction ? '是' : '否',
+          record.paidAmount || 0, record.totalAmount, record.remark || ''
+        ])
+      }
+    }
+  }
+
+  const wb = XLSX.utils.book_new()
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows])
+  ws['!cols'] = headers.map((_, i) => ({ wch: i === 0 ? 22 : 14 }))
+  XLSX.utils.book_append_sheet(wb, ws, '采购入库单')
+  XLSX.writeFile(wb, `采购入库单_${dayjs().format('YYYYMMDDHHmmss')}.xlsx`)
+  ElMessage.success(`成功导出 ${exportData.length} 张单据`)
 }
 
 // 打印单据
@@ -1140,6 +1318,7 @@ const handlePrint = (row: InboundRecord) => {
 
 // 打印入库单
 const printInboundForm = (row: InboundRecord) => {
+  const hasDeduction = row.items.some((item: any) => item.allowDeduction)
   const itemsHtml = row.items.map((item, index) => `
       <tr>
         <td>${index + 1}</td>
@@ -1147,14 +1326,19 @@ const printInboundForm = (row: InboundRecord) => {
         <td>${item.specification}</td>
         <td>${item.quantity}</td>
         <td>${item.unit}</td>
-        <td>${item.unitPrice.toFixed(2)}</td>
+        <td>${(item.unitPriceEx ?? 0).toFixed(2)}</td>
+        <td>${(item.unitPrice ?? 0).toFixed(2)}</td>
         <td>${item.taxRate}%</td>
-        <td>${item.taxAmount.toFixed(2)}</td>
+        <td>${item.allowDeduction ? '是' : '否'}</td>
+        <td>${(item.taxAmount || 0).toFixed(2)}</td>
         <td>${item.totalAmount.toFixed(2)}</td>
+        ${hasDeduction ? `<td>${(item.deductionAmount || 0).toFixed(2)}</td>` : ''}
       </tr>
     `).join('')
 
   const companyName = localStorage.getItem('companyName') || '荆州供销农业服务有限公司'
+  const invoiceStatus = row.invoiceIssued ? '已开票' : '未开票'
+  const invoiceTypeStr = row.invoiceIssued ? (row.invoiceType || '普票') : ''
 
   const printContent = `
     <html>
@@ -1164,9 +1348,10 @@ const printInboundForm = (row: InboundRecord) => {
           body { font-family: Arial, sans-serif; padding: 20px; }
           .header { text-align: center; margin-bottom: 20px; }
           .table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
-          .table th, .table td { border: 1px solid #ddd; padding: 8px; }
+          .table th, .table td { border: 1px solid #ddd; padding: 8px; text-align: center; }
           .table th { background-color: #f5f5f5; }
-          .info { margin-bottom: 10px; }
+          .info { margin-bottom: 10px; display: flex; flex-wrap: wrap; }
+          .info div { width: 50%; margin-bottom: 5px; }
         </style>
       </head>
       <body>
@@ -1178,8 +1363,10 @@ const printInboundForm = (row: InboundRecord) => {
         <div class="info">
           <div>入库日期：${row.voucherDate}</div>
           <div>供应商：${row.supplierName}</div>
+          <div>仓库：${row.warehouseName || '-'}</div>
           <div>经办人：${row.operator}</div>
-          <div>备注：${row.remark || '-'}</div>
+          <div>发票状态：${invoiceStatus}${invoiceTypeStr ? '（' + invoiceTypeStr + '）' : ''}</div>
+          <div>已付款：¥${(row.paidAmount || 0).toFixed(2)}</div>
         </div>
         <table class="table">
           <thead>
@@ -1189,17 +1376,26 @@ const printInboundForm = (row: InboundRecord) => {
               <th>规格</th>
               <th>数量</th>
               <th>单位</th>
-              <th>单价<br/>(不含税)</th>
+              <th>单价(不含税)</th>
+              <th>单价(含税)</th>
               <th>税率</th>
+              <th>加计扣除</th>
               <th>税额</th>
               <th>金额</th>
+              ${hasDeduction ? '<th>加计扣除金额</th>' : ''}
             </tr>
           </thead>
           <tbody>
             ${itemsHtml}
           </tbody>
         </table>
-        <div style="text-align: right; font-weight: bold;">总金额：${row.totalAmount.toFixed(2)}</div>
+        <div style="text-align: right; font-weight: bold;">总金额：¥${row.totalAmount.toFixed(2)}</div>
+        ${hasDeduction ? `<div style="text-align: right; font-weight: bold; color: #67c23a;">加计扣除总额：¥${row.items.reduce((sum: number, item: any) => sum + (item.deductionAmount || 0), 0).toFixed(2)}</div>` : ''}
+        <div style="margin-top: 10px; border: 1px solid #000; padding: 8px; text-align: left;">备注：${row.remark || '-'}</div>
+        <div style="margin-top: 15px; display: flex; justify-content: space-between; align-items: center;">
+          <div>操作员：${row.operator}</div>
+          <div>经办人签字：____________________</div>
+        </div>
         <div style="text-align: right; margin-top: 10px;">打印时间：${dayjs().format('YYYY-MM-DD HH:mm:ss')}</div>
       </body>
     </html>
@@ -1221,6 +1417,7 @@ const printBatchInboundForms = (rows: InboundRecord[]) => {
   const companyName = localStorage.getItem('companyName') || '荆州供销农业服务有限公司'
   
   const allFormsHtml = rows.map((row, formIndex) => {
+    const hasDeduction = row.items.some((item: any) => item.allowDeduction)
     const itemsHtml = row.items.map((item, index) => `
         <tr>
           <td>${index + 1}</td>
@@ -1228,12 +1425,18 @@ const printBatchInboundForms = (rows: InboundRecord[]) => {
           <td>${item.specification}</td>
           <td>${item.quantity}</td>
           <td>${item.unit}</td>
-          <td>${item.unitPrice.toFixed(2)}</td>
+          <td>${(item.unitPriceEx ?? 0).toFixed(2)}</td>
+          <td>${(item.unitPrice ?? 0).toFixed(2)}</td>
           <td>${item.taxRate}%</td>
-          <td>${item.taxAmount.toFixed(2)}</td>
+          <td>${item.allowDeduction ? '是' : '否'}</td>
+          <td>${(item.taxAmount || 0).toFixed(2)}</td>
           <td>${item.totalAmount.toFixed(2)}</td>
+          ${hasDeduction ? `<td>${(item.deductionAmount || 0).toFixed(2)}</td>` : ''}
         </tr>
       `).join('')
+
+    const invoiceStatus = row.invoiceIssued ? '已开票' : '未开票'
+    const invoiceTypeStr = row.invoiceIssued ? (row.invoiceType || '普票') : ''
 
     return `
       <div class="form-container" style="page-break-after: always; margin-bottom: 40px;">
@@ -1242,11 +1445,13 @@ const printBatchInboundForms = (rows: InboundRecord[]) => {
           <h3>入库单</h3>
           <p>凭证号：${row.voucherNo}</p>
         </div>
-        <div class="info" style="margin-bottom: 10px;">
-          <div>入库日期：${row.voucherDate}</div>
-          <div>供应商：${row.supplierName}</div>
-          <div>经办人：${row.operator}</div>
-          <div>备注：${row.remark || '-'}</div>
+        <div class="info" style="margin-bottom: 10px; display: flex; flex-wrap: wrap;">
+          <div style="width: 50%; margin-bottom: 5px;">入库日期：${row.voucherDate}</div>
+          <div style="width: 50%; margin-bottom: 5px;">供应商：${row.supplierName}</div>
+          <div style="width: 50%; margin-bottom: 5px;">仓库：${row.warehouseName || '-'}</div>
+          <div style="width: 50%; margin-bottom: 5px;">经办人：${row.operator}</div>
+          <div style="width: 50%; margin-bottom: 5px;">发票状态：${invoiceStatus}${invoiceTypeStr ? '（' + invoiceTypeStr + '）' : ''}</div>
+          <div style="width: 50%; margin-bottom: 5px;">已付款：¥${(row.paidAmount || 0).toFixed(2)}</div>
         </div>
         <table class="table" style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
           <thead>
@@ -1256,17 +1461,26 @@ const printBatchInboundForms = (rows: InboundRecord[]) => {
               <th style="border: 1px solid #ddd; padding: 8px; background-color: #f5f5f5;">规格</th>
               <th style="border: 1px solid #ddd; padding: 8px; background-color: #f5f5f5;">数量</th>
               <th style="border: 1px solid #ddd; padding: 8px; background-color: #f5f5f5;">单位</th>
-              <th style="border: 1px solid #ddd; padding: 8px; background-color: #f5f5f5;">单价<br/>(不含税)</th>
+              <th style="border: 1px solid #ddd; padding: 8px; background-color: #f5f5f5;">单价(不含税)</th>
+              <th style="border: 1px solid #ddd; padding: 8px; background-color: #f5f5f5;">单价(含税)</th>
               <th style="border: 1px solid #ddd; padding: 8px; background-color: #f5f5f5;">税率</th>
+              <th style="border: 1px solid #ddd; padding: 8px; background-color: #f5f5f5;">加计扣除</th>
               <th style="border: 1px solid #ddd; padding: 8px; background-color: #f5f5f5;">税额</th>
               <th style="border: 1px solid #ddd; padding: 8px; background-color: #f5f5f5;">金额</th>
+              ${hasDeduction ? '<th style="border: 1px solid #ddd; padding: 8px; background-color: #f5f5f5;">加计扣除金额</th>' : ''}
             </tr>
           </thead>
           <tbody>
             ${itemsHtml}
           </tbody>
         </table>
-        <div style="text-align: right; font-weight: bold;">总金额：${row.totalAmount.toFixed(2)}</div>
+        <div style="text-align: right; font-weight: bold;">总金额：¥${row.totalAmount.toFixed(2)}</div>
+        ${hasDeduction ? `<div style="text-align: right; font-weight: bold; color: #67c23a;">加计扣除总额：¥${row.items.reduce((sum: number, item: any) => sum + (item.deductionAmount || 0), 0).toFixed(2)}</div>` : ''}
+        <div style="margin-top: 10px; border: 1px solid #000; padding: 8px; text-align: left;">备注：${row.remark || '-'}</div>
+        <div style="margin-top: 15px; display: flex; justify-content: space-between; align-items: center;">
+          <div>操作员：${row.operator}</div>
+          <div>经办人签字：____________________</div>
+        </div>
         <div style="text-align: right; margin-top: 10px; border-top: 1px solid #ddd; padding-top: 10px;">
           第 ${formIndex + 1} 张 / 共 ${rows.length} 张
         </div>
@@ -1340,5 +1554,17 @@ onMounted(() => {
 .action-buttons {
   display: flex;
   gap: 5px;
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.query-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 </style>

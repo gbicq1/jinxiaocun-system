@@ -1,7 +1,7 @@
 <template>
   <el-container class="layout-container">
     <el-aside width="220px" class="sidebar">
-      <div class="logo">
+      <div class="logo" @click="goHome" style="cursor: pointer;">
         <div class="company">荆州供销农业服务有限公司</div>
         <h2>进销存系统</h2>
       </div>
@@ -12,6 +12,11 @@
         text-color="#bfcbd9"
         active-text-color="#409EFF"
       >
+        <el-menu-item index="/dashboard">
+          <el-icon><HomeFilled /></el-icon>
+          <span>系统首页</span>
+        </el-menu-item>
+
         <el-sub-menu index="setup">
           <template #title>
             <el-icon><Setting /></el-icon>
@@ -71,8 +76,6 @@
             <el-icon><Setting /></el-icon>
             <span>系统设置</span>
           </template>
-          <el-menu-item index="/system/users">用户管理</el-menu-item>
-          <el-menu-item index="/system/roles">角色管理</el-menu-item>
           <el-menu-item index="/system/employees">职工档案</el-menu-item>
           <el-menu-item index="/system/barcode-settings">条码扫描设置</el-menu-item>
           <el-menu-item index="/system/logs">操作日志</el-menu-item>
@@ -100,12 +103,17 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 
 const route = useRoute()
+const router = useRouter()
 
 const activeMenu = computed(() => route.path)
 const currentTitle = computed(() => (route.meta?.title as string) || '进销存系统')
+
+const goHome = () => {
+  router.push('/dashboard')
+}
 </script>
 
 <style scoped>
@@ -126,6 +134,11 @@ const currentTitle = computed(() => (route.meta?.title as string) || '进销存�
   justify-content: center;
   background-color: #2b3a4b;
   color: #fff;
+  transition: background-color 0.3s;
+}
+
+.logo:hover {
+  background-color: #36495e;
 }
 
 .logo h2 {

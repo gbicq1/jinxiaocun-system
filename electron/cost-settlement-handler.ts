@@ -38,7 +38,10 @@ export class CostSettlementHandler {
       return this.costDb.isSettled(year, month)
     })
 
-    // 获取已结算期间列表
+    ipcMain.handle('cost:has-settlement-data', async (event, { year, month }) => {
+      return this.costDb.hasSettlementData(year, month)
+    })
+
     ipcMain.handle('cost:get-settled-periods', async () => {
       return this.costDb.getSettledPeriods()
     })

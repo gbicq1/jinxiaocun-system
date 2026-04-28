@@ -1,26 +1,32 @@
 import { db } from '@/utils/db-ipc'
 
-function normalizeCostParams(params: any): { year: number; month: number; productSearch?: string; warehouseId?: number } {
-  let year: number, month: number
-
-  const dateSource = params.periodRange || params.startDate
-  if (dateSource) {
-    const dateStr = Array.isArray(dateSource) ? dateSource[0] : String(dateSource)
-    const parts = dateStr.split('-').map(Number)
-    year = parts[0]
-    month = parts[1]
-  } else {
-    const now = new Date()
-    year = now.getFullYear()
-    month = now.getMonth() + 1
-  }
-
-  return {
-    year,
-    month,
+function normalizeCostParams(params: any): { startDate?: string; endDate?: string; year?: number; month?: number; productSearch?: string; warehouseId?: number } {
+  const result: any = {
     productSearch: params.productSearch,
     warehouseId: params.warehouseId || params.warehouse
   }
+  
+  if (params.startDate && params.endDate) {
+    result.startDate = params.startDate
+    result.endDate = params.endDate
+    const parts = params.startDate.split('-').map(Number)
+    result.year = parts[0]
+    result.month = parts[1]
+  } else {
+    const dateSource = params.periodRange || params.startDate
+    if (dateSource) {
+      const dateStr = Array.isArray(dateSource) ? dateSource[0] : String(dateSource)
+      const parts = dateStr.split('-').map(Number)
+      result.year = parts[0]
+      result.month = parts[1]
+    } else {
+      const now = new Date()
+      result.year = now.getFullYear()
+      result.month = now.getMonth() + 1
+    }
+  }
+
+  return result
 }
 
 /**
@@ -31,36 +37,47 @@ export async function getCostSettlementList(params: any) {
     const normalizedParams = normalizeCostParams(params)
     console.log('成本结算 API 调用参数:', normalizedParams)
     
-    // 直接使用 cost-settlement-query，参数更明确
-    const result = await db.getCostSettlements(
-      normalizedParams.year,
-      normalizedParams.month,
-      normalizedParams.productSearch,
-      normalizedParams.warehouseId
-    )
+    let result: any[]
+    if (normalizedParams.startDate && normalizedParams.endDate) {
+      result = await db.getCostSettlementsByDateRange(
+        normalizedParams.startDate,
+        normalizedParams.endDate,
+        normalizedParams.productSearch,
+        normalizedParams.warehouseId
+      )
+    } else {
+      result = await db.getCostSettlements(
+        normalizedParams.year,
+        normalizedParams.month,
+        normalizedParams.productSearch,
+        normalizedParams.warehouseId
+      )
+    }
     
     console.log('成本结算 API 返回结果:', result)
     
     if (result && Array.isArray(result) && result.length > 0) {
       const formattedSettlements = result.map(item => ({
-        productCode: item.product_code,
-        productName: item.product_name,
+        productCode: item.productCode || item.product_code,
+        productName: item.productName || item.product_name,
         specification: item.specification || item.spec || '',
         unit: item.unit || '',
-        warehouseId: item.warehouse_id,
-        warehouseName: item.warehouse_name,
-        openingQty: item.opening_qty || 0,
-        openingCost: item.opening_cost || 0,
-        inboundQty: item.inbound_qty || 0,
-        inboundUnitPrice: item.inbound_unit_price || 0,
-        inboundCost: item.inbound_cost || 0,
-        outboundQty: item.outbound_qty || 0,
-        outboundCost: item.outbound_cost || 0,
-        avgCost: item.avg_cost || 0,
-        avgPrice: item.avg_cost || 0,
-        closingQty: item.closing_qty || 0,
-        closingUnitPrice: item.closing_unit_price || 0,
-        closingCost: item.closing_cost || 0
+        warehouseId: item.warehouseId || item.warehouse_id,
+        warehouseName: item.warehouseName || item.warehouse_name,
+        openingQty: item.openingQty ?? item.opening_qty ?? 0,
+        openingCost: item.openingCost ?? item.opening_cost ?? 0,
+        inboundQty: item.inboundQty ?? item.inbound_qty ?? 0,
+        inboundUnitPrice: item.inboundUnitPrice ?? item.inbound_unit_price ?? 0,
+        inboundCost: item.inboundCost ?? item.inbound_cost ?? 0,
+        inboundTaxAmount: item.inboundTaxAmount ?? item.inbound_tax_amount ?? null,
+        transferInCost: item.transferInCost ?? item.transfer_in_cost ?? 0,
+        outboundQty: item.outboundQty ?? item.outbound_qty ?? 0,
+        outboundCost: item.outboundCost ?? item.outbound_cost ?? 0,
+        avgCost: item.avgCost ?? item.avg_cost ?? 0,
+        avgPrice: item.avgPrice ?? item.avg_cost ?? 0,
+        closingQty: item.closingQty ?? item.closing_qty ?? 0,
+        closingUnitPrice: item.closingUnitPrice ?? item.closing_unit_price ?? 0,
+        closingCost: item.closingCost ?? item.closing_cost ?? 0
       }))
       console.log('格式化后的数据:', formattedSettlements.length, '条')
       return { success: true, data: formattedSettlements }
@@ -79,21 +96,47 @@ export async function getCostSettlementList(params: any) {
 export async function getSalesCostSummary(params: any) {
   try {
     const normalizedParams = normalizeCostParams(params)
+    console.log('[getSalesCostSummary] 调用参数:', normalizedParams)
+    
     const result = await db.getSalesCostSummary(normalizedParams)
+    console.log('[getSalesCostSummary] 原始返回数据:', result)
+    console.log('[getSalesCostSummary] 原始数据类型:', typeof result, Array.isArray(result) ? 'Array' : 'Not Array')
+    
     if (result && Array.isArray(result)) {
-      const formattedSummary = result.map(item => ({
-        productCode: item.product_code,
-        productName: item.product_name,
-        salesQty: item.sales_qty,
-        salesReturnQty: item.sales_return_qty,
-        netSalesQty: item.net_sales_qty,
-        salesCost: item.sales_cost,
-        salesReturnCost: item.sales_return_cost,
-        netSalesCost: item.net_sales_cost,
-        avgCost: item.avg_cost
-      }))
+      const formattedSummary = result.map(item => {
+        const qty = Number(item.total_qty || 0)
+        const salesAmount = Number(item.total_sales_amount || 0)
+        const salesAmountEx = Number(item.total_sales_amount_ex || 0)
+        const salesTaxAmount = Number(item.total_tax_amount || 0)
+        const costAmount = Number(item.total_cost_amount || 0)
+        
+        return {
+          productCode: item.product_code,
+          productName: item.product_name,
+          specification: item.specification || item.spec || '',
+          unit: item.unit || '',
+          warehouseId: item.warehouse_id,
+          warehouseName: item.warehouse_name,
+          salesQty: qty,
+          salesAmount: salesAmount,
+          salesUnitPrice: qty !== 0 ? salesAmount / Math.abs(qty) : 0,
+          salesAmountEx: salesAmountEx,
+          salesUnitPriceEx: qty !== 0 ? salesAmountEx / Math.abs(qty) : 0,
+          salesTaxAmount: salesTaxAmount,
+          salesCost: costAmount,
+          salesCostUnitPrice: qty !== 0 ? costAmount / Math.abs(qty) : 0,
+          grossProfit: salesAmount - costAmount,
+          grossProfitRate: costAmount !== 0 ? (salesAmount - costAmount) / Math.abs(costAmount) : 0,
+          profit: salesAmount - costAmount,
+          profitRate: costAmount !== 0 ? (salesAmount - costAmount) / Math.abs(costAmount) : 0,
+          docCount: Number(item.doc_count || 0)
+        }
+      })
+      console.log('[getSalesCostSummary] 格式化后数据:', formattedSummary)
+      console.log('[getSalesCostSummary] 格式化后数据长度:', formattedSummary.length)
       return { success: true, data: formattedSummary }
     }
+    console.warn('[getSalesCostSummary] 返回数据为空或非数组', result)
     return { success: false, message: '查询失败或无数据', data: [] }
   } catch (error) {
     console.error('获取销售成本统计失败:', error)
@@ -170,6 +213,22 @@ export async function initializeCostData() {
   } catch (error) {
     console.error('初始化成本数据失败:', error)
     return { success: false, message: '初始化失败' }
+  }
+}
+
+/**
+ * 计算成本数据但不锁定（用于月份卡片点击时快速计算）
+ */
+export async function calculateCostWithoutLock(params: { year: number; month: number }) {
+  try {
+    const result = await db.calculateCostWithoutLock(params)
+    if (result) {
+      return { success: true, count: result.count, message: result.message }
+    }
+    return { success: false, message: '计算失败' }
+  } catch (error) {
+    console.error('计算成本数据失败:', error)
+    return { success: false, message: '计算失败' }
   }
 }
 

@@ -73,14 +73,16 @@ export class BackupScheduler {
   reloadConfig(): void {
     console.log('重新加载备份配置')
     const config = this.backup.getBackupConfig()
-    const newIntervalMs = config.autoBackupInterval * 24 * 60 * 60 * 1000
     
-    // 只有当配置真正改变时才重启
+    if (!config.autoBackupEnabled) {
+      this.stop()
+      return
+    }
+
+    const newIntervalMs = config.autoBackupInterval * 24 * 60 * 60 * 1000
     if (newIntervalMs !== this.intervalMs || !this.timer) {
       console.log('配置已改变，重启定时备份')
-      this.start(false) // 不立即执行备份
-    } else {
-      console.log('配置未改变，保持现有定时备份')
+      this.start(false)
     }
   }
 }

@@ -74,22 +74,50 @@ declare global {
       // 库存查询
       inventoryQuery: (warehouseId?: number, productCode?: string) => Promise<any>
       productStock: (productId: number, warehouseId: number) => Promise<number>
+      allStocks: (endDate?: string) => Promise<any>
+      productLedger: (productId: number, warehouseId: number, startDate?: string, endDate?: string, useTransferRunningCost?: boolean) => Promise<any>
+      stockBeforeDate: (productId: number, warehouseId: number, date: string) => Promise<number>
+      stockCostBeforeDate: (productId: number, warehouseId: number, date: string) => Promise<number>
+
+      // 获取指定日期的库存和成本（模拟成本结算）
+      getProductStockCostOnDate: (productId: number, warehouseId: number, date: string) => Promise<{ stock: number; cost: number }>
+
+      // 获取调拨单的实时库存和成本（专用方法）
+      getTransferStockCost: (productId: number, warehouseId: number, date: string) => Promise<{ stock: number; cost: number }>
+
+      // 入库/出库/退货/调拨单详情
+      inboundById: (id: number) => Promise<any>
+      outboundById: (id: number) => Promise<any>
+      purchaseReturnById: (id: number) => Promise<any>
+      salesReturnById: (id: number) => Promise<any>
+      transferById: (id: number) => Promise<any>
 
       // 成本结算
   costSettlementQuery: (year: number, month: number, productCode?: string, warehouseId?: number) => Promise<any>
+  costSettlementQueryByDateRange: (params: { startDate: string; endDate: string; productSearch?: string; warehouseId?: number }) => Promise<any>
 
   // ==================== 成本结算模块（扩展）====================
   costSaveSettlement: (settlement: any) => Promise<void>
   costSaveSettlements: (settlements: any[]) => Promise<void>
   costIsSettled: (params: { year: number; month: number }) => Promise<boolean>
+  costHasSettlementData: (params: { year: number; month: number }) => Promise<boolean>
   costGetSettledPeriods: () => Promise<Array<{ year: number; month: number }>>
   costGetLatestSettledPeriod: () => Promise<{ year: number; month: number } | null>
   costUnlockMonth: (params: { year: number; month: number }) => Promise<void>
   costInitialize: (params: { year: number; month: number }) => Promise<any>
+  costCalculateWithoutLock: (params: { year: number; month: number }) => Promise<any>
   costAutoComplete: () => Promise<any>
   costReverse: (params: { year: number; month: number }) => Promise<any>
   costSettlementSummary: (params: any) => Promise<any>
   costSalesSummary: (params: any) => Promise<any>
+  costSalesDetail: (params: any) => Promise<any>
+  costSalesDailySummary: (params: any) => Promise<any>
+  costSalesMonthlySummary: (params: any) => Promise<any>
+  costSalesProfitDailySummary: (params: any) => Promise<any>
+  costSalesProfitMonthlySummary: (params: any) => Promise<any>
+  costSalesCostItemsPeriods: (params: any) => Promise<any>
+  costSalesProfitByProduct: (params: any) => Promise<any>
+  costSalesProfitByCategory: (params: any) => Promise<any>
   costTransferSummary: (params: any) => Promise<any>
   costTransactionDetails: (params: any) => Promise<any>
   costProductDetailLedger: (params: any) => Promise<any>
@@ -97,6 +125,7 @@ declare global {
   costGetMonthEndSnapshot: (params: any) => Promise<{ quantity: number; cost: number } | null>
   costGetProductCost: (params: any) => Promise<number | null>
   costSaveSnapshot: (snapshot: any) => Promise<void>
+  debugCheckSalesReturns: () => Promise<any>
 
   // ==================== 收付款管理 ====================
   receiptList: () => Promise<any[]>
@@ -126,6 +155,17 @@ declare global {
   // 开票记录
   getInvoiceRecord: (inboundNo: string) => Promise<any>
   saveInvoiceRecord: (recordData: any) => Promise<number>
+
+  // 回收站
+  recycleBinList: () => Promise<any[]>
+  recycleBinSave: (items: any[]) => Promise<void>
+  recycleBinAdd: (type: string, data: any) => Promise<void>
+  recycleBinRestore: (itemId: number) => Promise<any>
+  recycleBinRemove: (itemId: number) => Promise<void>
+
+  // 系统设置
+  getSystemSettings: () => Promise<any>
+  saveSystemSettings: (settings: any) => Promise<any>
     }
   }
 }
@@ -307,6 +347,33 @@ class DatabaseIPC {
     }
   }
 
+  async addTransfer(transfer: InventoryTransfer): Promise<number> {
+    try {
+      return await this.electron.transferAdd(transfer)
+    } catch (error) {
+      console.error('[DB-IPC] 添加调拨单失败:', error)
+      throw error
+    }
+  }
+
+  async updateTransfer(transfer: InventoryTransfer): Promise<number> {
+    try {
+      return await this.electron.transferUpdate(transfer)
+    } catch (error) {
+      console.error('[DB-IPC] 更新调拨单失败:', error)
+      throw error
+    }
+  }
+
+  async deleteTransfer(id: number): Promise<void> {
+    try {
+      await this.electron.transferDelete(id)
+    } catch (error) {
+      console.error('[DB-IPC] 删除调拨单失败:', error)
+      throw error
+    }
+  }
+
   // ==================== 成本结算 ====================
 
   async getCostSettlement(
@@ -340,6 +407,21 @@ class DatabaseIPC {
     }
   }
 
+  async getCostSettlementsByDateRange(
+    startDate: string,
+    endDate: string,
+    productSearch?: string,
+    warehouseId?: number
+  ): Promise<any[]> {
+    try {
+      const result = await this.electron.costSettlementQueryByDateRange({ startDate, endDate, productSearch, warehouseId })
+      return Array.isArray(result) ? result : (result ? [result] : [])
+    } catch (error) {
+      console.error('[DB-IPC] 获取日期范围成本结算列表失败:', error)
+      return []
+    }
+  }
+
   async saveCostSettlement(settlement: CostSettlement): Promise<void> {
     try {
       await this.electron.costSaveSettlement(settlement)
@@ -361,6 +443,15 @@ class DatabaseIPC {
       return await this.electron.costIsSettled({ year, month })
     } catch (error) {
       console.error('[DB-IPC] 检查结算状态失败:', error)
+      return false
+    }
+  }
+
+  async hasCostSettlementData(year: number, month: number): Promise<boolean> {
+    try {
+      return await this.electron.costHasSettlementData({ year, month })
+    } catch (error) {
+      console.error('[DB-IPC] 检查结算数据失败:', error)
       return false
     }
   }
@@ -400,6 +491,15 @@ class DatabaseIPC {
     }
   }
 
+  async calculateCostWithoutLock(params: { year: number; month: number }): Promise<any> {
+    try {
+      return await this.electron.costCalculateWithoutLock(params)
+    } catch (error) {
+      console.error('[DB-IPC] 计算成本失败:', error)
+      return { success: false, message: '计算失败' }
+    }
+  }
+
   async initializeAllHistory(): Promise<any> {
     try {
       return await this.electron.costAutoComplete()
@@ -429,9 +529,149 @@ class DatabaseIPC {
 
   async getSalesCostSummary(params: any): Promise<any> {
     try {
-      return await this.electron.costSalesSummary(params)
+      const result = await this.electron.costSalesSummary(params)
+      console.log('[DB-IPC] getSalesCostSummary 返回:', result)
+      
+      if (result && Array.isArray(result)) {
+        // 格式化字段名，匹配前端表格需要
+        const formattedData = result.map(item => {
+          const qty = Number(item.total_qty || 0)
+          const salesAmountEx = Number(item.total_sales_amount_ex || 0)
+          const salesTaxAmount = Number(item.total_tax_amount || 0)
+          const salesAmount = Number(item.total_sales_amount || 0)
+          const costAmount = Number(item.total_cost_amount || 0)
+          
+          return {
+            productCode: item.product_code,
+            productName: item.product_name,
+            specification: item.specification || item.spec || '',
+            unit: item.unit || '',
+            warehouseId: item.warehouse_id,
+            warehouseName: item.warehouse_name,
+            salesQty: qty,
+            salesAmountEx: salesAmountEx,
+            salesTaxAmount: salesTaxAmount,
+            salesAmount: salesAmount,
+            salesUnitPriceEx: qty !== 0 ? salesAmountEx / Math.abs(qty) : 0,
+            salesUnitPrice: qty !== 0 ? salesAmount / Math.abs(qty) : 0,
+            salesCost: costAmount,
+            salesCostUnitPrice: qty !== 0 ? costAmount / Math.abs(qty) : 0,
+            profit: salesAmountEx - costAmount,
+            profitRate: salesAmountEx !== 0 ? (salesAmountEx - costAmount) / Math.abs(salesAmountEx) : 0,
+            docCount: Number(item.doc_count || 0)
+          }
+        })
+        
+        return {
+          success: true,
+          data: formattedData,
+          message: '查询成功'
+        }
+      }
+      
+      return {
+        success: false,
+        data: [],
+        message: '无数据'
+      }
     } catch (error) {
       console.error('[DB-IPC] 获取销售成本统计失败:', error)
+      return {
+        success: false,
+        data: [],
+        message: '查询失败'
+      }
+    }
+  }
+
+  async getSalesCostDetail(params: any): Promise<any> {
+    try {
+      const result = await this.electron.costSalesDetail(params)
+      console.log('[DB-IPC] getSalesCostDetail 返回:', result)
+      return result || []
+    } catch (error) {
+      console.error('[DB-IPC] 获取销售成本明细失败:', error)
+      return []
+    }
+  }
+
+  async getSalesCostDailySummary(params: any): Promise<any> {
+    try {
+      const result = await this.electron.costSalesDailySummary(params)
+      console.log('[DB-IPC] getSalesCostDailySummary 返回:', result)
+      return result || []
+    } catch (error) {
+      console.error('[DB-IPC] 获取销售成本日报汇总失败:', error)
+      return []
+    }
+  }
+
+  async getSalesCostMonthlySummary(params: any): Promise<any> {
+    try {
+      const result = await this.electron.costSalesMonthlySummary(params)
+      console.log('[DB-IPC] getSalesCostMonthlySummary 返回:', result)
+      return result || []
+    } catch (error) {
+      console.error('[DB-IPC] 获取销售成本月报汇总失败:', error)
+      return []
+    }
+  }
+
+  async getSalesProfitDailySummary(params: any): Promise<any> {
+    try {
+      const result = await this.electron.costSalesProfitDailySummary(params)
+      return result || []
+    } catch (error) {
+      console.error('[DB-IPC] 获取销售利润日报汇总失败:', error)
+      return []
+    }
+  }
+
+  async getSalesProfitMonthlySummary(params: any): Promise<any> {
+    try {
+      const result = await this.electron.costSalesProfitMonthlySummary(params)
+      return result || []
+    } catch (error) {
+      console.error('[DB-IPC] 获取销售利润月报汇总失败:', error)
+      return []
+    }
+  }
+
+  async getSalesCostItemsPeriods(params: any): Promise<any> {
+    try {
+      const result = await this.electron.costSalesCostItemsPeriods(params)
+      return result || []
+    } catch (error) {
+      console.error('[DB-IPC] 获取成本明细期间失败:', error)
+      return []
+    }
+  }
+
+  async getSalesProfitByProduct(params: any): Promise<any> {
+    try {
+      const result = await this.electron.costSalesProfitByProduct(params)
+      return result || []
+    } catch (error) {
+      console.error('[DB-IPC] 获取按产品利润汇总失败:', error)
+      return []
+    }
+  }
+
+  async getSalesProfitByCategory(params: any): Promise<any> {
+    try {
+      const result = await this.electron.costSalesProfitByCategory(params)
+      return result || []
+    } catch (error) {
+      console.error('[DB-IPC] 获取按分类利润汇总失败:', error)
+      return []
+    }
+  }
+
+  async debugCheckSalesReturns(): Promise<any> {
+    try {
+      return await this.electron.debugCheckSalesReturns()
+    } catch (error) {
+      console.error('[DB-IPC] 调试检查销售退货失败:', error)
       return null
     }
   }
@@ -838,18 +1078,41 @@ class DatabaseIPC {
     }
   }
 
+  async getProductStockCostOnDate(productId: number, warehouseId: number, date: string): Promise<{ stock: number; cost: number }> {
+    try {
+      const result = await this.electron.getProductStockCostOnDate(productId, warehouseId, date)
+      console.log(`[DB-IPC] getProductStockCostOnDate: 产品${productId}在仓库${warehouseId}于${date}的库存=${result.stock}, 成本=${result.cost}`)
+      return result || { stock: 0, cost: 0 }
+    } catch (error) {
+      console.error('[DB-IPC] 获取指定日期库存和成本失败:', error)
+      return { stock: 0, cost: 0 }
+    }
+  }
+
+  async getTransferStockCost(productId: number, warehouseId: number, date: string): Promise<{ stock: number; cost: number }> {
+    try {
+      const result = await this.electron.getTransferStockCost(productId, warehouseId, date)
+      console.log(`[DB-IPC] getTransferStockCost: 产品${productId}在仓库${warehouseId}于${date}的库存=${result.stock}, 成本=${result.cost}`)
+      return result || { stock: 0, cost: 0 }
+    } catch (error) {
+      console.error('[DB-IPC] 获取调拨单库存和成本失败:', error)
+      return { stock: 0, cost: 0 }
+    }
+  }
+
   async getProductLedger(
     productId: number,
     warehouseId: number,
     startDate?: string,
-    endDate?: string
+    endDate?: string,
+    useTransferRunningCost?: boolean
   ): Promise<any> {
     try {
       const safeStartDate = (startDate && startDate.trim()) || undefined
       const safeEndDate = (endDate && endDate.trim()) || undefined
-      console.log(`[DB-IPC] getProductLedger 安全参数:`, { productId, warehouseId, startDate: safeStartDate, endDate: safeEndDate })
+      console.log(`[DB-IPC] getProductLedger 安全参数:`, { productId, warehouseId, startDate: safeStartDate, endDate: safeEndDate, useTransferRunningCost })
 
-      const rawResult = await this.electron.productLedger(productId, warehouseId, safeStartDate, safeEndDate)
+      const rawResult = await this.electron.productLedger(productId, warehouseId, safeStartDate, safeEndDate, useTransferRunningCost || false)
       console.log(`[DB-IPC] getProductLedger 原始数据:`, Array.isArray(rawResult) ? rawResult.length + '条' : rawResult)
 
       if (!Array.isArray(rawResult)) {
@@ -908,6 +1171,17 @@ class DatabaseIPC {
       return result || 0
     } catch (error) {
       console.error('[DB-IPC] 获取日期前库存失败:', error)
+      return 0
+    }
+  }
+
+  async getStockCostBeforeDate(productId: number, warehouseId: number, date: string): Promise<number> {
+    try {
+      const result = await this.electron.stockCostBeforeDate(productId, warehouseId, date)
+      console.log(`[DB-IPC] getStockCostBeforeDate: 产品${productId}在仓库${warehouseId}截至${date}的成本价=`, result)
+      return result || 0
+    } catch (error) {
+      console.error('[DB-IPC] 获取日期前库存成本价失败:', error)
       return 0
     }
   }
@@ -1152,6 +1426,51 @@ class DatabaseIPC {
     } catch (error) {
       console.error('[DB-IPC] 保存系统设置失败:', error)
       return false
+    }
+  }
+
+  // ==================== 回收站 ====================
+
+  async getRecycleBinItems(): Promise<any[]> {
+    try {
+      const result = await this.electron.recycleBinList()
+      return Array.isArray(result) ? result : []
+    } catch (error) {
+      console.error('[DB-IPC] 获取回收站数据失败:', error)
+      return []
+    }
+  }
+
+  async saveRecycleBinItems(items: any[]): Promise<void> {
+    try {
+      await this.electron.recycleBinSave(items)
+    } catch (error) {
+      console.error('[DB-IPC] 保存回收站数据失败:', error)
+    }
+  }
+
+  async addToRecycleBin(type: string, data: any): Promise<void> {
+    try {
+      await this.electron.recycleBinAdd(type, data)
+    } catch (error) {
+      console.error('[DB-IPC] 添加到回收站失败:', error)
+    }
+  }
+
+  async restoreFromRecycleBin(itemId: number): Promise<any> {
+    try {
+      return await this.electron.recycleBinRestore(itemId)
+    } catch (error) {
+      console.error('[DB-IPC] 从回收站恢复失败:', error)
+      return null
+    }
+  }
+
+  async removeFromRecycleBin(itemId: number): Promise<void> {
+    try {
+      await this.electron.recycleBinRemove(itemId)
+    } catch (error) {
+      console.error('[DB-IPC] 从回收站删除失败:', error)
     }
   }
 }

@@ -5,6 +5,8 @@ package-lock.json
 # Build output
 dist/
 build/
+build-output/
+dist-electron/
 
 # Editor
 .vscode/
@@ -51,3 +53,11 @@ debug-*.js
 # Release builds (too large for GitHub)
 release*/
 *.exe
+
+# TypeScript build info
+*.tsbuildinfo
+
+# Test/Debug scripts
+check_transfer.py
+test-*.py
+debug-*.py

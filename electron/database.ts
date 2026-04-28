@@ -1,5 +1,7 @@
 import Database from 'better-sqlite3'
-import { resolve } from 'path'
+import { resolve, dirname } from 'path'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { app } from 'electron'
 import { CostSettlementDatabase } from './database-cost'
 
 export class InventoryDatabase {
@@ -107,6 +109,7 @@ export class InventoryDatabase {
         { name: 'tax_rate', sql: 'ALTER TABLE purchase_return_items ADD COLUMN tax_rate VARCHAR(20)' },
         { name: 'tax_amount', sql: 'ALTER TABLE purchase_return_items ADD COLUMN tax_amount DECIMAL(14,2)' },
         { name: 'total_amount', sql: 'ALTER TABLE purchase_return_items ADD COLUMN total_amount DECIMAL(14,2)' },
+        { name: 'total_amount_ex', sql: 'ALTER TABLE purchase_return_items ADD COLUMN total_amount_ex DECIMAL(14,2)' },
       ]
       for (const col of prNewCols) {
         if (!prColumns.some(c => c.name === col.name)) {
@@ -146,10 +149,22 @@ export class InventoryDatabase {
         this.db!.exec('ALTER TABLE sales_returns ADD COLUMN handler_name TEXT')
       }
       
-      const hasTotalInc = srMainColumns.some(col => col.name === 'total_inc')
-      if (!hasTotalInc) {
-        console.log('添加 sales_returns.total_inc 字段')
-        this.db!.exec('ALTER TABLE sales_returns ADD COLUMN total_inc DECIMAL(10,2)')
+      const hasTotalIncl = srMainColumns.some(col => col.name === 'total_incl')
+      if (!hasTotalIncl) {
+        console.log('添加 sales_returns.total_incl 字段')
+        this.db!.exec('ALTER TABLE sales_returns ADD COLUMN total_incl DECIMAL(10,2)')
+      }
+
+      const hasTotalExcl = srMainColumns.some(col => col.name === 'total_excl')
+      if (!hasTotalExcl) {
+        console.log('添加 sales_returns.total_excl 字段')
+        this.db!.exec('ALTER TABLE sales_returns ADD COLUMN total_excl DECIMAL(10,2)')
+      }
+
+      const hasTaxAmount = srMainColumns.some(col => col.name === 'tax_amount')
+      if (!hasTaxAmount) {
+        console.log('添加 sales_returns.tax_amount 字段')
+        this.db!.exec('ALTER TABLE sales_returns ADD COLUMN tax_amount DECIMAL(10,2)')
       }
       
       // 检查 sales_return_items 表是否缺少字段
@@ -163,7 +178,7 @@ export class InventoryDatabase {
         { name: 'tax_rate', sql: 'ALTER TABLE sales_return_items ADD COLUMN tax_rate DECIMAL(10,2)' },
         { name: 'tax_amount', sql: 'ALTER TABLE sales_return_items ADD COLUMN tax_amount DECIMAL(14,2)' },
         { name: 'amount', sql: 'ALTER TABLE sales_return_items ADD COLUMN amount DECIMAL(14,2)' },
-        { name: 'total_inc', sql: 'ALTER TABLE sales_return_items ADD COLUMN total_inc DECIMAL(14,2)' },
+        { name: 'total_incl', sql: 'ALTER TABLE sales_return_items ADD COLUMN total_incl DECIMAL(14,2)' },
         { name: 'original_quantity', sql: 'ALTER TABLE sales_return_items ADD COLUMN original_quantity DECIMAL(14,4)' },
       ]
       for (const col of sriNewCols) {
@@ -206,6 +221,7 @@ export class InventoryDatabase {
         { name: 'tax_rate', sql: 'ALTER TABLE purchase_return_items ADD COLUMN tax_rate VARCHAR(20)' },
         { name: 'tax_amount', sql: 'ALTER TABLE purchase_return_items ADD COLUMN tax_amount DECIMAL(14,2)' },
         { name: 'total_amount', sql: 'ALTER TABLE purchase_return_items ADD COLUMN total_amount DECIMAL(14,2)' },
+        { name: 'total_amount_ex', sql: 'ALTER TABLE purchase_return_items ADD COLUMN total_amount_ex DECIMAL(14,2)' },
         { name: 'allow_deduction', sql: 'ALTER TABLE purchase_return_items ADD COLUMN allow_deduction BOOLEAN DEFAULT 0' },
         { name: 'deduction_amount', sql: 'ALTER TABLE purchase_return_items ADD COLUMN deduction_amount DECIMAL(14,2) DEFAULT 0' }
       ]
@@ -216,6 +232,38 @@ export class InventoryDatabase {
         }
       }
       
+      // 检查 sales_outbound 表是否有 received_amount 字段
+      const hasReceivedAmount = soColumns.some(col => col.name === 'received_amount')
+      if (!hasReceivedAmount) {
+        console.log('添加 sales_outbound.received_amount 字段')
+        this.db!.exec('ALTER TABLE sales_outbound ADD COLUMN received_amount DECIMAL(10,2) DEFAULT 0')
+      }
+
+      const hasInvoicedAmount = soColumns.some(col => col.name === 'invoiced_amount')
+      if (!hasInvoicedAmount) {
+        console.log('添加 sales_outbound.invoiced_amount 字段')
+        this.db!.exec('ALTER TABLE sales_outbound ADD COLUMN invoiced_amount DECIMAL(10,2) DEFAULT 0')
+      }
+
+      const hasInvoiceDate = soColumns.some(col => col.name === 'invoice_date')
+      if (!hasInvoiceDate) {
+        console.log('添加 sales_outbound.invoice_date 字段')
+        this.db!.exec('ALTER TABLE sales_outbound ADD COLUMN invoice_date DATETIME')
+      }
+
+      const hasSoInvoiceIssued = soColumns.some(col => col.name === 'invoice_issued')
+      if (!hasSoInvoiceIssued) {
+        console.log('添加 sales_outbound.invoice_issued 字段')
+        this.db!.exec('ALTER TABLE sales_outbound ADD COLUMN invoice_issued BOOLEAN DEFAULT 0')
+      }
+
+      const productColumns = this.db!.prepare("PRAGMA table_info(products)").all() as any[]
+      const hasTaxRate = productColumns.some(col => col.name === 'tax_rate')
+      if (!hasTaxRate) {
+        console.log('添加 products.tax_rate 字段')
+        this.db!.exec('ALTER TABLE products ADD COLUMN tax_rate VARCHAR(20)')
+      }
+
       console.log('数据库迁移完成')
     } catch (error) {
       console.error('数据库迁移失败:', error)
@@ -233,6 +281,7 @@ export class InventoryDatabase {
         unit VARCHAR(20),
         barcode VARCHAR(100),
         spec VARCHAR(200),
+        tax_rate VARCHAR(20),
         cost_price DECIMAL(10,2),
         sell_price DECIMAL(10,2),
         stock_quantity INTEGER DEFAULT 0,
@@ -395,6 +444,11 @@ export class InventoryDatabase {
         warehouse_id INTEGER,
         outbound_date DATETIME DEFAULT CURRENT_TIMESTAMP,
         total_amount DECIMAL(10,2),
+        received_amount DECIMAL(10,2) DEFAULT 0,
+        invoiced_amount DECIMAL(10,2) DEFAULT 0,
+        invoice_date DATETIME,
+        invoice_issued BOOLEAN DEFAULT 0,
+        invoice_type VARCHAR(20),
         status VARCHAR(20) DEFAULT 'completed',
         remark TEXT,
         handler_name TEXT,
@@ -452,6 +506,9 @@ export class InventoryDatabase {
       this.db.exec(`ALTER TABLE sales_outbound_items ADD COLUMN tax_amount DECIMAL(14,2)`)
     } catch(e) {}
     try {
+      this.db.exec(`ALTER TABLE sales_outbound_items ADD COLUMN total_amount_ex DECIMAL(14,2)`)
+    } catch(e) {}
+    try {
       this.db.exec(`ALTER TABLE sales_outbound_items ADD COLUMN total_amount DECIMAL(14,2)`)
     } catch(e) {}
     try {
@@ -459,6 +516,12 @@ export class InventoryDatabase {
     } catch(e) {}
     try {
       this.db.exec(`ALTER TABLE sales_outbound_items ADD COLUMN allow_deduction INTEGER DEFAULT 0`)
+    } catch(e) {}
+    try {
+      this.db.exec(`UPDATE sales_outbound_items SET total_amount_ex = quantity * unit_price_ex WHERE total_amount_ex IS NULL OR total_amount_ex = 0`)
+    } catch(e) {}
+    try {
+      this.db.exec(`UPDATE sales_return_items SET total_amount_ex = quantity * unit_price_ex WHERE total_amount_ex IS NULL OR total_amount_ex = 0`)
     } catch(e) {}
 
     // 采购申请单表
@@ -619,6 +682,7 @@ export class InventoryDatabase {
         tax_rate VARCHAR(20),
         tax_amount DECIMAL(14,2),
         total_amount DECIMAL(14,2),
+        total_amount_ex DECIMAL(14,2),
         cost_price DECIMAL(10,2),
         allow_deduction BOOLEAN DEFAULT 0,
         deduction_amount DECIMAL(14,2) DEFAULT 0,
@@ -639,9 +703,14 @@ export class InventoryDatabase {
         warehouse_id INTEGER,
         return_date DATETIME DEFAULT CURRENT_TIMESTAMP,
         total_amount DECIMAL(10,2),
+        total_incl DECIMAL(10,2),
+        total_excl DECIMAL(10,2),
+        tax_amount DECIMAL(10,2),
         return_reason TEXT,
         status VARCHAR(20) DEFAULT 'completed',
         remark TEXT,
+        handler_id INTEGER,
+        handler_name TEXT,
         created_by VARCHAR(50),
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (customer_id) REFERENCES customers(id),
@@ -659,8 +728,16 @@ export class InventoryDatabase {
         specification VARCHAR(200),
         unit VARCHAR(50),
         quantity INTEGER,
+        original_quantity DECIMAL(14,4),
+        unit_price_incl DECIMAL(14,4),
+        unit_price_ex DECIMAL(14,4),
         unit_price DECIMAL(14,4),
+        tax_rate VARCHAR(20),
+        tax_amount DECIMAL(14,2),
+        amount DECIMAL(14,2),
+        total_amount_ex DECIMAL(14,2),
         total_amount DECIMAL(14,2),
+        total_incl DECIMAL(14,2),
         cost_price DECIMAL(10,2),
         remark TEXT,
         original_item_index INTEGER,
@@ -668,6 +745,28 @@ export class InventoryDatabase {
         FOREIGN KEY (product_id) REFERENCES products(id)
       )
     `)
+
+    try {
+      this.db.exec(`ALTER TABLE sales_return_items ADD COLUMN product_name VARCHAR(200)`)
+    } catch(e) {}
+    try {
+      this.db.exec(`ALTER TABLE sales_return_items ADD COLUMN specification VARCHAR(200)`)
+    } catch(e) {}
+    try {
+      this.db.exec(`ALTER TABLE sales_return_items ADD COLUMN unit VARCHAR(50)`)
+    } catch(e) {}
+    try {
+      this.db.exec(`ALTER TABLE sales_return_items ADD COLUMN unit_price_ex DECIMAL(14,4)`)
+    } catch(e) {}
+    try {
+      this.db.exec(`ALTER TABLE sales_return_items ADD COLUMN unit_price DECIMAL(14,4)`)
+    } catch(e) {}
+    try {
+      this.db.exec(`ALTER TABLE sales_return_items ADD COLUMN total_amount_ex DECIMAL(14,2)`)
+    } catch(e) {}
+    try {
+      this.db.exec(`ALTER TABLE sales_return_items ADD COLUMN total_amount DECIMAL(14,2)`)
+    } catch(e) {}
 
     // 库存调拨表
     this.db.exec(`
@@ -759,15 +858,15 @@ export class InventoryDatabase {
       CREATE TABLE IF NOT EXISTS payments (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         payment_no VARCHAR(50) UNIQUE NOT NULL,
-        type VARCHAR(20) NOT NULL,
-        account_id INTEGER,
+        supplier_id INTEGER,
         payment_date DATETIME DEFAULT CURRENT_TIMESTAMP,
         amount DECIMAL(10,2),
         payment_method VARCHAR(20),
+        status VARCHAR(20) DEFAULT 'pending',
         remark TEXT,
         created_by VARCHAR(50),
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (account_id) REFERENCES accounts(id)
+        FOREIGN KEY (supplier_id) REFERENCES suppliers(id)
       )
     `)
 
@@ -780,6 +879,7 @@ export class InventoryDatabase {
         receipt_date DATETIME DEFAULT CURRENT_TIMESTAMP,
         amount DECIMAL(10,2),
         payment_method VARCHAR(20),
+        status VARCHAR(20) DEFAULT 'pending',
         remark TEXT,
         created_by VARCHAR(50),
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -853,6 +953,12 @@ export class InventoryDatabase {
     // 添加缺失的字段到 purchase_inbound 表
     try { this.db.exec(`ALTER TABLE purchase_inbound ADD COLUMN invoice_date DATETIME`) } catch(_) {}
     try { this.db.exec(`ALTER TABLE purchase_inbound ADD COLUMN invoiced_amount DECIMAL(10,2) DEFAULT 0`) } catch(_) {}
+
+    try { this.db.exec(`ALTER TABLE receipts ADD COLUMN status VARCHAR(20) DEFAULT 'pending'`) } catch(_) {}
+    try { this.db.exec(`ALTER TABLE payments ADD COLUMN supplier_id INTEGER`) } catch(_) {}
+    try { this.db.exec(`ALTER TABLE payments ADD COLUMN status VARCHAR(20) DEFAULT 'pending'`) } catch(_) {}
+    try { this.db.exec(`ALTER TABLE payments ADD COLUMN type VARCHAR(20) DEFAULT 'payment'`) } catch(_) {}
+    try { this.db.exec(`ALTER TABLE receipts ADD COLUMN type VARCHAR(20) DEFAULT 'receipt'`) } catch(_) {}
     
     // 采购开票记录表（独立存储开票信息，不影响原始入库单）
     this.db.exec(`
@@ -943,37 +1049,7 @@ export class InventoryDatabase {
    * 插入基础数据（只在第一次创建数据库时执行）
    */
   private insertDefaultData(): void {
-    try {
-      // 插入产品（如果不存在）
-      this.db!.exec(`
-        INSERT OR IGNORE INTO products (code, name, category, unit, spec, status)
-        VALUES ('01', '苹果', '水果', '个', '红富士', 1)
-      `)
-
-      // 插入仓库（如果不存在）
-      this.db!.exec(`
-        INSERT OR IGNORE INTO warehouses (code, name, address, status)
-        VALUES 
-          ('01', '农服', '农服仓库', 1),
-          ('02', '驿站', '驿站仓库', 1)
-      `)
-
-      // 插入供应商（如果不存在）
-      this.db!.exec(`
-        INSERT OR IGNORE INTO suppliers (code, name, status)
-        VALUES ('01', '聚珍园', 1)
-      `)
-
-      // 插入客户（如果不存在）
-      this.db!.exec(`
-        INSERT OR IGNORE INTO customers (code, name, status)
-        VALUES ('01', '集团', 1)
-      `)
-      
-      console.log('基础数据已插入')
-    } catch (error) {
-      console.error('插入基础数据失败:', error)
-    }
+    console.log('跳过默认数据插入，用户自行录入')
   }
 
   query(sql: string, params: any[] = []): any[] {
@@ -1123,7 +1199,7 @@ export class InventoryDatabase {
       ? this.db!.prepare(countSql).get(...params)
       : this.db!.prepare(countSql).get()
     
-    const dataSql = `SELECT * FROM purchase_inbound ${whereClause} ORDER BY created_at DESC LIMIT ? OFFSET ?`
+    const dataSql = `SELECT * FROM purchase_inbound ${whereClause} ORDER BY inbound_date DESC, created_at DESC LIMIT ? OFFSET ?`
     const data = whereClause && params && params.length > 0
       ? this.db!.prepare(dataSql).all(...params, pageSize, offset)
       : this.db!.prepare(dataSql).all(pageSize, offset)
@@ -1157,11 +1233,12 @@ export class InventoryDatabase {
         createdAt: record.created_at,
         items: items.map((item: any) => {
           // 加载产品信息
-          const product = this.db!.prepare('SELECT name, spec, unit FROM products WHERE id = ?').get(item.product_id) as any
+          const product = this.db!.prepare('SELECT code, name, spec, unit FROM products WHERE id = ?').get(item.product_id) as any
           return {
             id: item.id,
             inboundId: item.inbound_id,
             productId: item.product_id,
+            productCode: product?.code || '',
             productName: product?.name || '',
             specification: product?.spec || '',
             unit: product?.unit || '',
@@ -1207,8 +1284,8 @@ export class InventoryDatabase {
         if (items.length > 0) {
           items.forEach((item: any, index: number) => {
             const itemData = {
-              inbound_id: id,
-              ...item
+              ...item,
+              inbound_id: id
             }
             console.log(`【Electron 后端】插入明细项 ${index + 1}:`, itemData)
             this.insert('purchase_inbound_items', itemData)
@@ -1305,11 +1382,14 @@ export class InventoryDatabase {
       console.log('【Electron 后端】删除入库单，ID:', id)
       
       const transaction = this.db!.transaction(() => {
-        // 先删除明细
+        const inboundData = this.getInboundById(id)
+        if (inboundData) {
+          this.addToRecycleBin('inbound', inboundData)
+        }
+
         this.db!.prepare('DELETE FROM purchase_inbound_items WHERE inbound_id = ?').run(id)
         console.log('【Electron 后端】已删除入库单明细项')
         
-        // 再删除主表
         const result = this.delete('purchase_inbound', 'id = ?', [id])
         console.log('【Electron 后端】主表删除完成')
         
@@ -1334,7 +1414,7 @@ export class InventoryDatabase {
       ? this.db!.prepare(countSql).get(...params)
       : this.db!.prepare(countSql).get()
     
-    const dataSql = `SELECT * FROM sales_outbound ${whereClause} ORDER BY outbound_date DESC LIMIT ? OFFSET ?`
+    const dataSql = `SELECT * FROM sales_outbound ${whereClause} ORDER BY outbound_date DESC, created_at DESC LIMIT ? OFFSET ?`
     const data = whereClause && params && params.length > 0
       ? this.db!.prepare(dataSql).all(...params, pageSize, offset)
       : this.db!.prepare(dataSql).all(pageSize, offset)
@@ -1357,18 +1437,25 @@ export class InventoryDatabase {
         warehouseId: record.warehouse_id,
         warehouseName: warehouse?.name || '',
         totalAmount: record.total_amount,
+        receivedAmount: record.received_amount || 0,
+        invoicedAmount: record.invoiced_amount || 0,
+        invoiceDate: record.invoice_date || '',
+        invoiceIssued: record.invoice_issued === 1,
         status: record.status,
         remark: record.remark,
+        handlerName: record.handler_name || '',
         createdBy: record.created_by,
         createdAt: record.created_at,
         items: items.map((item: any) => {
+          const product = this.db!.prepare('SELECT code, name, spec, unit FROM products WHERE id = ?').get(item.product_id) as any
           return {
             id: item.id,
             outboundId: item.outbound_id,
             productId: item.product_id,
-            productName: item.product_name || '',
-            specification: item.specification || '',
-            unit: item.unit || '',
+            productCode: product?.code || '',
+            productName: product?.name || item.product_name || '',
+            specification: product?.spec || item.specification || '',
+            unit: product?.unit || item.unit || '',
             quantity: item.quantity,
             unitPriceEx: item.unit_price_ex || 0,
             unitPrice: item.unit_price || 0,
@@ -1419,6 +1506,7 @@ export class InventoryDatabase {
               unit_price: enrichedItem.unit_price || 0,
               tax_rate: String(enrichedItem.tax_rate ?? ''),
               tax_amount: enrichedItem.tax_amount ?? 0,
+              total_amount_ex: enrichedItem.total_amount_ex ?? 0,
               total_amount: enrichedItem.total_amount ?? 0,
               deduction_amount: enrichedItem.deduction_amount ?? 0,
               allow_deduction: enrichedItem.allow_deduction ? 1 : 0,
@@ -1447,10 +1535,13 @@ export class InventoryDatabase {
 
   enrichOutboundItem(item: any): any {
     const result = { ...item }
+    const taxRate = Number(item.taxRate ?? item.tax_rate ?? 0)
+    
     if (!result.product_name || !result.specification || !result.unit || !result.unit_price || !result.unit_price_ex) {
       try {
-        const product = this.db!.prepare('SELECT name, spec, unit, cost_price, sell_price FROM products WHERE id = ?').get(result.product_id) as any
+        const product = this.db!.prepare('SELECT code, name, spec, unit, cost_price, sell_price FROM products WHERE id = ?').get(result.product_id) as any
         if (product) {
+          if (!result.product_code) result.product_code = product.code || ''
           if (!result.product_name) result.product_name = product.name || ''
           if (!result.specification) result.specification = product.spec || ''
           if (!result.unit) result.unit = product.unit || ''
@@ -1464,14 +1555,24 @@ export class InventoryDatabase {
     if (!result.unit) result.unit = item.unit || ''
     result.product_id = item.product_id
     result.quantity = item.quantity || 0
+    
     result.unit_price_ex = result.unit_price_ex || item.unit_price_ex || item.unitPriceEx || 0
     result.unit_price = result.unit_price || item.unit_price || item.unitPrice || 0
+    
+    // 如果不含税单价为 0，从含税单价和税率反推
+    if (result.unit_price_ex === 0 && result.unit_price > 0) {
+      result.unit_price_ex = taxRate > 0 ? result.unit_price / (1 + taxRate / 100) : result.unit_price
+    }
+    
     result.tax_rate = item.taxRate ?? item.tax_rate ?? ''
     result.tax_amount = item.taxAmount ?? item.tax_amount ?? 0
     result.total_amount = item.totalAmount ?? item.total_amount ?? ((result.quantity || 0) * (result.unit_price || 0))
+    
+    // 计算不含税金额
+    result.total_amount_ex = item.totalAmountEx ?? item.total_amount_ex ?? ((result.quantity || 0) * (result.unit_price_ex || 0))
     result.deduction_amount = item.deductionAmount ?? item.deduction_amount ?? 0
     result.allow_deduction = item.allowDeduction ?? item.allow_deduction ?? 0
-    result.cost_price = result.cost_price || item.cost_price || result.unit_price_ex || 0
+    result.cost_price = result.cost_price || item.cost_price || 0
     result.remark = item.remark || ''
     return result
   }
@@ -1502,6 +1603,7 @@ export class InventoryDatabase {
               unit_price: enrichedItem.unit_price || 0,
               tax_rate: String(enrichedItem.tax_rate ?? ''),
               tax_amount: enrichedItem.tax_amount ?? 0,
+              total_amount_ex: enrichedItem.total_amount_ex ?? 0,
               total_amount: enrichedItem.total_amount ?? 0,
               deduction_amount: enrichedItem.deduction_amount ?? 0,
               allow_deduction: enrichedItem.allow_deduction ? 1 : 0,
@@ -1527,11 +1629,14 @@ export class InventoryDatabase {
       console.log('【Electron 后端】删除销售出库单，ID:', id)
       
       const transaction = this.db!.transaction(() => {
-        // 先删除明细
+        const outboundData = this.getOutboundById(id)
+        if (outboundData) {
+          this.addToRecycleBin('outbound', outboundData)
+        }
+
         this.db!.prepare('DELETE FROM sales_outbound_items WHERE outbound_id = ?').run(id)
         console.log('【Electron 后端】已删除销售出库单明细项')
         
-        // 再删除主表
         const result = this.delete('sales_outbound', 'id = ?', [id])
         console.log('【Electron 后端】销售出库单主表删除完成')
         
@@ -1610,7 +1715,7 @@ export class InventoryDatabase {
     const countSql = `SELECT COUNT(*) as count FROM purchase_returns`
     const total = this.db!.prepare(countSql).get() as any
     
-    const dataSql = `SELECT * FROM purchase_returns ORDER BY created_at DESC LIMIT ? OFFSET ?`
+    const dataSql = `SELECT * FROM purchase_returns ORDER BY return_date DESC, created_at DESC LIMIT ? OFFSET ?`
     const data = this.db!.prepare(dataSql).all(pageSize, offset)
     
     // 为每个退货单加载明细数据
@@ -1643,11 +1748,19 @@ export class InventoryDatabase {
           let unit = item.unit
           
           if (!productName && item.product_id) {
-            const product = this.db!.prepare('SELECT name, spec, unit FROM products WHERE id = ?').get(item.product_id) as any
+            const product = this.db!.prepare('SELECT code, name, spec, unit FROM products WHERE id = ?').get(item.product_id) as any
             if (product) {
               productName = product.name
               specification = product.spec
               unit = product.unit
+            }
+          }
+          
+          let productCode = item.product_code
+          if (!productCode && item.product_id) {
+            const product = this.db!.prepare('SELECT code FROM products WHERE id = ?').get(item.product_id) as any
+            if (product) {
+              productCode = product.code
             }
           }
           
@@ -1708,6 +1821,7 @@ export class InventoryDatabase {
           
           return {
             productId: item.product_id,
+            productCode: productCode || '',
             productName: productName || '',
             specification: specification || '',
             unit: unit || '',
@@ -1806,8 +1920,12 @@ export class InventoryDatabase {
       if (!this.db) {
         throw new Error('数据库未初始化')
       }
+
+      const returnData = this.getPurchaseReturnById(id)
+      if (returnData) {
+        this.addToRecycleBin('purchase_return', returnData)
+      }
       
-      // 先删除明细
       this.db.prepare('DELETE FROM purchase_return_items WHERE return_id = ?').run(id)
       console.log('【Electron 后端】已删除采购退货单明细项')
       
@@ -1857,11 +1975,14 @@ export class InventoryDatabase {
               quantity: item.quantity,
               original_quantity: item.original_quantity || 0,
               unit_price: item.unit_price || 0,
+              unit_price_ex: item.unit_price_ex || 0,
               unit_price_incl: item.unit_price_incl || 0,
               tax_rate: item.tax_rate || 0,
               tax_amount: item.tax_amount || 0,
               amount: item.amount || 0,
-              total_inc: item.total_inc || 0,
+              total_amount_ex: item.total_amount_ex ?? ((item.quantity || 0) * (item.unit_price_ex || 0)),
+              total_incl: item.total_incl || 0,
+              total_amount: item.total_amount ?? ((item.quantity || 0) * (item.unit_price || 0)),
               cost_price: item.cost_price || 0,
               remark: item.remark || '',
               original_item_index: item.original_item_index !== undefined ? item.original_item_index : index
@@ -1892,13 +2013,22 @@ export class InventoryDatabase {
     const countSql = `SELECT COUNT(*) as count FROM sales_returns`
     const total = this.db!.prepare(countSql).get() as any
     
-    const dataSql = `SELECT * FROM sales_returns ORDER BY created_at DESC LIMIT ? OFFSET ?`
+    const dataSql = `SELECT * FROM sales_returns ORDER BY return_date DESC, created_at DESC LIMIT ? OFFSET ?`
     const data = this.db!.prepare(dataSql).all(pageSize, offset)
     
     // 为每个退货单加载明细数据
     const enrichedData = data.map((record: any) => {
       const itemsSql = `SELECT * FROM sales_return_items WHERE return_id = ?`
-      const items = this.db!.prepare(itemsSql).all(record.id)
+      const items = this.db!.prepare(itemsSql).all(record.id).map((item: any) => {
+        const product = this.db!.prepare('SELECT code, name, spec, unit FROM products WHERE id = ?').get(item.product_id) as any
+        return {
+          ...item,
+          product_code: product?.code || item.product_code || '',
+          product_name: product?.name || item.product_name || '',
+          specification: product?.spec || item.specification || '',
+          unit: product?.unit || item.unit || ''
+        }
+      })
       return {
         ...record,
         items
@@ -1945,11 +2075,14 @@ export class InventoryDatabase {
               quantity: item.quantity,
               original_quantity: item.original_quantity || 0,
               unit_price: item.unit_price || 0,
+              unit_price_ex: item.unit_price_ex || 0,
               unit_price_incl: item.unit_price_incl || 0,
               tax_rate: item.tax_rate || 0,
               tax_amount: item.tax_amount || 0,
               amount: item.amount || 0,
-              total_inc: item.total_inc || 0,
+              total_amount_ex: item.total_amount_ex ?? ((item.quantity || 0) * (item.unit_price_ex || 0)),
+              total_incl: item.total_incl || 0,
+              total_amount: item.total_amount ?? ((item.quantity || 0) * (item.unit_price || 0)),
               cost_price: item.cost_price || 0,
               remark: item.remark || '',
               original_item_index: item.original_item_index !== undefined ? item.original_item_index : index
@@ -1978,12 +2111,15 @@ export class InventoryDatabase {
     try {
       console.log('【Electron 后端】删除销售退货单，ID:', id)
       console.log('【Electron 后端】使用独立数据库连接进行删除操作')
+
+      const returnData = this.getSalesReturnById(id)
+      if (returnData) {
+        this.addToRecycleBin('sales_return', returnData)
+      }
       
-      // 创建独立的数据库连接，避免与其他操作的冲突
       tempDb = new Database(this.dbPath)
       tempDb.pragma('journal_mode = WAL')
       
-      // 先删除明细
       tempDb.prepare('DELETE FROM sales_return_items WHERE return_id = ?').run(id)
       console.log('【Electron 后端】已删除销售退货单明细项')
       
@@ -2023,15 +2159,23 @@ export class InventoryDatabase {
     const countSql = `SELECT COUNT(*) as count FROM transfer_records ${whereClause}`
     const total = this.db!.prepare(countSql).get(...(params || [])) as any
     
-    const dataSql = `SELECT * FROM transfer_records ${whereClause} ORDER BY transfer_date DESC LIMIT ? OFFSET ?`
+    const dataSql = `SELECT * FROM transfer_records ${whereClause} ORDER BY transfer_date DESC, created_at DESC LIMIT ? OFFSET ?`
     const data = this.db!.prepare(dataSql).all(...(params || []), pageSize, offset)
     
-    // 为每个调拨单加载明细数据
     const enrichedData = data.map((record: any) => {
-      const itemsSql = `SELECT * FROM transfer_record_items WHERE transfer_id = ?`
+      const itemsSql = `SELECT tri.*, p.name as product_name, p.spec as specification, p.unit, p.code as product_code
+        FROM transfer_record_items tri
+        LEFT JOIN products p ON tri.product_id = p.id
+        WHERE tri.transfer_id = ?`
       const items = this.db!.prepare(itemsSql).all(record.id)
+
+      const fromWarehouse = this.db!.prepare('SELECT name FROM warehouses WHERE id = ?').get(record.from_warehouse_id) as any
+      const toWarehouse = this.db!.prepare('SELECT name FROM warehouses WHERE id = ?').get(record.to_warehouse_id) as any
+
       return {
         ...record,
+        from_warehouse_name: fromWarehouse?.name || '',
+        to_warehouse_name: toWarehouse?.name || '',
         items
       }
     })
@@ -2082,12 +2226,48 @@ export class InventoryDatabase {
 
   updateTransfer(transfer: any): number {
     const id = transfer.id
+    const items = transfer.items || []
     delete transfer.id
-    return this.update('transfer_records', transfer, 'id = ?', [id])
+    delete transfer.items
+
+    const transaction = this.db!.transaction(() => {
+      this.update('transfer_records', transfer, 'id = ?', [id])
+
+      this.db!.prepare('DELETE FROM transfer_record_items WHERE transfer_id = ?').run(id)
+      if (items.length > 0) {
+        const insertItem = this.db!.prepare(
+          'INSERT INTO transfer_record_items (transfer_id, product_id, quantity, cost, amount, remark) VALUES (?, ?, ?, ?, ?, ?)'
+        )
+        for (const item of items) {
+          insertItem.run(id, item.product_id, item.quantity, item.cost || 0, item.amount || 0, item.remark || '')
+        }
+      }
+
+      return id
+    })
+
+    return transaction()
   }
 
   deleteTransfer(id: number): number {
-    return this.delete('transfer_records', 'id = ?', [id])
+    try {
+      const transaction = this.db!.transaction(() => {
+        const transferData = this.getTransferById(id)
+        if (transferData) {
+          this.addToRecycleBin('transfer', transferData)
+        }
+
+        this.db!.prepare('DELETE FROM transfer_record_items WHERE transfer_id = ?').run(id)
+
+        const result = this.delete('transfer_records', 'id = ?', [id])
+        return result
+      })
+
+      return transaction()
+    } catch (error) {
+      console.error('【Electron 后端】删除调拨单失败:', error)
+      throw error
+    }
   }
 
   // 库存查询
@@ -2164,6 +2344,32 @@ export class InventoryDatabase {
       stock -= item.quantity
     })
 
+    // 5. 加调拨入库单
+    const transferInItems = this.db!.prepare(`
+      SELECT tri.* 
+      FROM transfer_record_items tri
+      JOIN transfer_records tr ON tri.transfer_id = tr.id
+      WHERE tri.product_id = ? AND tr.to_warehouse_id = ?
+        AND tr.status != 'deleted'
+    `).all(productId, warehouseId) as any[]
+
+    transferInItems.forEach(item => {
+      stock += item.quantity
+    })
+
+    // 6. 减调拨出库单
+    const transferOutItems = this.db!.prepare(`
+      SELECT tri.* 
+      FROM transfer_record_items tri
+      JOIN transfer_records tr ON tri.transfer_id = tr.id
+      WHERE tri.product_id = ? AND tr.from_warehouse_id = ?
+        AND tr.status != 'deleted'
+    `).all(productId, warehouseId) as any[]
+
+    transferOutItems.forEach(item => {
+      stock -= item.quantity
+    })
+
     return stock
   }
 
@@ -2175,7 +2381,7 @@ export class InventoryDatabase {
       FROM purchase_orders po
       LEFT JOIN suppliers s ON po.supplier_id = s.id
       WHERE po.status != 'deleted'
-      ORDER BY po.created_at DESC
+      ORDER BY po.order_date DESC, po.created_at DESC
     `).all() as any[]
 
     return orders.map(order => ({
@@ -2201,13 +2407,14 @@ export class InventoryDatabase {
 
   updatePurchaseOrder(data: any): number {
     const id = data.id
+    const items = data.items
     delete data.id
     delete data.items
     delete data.supplier_name
     this.update('purchase_orders', data, 'id = ?', [id])
-    if (data.items && Array.isArray(data.items)) {
+    if (items && Array.isArray(items)) {
       this.db!.prepare('DELETE FROM purchase_order_items WHERE order_id = ?').run(id)
-      for (const item of data.items) {
+      for (const item of items) {
         this.insert('purchase_order_items', { ...item, order_id: id })
       }
     }
@@ -2225,7 +2432,7 @@ export class InventoryDatabase {
     const requests = this.db!.prepare(`
       SELECT * FROM purchase_requests
       WHERE status != 'deleted'
-      ORDER BY created_at DESC
+      ORDER BY request_date DESC, created_at DESC
     `).all() as any[]
 
     return requests.map(request => ({
@@ -2251,12 +2458,13 @@ export class InventoryDatabase {
 
   updatePurchaseRequest(data: any): number {
     const id = data.id
+    const items = data.items
     delete data.id
     delete data.items
     this.update('purchase_requests', data, 'id = ?', [id])
-    if (data.items && Array.isArray(data.items)) {
+    if (items && Array.isArray(items)) {
       this.db!.prepare('DELETE FROM purchase_request_items WHERE request_id = ?').run(id)
-      for (const item of data.items) {
+      for (const item of items) {
         this.insert('purchase_request_items', { ...item, request_id: id })
       }
     }
@@ -2276,13 +2484,13 @@ export class InventoryDatabase {
       FROM sales_orders so
       LEFT JOIN customers c ON so.customer_id = c.id
       WHERE so.status != 'deleted'
-      ORDER BY so.created_at DESC
+      ORDER BY so.order_date DESC, so.created_at DESC
     `).all() as any[]
 
     return orders.map(order => ({
       ...order,
       items: this.db!.prepare(`
-        soi.*, p.code as product_code, p.name as product_name, p.unit
+        SELECT soi.*, p.code as product_code, p.name as product_name, p.unit
         FROM sales_order_items soi
         LEFT JOIN products p ON soi.product_id = p.id
         WHERE soi.order_id = ?
@@ -2296,13 +2504,13 @@ export class InventoryDatabase {
       FROM sales_quotes sq
       LEFT JOIN customers c ON sq.customer_id = c.id
       WHERE sq.status != 'deleted'
-      ORDER BY sq.created_at DESC
+      ORDER BY sq.quote_date DESC, sq.created_at DESC
     `).all() as any[]
 
     return quotes.map(quote => ({
       ...quote,
       items: this.db!.prepare(`
-        si.*, p.code as product_code, p.name as product_name, p.unit
+        SELECT si.*, p.code as product_code, p.name as product_name, p.unit
         FROM sales_quote_items si
         LEFT JOIN products p ON si.product_id = p.id
         WHERE si.quote_id = ?
@@ -2356,38 +2564,74 @@ export class InventoryDatabase {
 
   // ==================== 回收站 ====================
 
+  private getRecycleBinFilePath(): string {
+    const configDir = resolve(dirname(this.dbPath), 'config')
+    if (!existsSync(configDir)) {
+      mkdirSync(configDir, { recursive: true })
+    }
+    return resolve(configDir, 'recycle-bin.json')
+  }
+
   getRecycleBinItems(): any[] {
-    return this.db!.prepare(`
-      SELECT 'product' as type, id, code || ' - ' || name as title, updated_at as deleted_at FROM products WHERE status = 0
-      UNION ALL
-      SELECT 'warehouse' as type, id, code || ' - ' || name as title, updated_at as deleted_at FROM warehouses WHERE status = 0
-      UNION ALL
-      SELECT 'supplier' as type, id, code || ' - ' || name as title, updated_at as deleted_at FROM suppliers WHERE status = 0
-      UNION ALL
-      SELECT 'customer' as type, id, code || ' - ' || name as title, updated_at as deleted_at FROM customers WHERE status = 0
-      ORDER BY deleted_at DESC
-    `).all() as any[]
+    try {
+      const filePath = this.getRecycleBinFilePath()
+      if (existsSync(filePath)) {
+        const data = JSON.parse(readFileSync(filePath, 'utf-8'))
+        return Array.isArray(data) ? data : []
+      }
+    } catch (error: any) {
+      console.error('读取回收站数据失败:', error.message)
+    }
+    return []
   }
 
   saveRecycleBinItems(items: any[]): void {
-    for (const item of items) {
-      if (item.type === 'product') {
-        this.update('products', { status: 1 }, 'id = ?', [item.id])
-      } else if (item.type === 'warehouse') {
-        this.update('warehouses', { status: 1 }, 'id = ?', [item.id])
-      } else if (item.type === 'supplier') {
-        this.update('suppliers', { status: 1 }, 'id = ?', [item.id])
-      } else if (item.type === 'customer') {
-        this.update('customers', { status: 1 }, 'id = ?', [item.id])
-      }
+    try {
+      const filePath = this.getRecycleBinFilePath()
+      writeFileSync(filePath, JSON.stringify(items, null, 2), 'utf-8')
+      console.log('回收站数据已保存，共', items.length, '条')
+    } catch (error: any) {
+      console.error('保存回收站数据失败:', error.message)
     }
+  }
+
+  addToRecycleBin(type: string, data: any): void {
+    const items = this.getRecycleBinItems()
+    const item = {
+      id: Date.now(),
+      type: type,
+      voucherNo: data.inbound_no || data.outbound_no || data.return_no || data.transfer_no || '',
+      voucherDate: data.inbound_date || data.outbound_date || data.return_date || data.transfer_date || '',
+      supplierName: data.supplier_name || '',
+      customerName: data.customer_name || '',
+      totalAmount: data.total_amount || 0,
+      deletedAt: new Date().toISOString(),
+      originalData: data
+    }
+    items.unshift(item)
+    this.saveRecycleBinItems(items)
+  }
+
+  restoreFromRecycleBin(itemId: number): any {
+    const items = this.getRecycleBinItems()
+    const item = items.find((i: any) => i.id === itemId)
+    if (!item) {
+      throw new Error('回收站中未找到该记录')
+    }
+    return item
+  }
+
+  removeFromRecycleBin(itemId: number): void {
+    const items = this.getRecycleBinItems()
+    const filtered = items.filter((i: any) => i.id !== itemId)
+    this.saveRecycleBinItems(filtered)
   }
 
   // ==================== 价格表 ====================
 
   getPriceList(): any[] {
     return this.db!.prepare(`
-      SELECT pl.*, p.code as product_code, p.name as product_name, s.name as supplier_name
+      SELECT pl.*, p.code as product_code, p.name as product_name, pl_s.name as supplier_name
       FROM price_list pl
       LEFT JOIN products p ON pl.product_id = p.id
       LEFT JOIN suppliers pl_s ON pl.supplier_id = pl_s.id
@@ -2455,8 +2699,6 @@ export class InventoryDatabase {
   // ==================== 库存查询 ====================
 
   getAllStocks(endDate?: string): any[] {
-    const df = (dateCol: string) => endDate ? ` AND ${dateCol} <= '${endDate}'` : ''
-
     const products = this.db!.prepare('SELECT id, code, name, category, unit, spec, cost_price, warning_quantity FROM products WHERE status = 1').all() as any[]
     const warehouses = this.db!.prepare('SELECT id, code, name FROM warehouses WHERE status = 1').all() as any[]
 
@@ -2465,6 +2707,37 @@ export class InventoryDatabase {
     for (const product of products) {
       for (const warehouse of warehouses) {
         const stock = this.calculateStockForProductAndWarehouse(product.id, warehouse.id, endDate)
+
+        // 使用与明细表完全相同的 getProductLedger 数据计算成本价
+        const ledger = this.getProductLedger(product.id, warehouse.id, undefined, endDate, true)
+        let totalInQty = 0, totalInAmt = 0, totalOutQty = 0, totalOutAmt = 0
+
+        for (const item of ledger) {
+          // getProductLedger 返回的字段是 inboundQty/inboundAmount 和 outboundQty/outboundAmount
+          // inboundQty > 0 表示正常入库, inboundQty < 0 表示退货（负数）
+          // outboundQty > 0 表示正常出库
+          const inQty = Number(item.inboundQty || 0)
+          const inAmt = Number(item.inboundAmount || 0)
+          const outQty = Number(item.outboundQty || 0)
+          const outAmt = Number(item.outboundAmount || 0)
+
+          // 累计入库净额（正常入库 + 负数退货）
+          totalInQty += inQty
+          totalInAmt += inAmt
+          // 累计出库净额
+          totalOutQty += outQty
+          totalOutAmt += outAmt
+        }
+
+        // 成本价 = |总入库金额| / |总入库数量|（取绝对值确保正数）
+        const absInQty = Math.abs(totalInQty)
+        const absInAmt = Math.abs(totalInAmt)
+        const costPrice = absInQty > 0 ? Number((absInAmt / absInQty).toFixed(4)) : 0
+
+        // 库存金额 = 库存数量 × 成本价
+        const stockQuantity = stock.stockQuantity || 0
+        const stockAmount = Number((stockQuantity * costPrice).toFixed(2))
+
         result.push({
           productId: product.id,
           productCode: product.code,
@@ -2475,9 +2748,10 @@ export class InventoryDatabase {
           warehouseId: warehouse.id,
           warehouseCode: warehouse.code,
           warehouseName: warehouse.name,
-          stockQuantity: stock.stockQuantity || 0,
+          stockQuantity,
           warningQuantity: product.warning_quantity || 0,
-          costPrice: product.cost_price || 0
+          costPrice,
+          stockAmount
         })
       }
     }
@@ -2485,82 +2759,221 @@ export class InventoryDatabase {
     return result
   }
 
-  private calculateStockForProductAndWarehouse(productId: number, warehouseId: number, endDate?: string): { stockQuantity: number } {
+  private calculateStockForProductAndWarehouse(productId: number, warehouseId: number, endDate?: string): { stockQuantity: number; avgCost: number } {
     let totalStock = 0
+    let totalCost = 0
     const df = (dateCol: string) => endDate ? ` AND ${dateCol} <= '${endDate}'` : ''
 
     try {
       const inboundQty = this.db!.prepare(`
-        SELECT COALESCE(SUM(ii.quantity), 0) as total_qty
+        SELECT COALESCE(SUM(ii.quantity), 0) as total_qty, COALESCE(SUM(ii.total_amount), 0) as total_amount
         FROM purchase_inbound_items ii
         INNER JOIN purchase_inbound pi ON ii.inbound_id = pi.id
         WHERE ii.product_id = ? AND pi.warehouse_id = ? AND pi.status != 'deleted'${df('pi.inbound_date')}
       `).get(productId, warehouseId) as any
       totalStock += Number(inboundQty?.total_qty || 0)
+      totalCost += Number(inboundQty?.total_amount || 0)
     } catch (e) {
       console.warn('[calculateStockForProductAndWarehouse] 采购入库查询失败:', e)
     }
 
     try {
       const salesReturnQty = this.db!.prepare(`
-        SELECT COALESCE(SUM(sri.quantity), 0) as total_qty
+        SELECT COALESCE(SUM(sri.quantity), 0) as total_qty, COALESCE(SUM(sri.total_incl), 0) as total_cost
         FROM sales_return_items sri
         INNER JOIN sales_returns sr ON sri.return_id = sr.id
         WHERE sri.product_id = ? AND sr.warehouse_id = ? AND sr.status != 'deleted'${df('sr.return_date')}
       `).get(productId, warehouseId) as any
       totalStock += Number(salesReturnQty?.total_qty || 0)
+      totalCost += Number(salesReturnQty?.total_cost || 0)
     } catch (e) {
       console.warn('[calculateStockForProductAndWarehouse] 销售退货查询失败:', e)
     }
 
     try {
+      // 销售出库应使用含税金额(unit_price*quantity)冲减库存成本
       const outboundQty = this.db!.prepare(`
-        SELECT COALESCE(SUM(soi.quantity), 0) as total_qty
+        SELECT COALESCE(SUM(soi.quantity), 0) as total_qty, COALESCE(SUM(soi.unit_price * soi.quantity), 0) as total_cost
         FROM sales_outbound_items soi
         INNER JOIN sales_outbound so ON soi.outbound_id = so.id
         WHERE soi.product_id = ? AND so.warehouse_id = ? AND so.status != 'deleted'${df('so.outbound_date')}
       `).get(productId, warehouseId) as any
       totalStock -= Number(outboundQty?.total_qty || 0)
+      totalCost -= Number(outboundQty?.total_cost || 0)
     } catch (e) {
       console.warn('[calculateStockForProductAndWarehouse] 销售出库查询失败:', e)
     }
 
     try {
+      // 采购退货应使用含税金额冲减库存成本
       const purchaseReturnQty = this.db!.prepare(`
-        SELECT COALESCE(SUM(pri.quantity), 0) as total_qty
+        SELECT COALESCE(SUM(pri.quantity), 0) as total_qty, COALESCE(SUM(pri.unit_price * pri.quantity), 0) as total_cost
         FROM purchase_return_items pri
         INNER JOIN purchase_returns pr ON pri.return_id = pr.id
         WHERE pri.product_id = ? AND pr.warehouse_id = ? AND pr.status != 'deleted'${df('pr.return_date')}
       `).get(productId, warehouseId) as any
       totalStock -= Number(purchaseReturnQty?.total_qty || 0)
+      totalCost -= Number(purchaseReturnQty?.total_cost || 0)
     } catch (e) {
       console.warn('[calculateStockForProductAndWarehouse] 采购退货查询失败:', e)
     }
 
     try {
       const transferOutQty = this.db!.prepare(`
-        SELECT COALESCE(SUM(tri.quantity), 0) as total_qty
+        SELECT COALESCE(SUM(tri.quantity), 0) as total_qty, COALESCE(SUM(tri.cost), 0) as total_cost
         FROM transfer_record_items tri
         INNER JOIN transfer_records tr ON tri.transfer_id = tr.id
         WHERE tri.product_id = ? AND tr.from_warehouse_id = ? AND tr.status != 'deleted'${df('tr.transfer_date')}
-      `).get(productId, warehouseId) as any || { total_qty: 0 }
+      `).get(productId, warehouseId) as any || { total_qty: 0, total_cost: 0 }
       totalStock -= Number(transferOutQty.total_qty || 0)
-    } catch (e) {}
+      totalCost -= Number(transferOutQty.total_cost || 0)
+    } catch (e) {
+      console.warn('[calculateStockForProductAndWarehouse] 调拨出库查询失败:', e)
+    }
 
     try {
       const transferInQty = this.db!.prepare(`
-        SELECT COALESCE(SUM(tri.quantity), 0) as total_qty
+        SELECT COALESCE(SUM(tri.quantity), 0) as total_qty, COALESCE(SUM(tri.cost), 0) as total_cost
         FROM transfer_record_items tri
         INNER JOIN transfer_records tr ON tri.transfer_id = tr.id
         WHERE tri.product_id = ? AND tr.to_warehouse_id = ? AND tr.status != 'deleted'${df('tr.transfer_date')}
-      `).get(productId, warehouseId) as any || { total_qty: 0 }
+      `).get(productId, warehouseId) as any || { total_qty: 0, total_cost: 0 }
       totalStock += Number(transferInQty.total_qty || 0)
-    } catch (e) {}
+      totalCost += Number(transferInQty.total_cost || 0)
+    } catch (e) {
+      console.warn('[calculateStockForProductAndWarehouse] 调拨入库查询失败:', e)
+    }
 
-    return { stockQuantity: totalStock }
+    // 计算加权平均成本
+    const avgCost = totalStock > 0 ? totalCost / totalStock : 0
+
+    return { stockQuantity: totalStock, avgCost }
   }
 
-  getProductLedger(productId: number, warehouseId: number, startDate?: string, endDate?: string): any[] {
+  calculateLedgerFinalCost(productId: number, warehouseId: number, endDate?: string): { unitPrice: number; amount: number } {
+    const df = (col: string) => endDate ? ` AND ${col} <= '${endDate}'` : ''
+    const items: any[] = []
+
+    const inboundItems = this.db!.prepare(`
+      SELECT ii.quantity, ii.product_id, ii.unit_price, ii.total_amount,
+        pi.inbound_date, pi.created_at as _timestamp
+      FROM purchase_inbound_items ii
+      INNER JOIN purchase_inbound pi ON ii.inbound_id = pi.id
+      WHERE ii.product_id = ? AND pi.warehouse_id = ? AND pi.status != 'deleted'${df('pi.inbound_date')}
+      ORDER BY pi.inbound_date, pi.created_at
+    `).all(productId, warehouseId) as any[]
+    inboundItems.forEach(item => {
+      items.push({ _sortDate: item.inbound_date, _timestamp: item._timestamp, direction: 'in', qty: item.quantity || 0, amount: item.total_amount || 0 })
+    })
+
+    const outboundItems = this.db!.prepare(`
+      SELECT oi.quantity, oi.product_id, oi.cost_price, oi.unit_price,
+        so.outbound_date, so.created_at as _timestamp
+      FROM sales_outbound_items oi
+      INNER JOIN sales_outbound so ON oi.outbound_id = so.id
+      WHERE oi.product_id = ? AND so.warehouse_id = ? AND so.status != 'deleted'${df('so.outbound_date')}
+      ORDER BY so.outbound_date, so.created_at
+    `).all(productId, warehouseId) as any[]
+    outboundItems.forEach(item => {
+      // 销售出库使用含税单价(unit_price * quantity)
+      const outboundCost = Number(item.unit_price || 0) * Number(item.quantity || 0)
+      items.push({ _sortDate: item.outbound_date, _timestamp: item._timestamp, direction: 'out', qty: item.quantity || 0, amount: outboundCost })
+    })
+
+    const purchaseReturnItems = this.db!.prepare(`
+      SELECT pri.quantity, pri.product_id, pri.cost_price,
+        pri_table.return_date, pri_table.created_at as _timestamp,
+        COALESCE(pri.unit_price, ii.unit_price) as unit_price_incl,
+        COALESCE(pri.total_amount, ii.total_amount) as total_incl_amount
+      FROM purchase_return_items pri
+      INNER JOIN purchase_returns pri_table ON pri.return_id = pri_table.id
+      LEFT JOIN purchase_inbound pi ON pri_table.original_inbound_no = pi.inbound_no
+      LEFT JOIN purchase_inbound_items ii ON pi.id = ii.inbound_id AND pri.product_id = ii.product_id
+        AND ii.id = (SELECT MIN(ii2.id) FROM purchase_inbound_items ii2 WHERE ii2.inbound_id = pi.id AND ii2.product_id = pri.product_id)
+      WHERE pri.product_id = ? AND pri_table.warehouse_id = ? AND pri_table.status != 'deleted'${df('pri_table.return_date')}
+      ORDER BY pri_table.return_date, pri_table.created_at
+    `).all(productId, warehouseId) as any[]
+    purchaseReturnItems.forEach(item => {
+      // 采购退货使用含税单价(unit_price * quantity)
+      const returnCost = Number(item.unit_price_incl || 0) * Number(item.quantity || 0)
+      items.push({ _sortDate: item.return_date, _timestamp: item._timestamp, direction: 'out', qty: item.quantity || 0, amount: returnCost })
+    })
+
+    const salesReturnItems = this.db!.prepare(`
+      SELECT sri.quantity, sri.product_id, sri.cost_price,
+        sr.return_date, sr.original_order_no, sr.created_at as _timestamp,
+        COALESCE(sri.unit_price_incl, sri.unit_price, 0) as unit_price_incl,
+        COALESCE(sri.total_incl, sri.total_amount, 0) as total_incl_amount
+      FROM sales_return_items sri
+      INNER JOIN sales_returns sr ON sri.return_id = sr.id
+      WHERE sri.product_id = ? AND sr.warehouse_id = ? AND sr.status != 'deleted'${df('sr.return_date')}
+      ORDER BY sr.return_date, sr.created_at
+    `).all(productId, warehouseId) as any[]
+    salesReturnItems.forEach(item => {
+      // 销售退货入库使用含税金额(total_incl)，与其他入库单据保持一致
+      const returnInCost = Number(item.total_incl_amount || 0) || (Number(item.unit_price_incl || 0) * Number(item.quantity || 0))
+      items.push({ _sortDate: item.return_date, _timestamp: item._timestamp, direction: 'in', qty: item.quantity || 0, amount: returnInCost })
+    })
+
+    const transferOutItems = this.db!.prepare(`
+      SELECT tri.*, tr.transfer_date, tr.created_at as _timestamp
+      FROM transfer_record_items tri
+      INNER JOIN transfer_records tr ON tri.transfer_id = tr.id
+      WHERE tri.product_id = ? AND tr.from_warehouse_id = ? AND tr.status != 'deleted'${df('tr.transfer_date')}
+      ORDER BY tr.transfer_date, tr.created_at
+    `).all(productId, warehouseId) as any[]
+    transferOutItems.forEach(item => {
+      // 调拨出库使用含税单价
+      const transferOutCost = Number(item.unit_price || 0) * Number(item.quantity || 0)
+      items.push({ _sortDate: item.transfer_date, _timestamp: item._timestamp, direction: 'out', qty: item.quantity || 0, amount: transferOutCost })
+    })
+
+    const transferInItems = this.db!.prepare(`
+      SELECT tri.*, tr.transfer_date, tr.created_at as _timestamp
+      FROM transfer_record_items tri
+      INNER JOIN transfer_records tr ON tri.transfer_id = tr.id
+      WHERE tri.product_id = ? AND tr.to_warehouse_id = ? AND tr.status != 'deleted'${df('tr.transfer_date')}
+      ORDER BY tr.transfer_date, tr.created_at
+    `).all(productId, warehouseId) as any[]
+    transferInItems.forEach(item => {
+      items.push({ _sortDate: item.transfer_date, _timestamp: item._timestamp, direction: 'in', qty: item.quantity || 0, amount: item.amount || 0 })
+    })
+
+    items.sort((a, b) => {
+      if (a._sortDate !== b._sortDate) return a._sortDate > b._sortDate ? 1 : -1
+      if (a._timestamp !== b._timestamp) return a._timestamp > b._timestamp ? 1 : -1
+      return 0
+    })
+
+    console.log(`[calculateLedgerFinalCost] productId=${productId}, warehouseId=${warehouseId}, items:`, items.map(i => ({ dir: i.direction, qty: i.qty, amount: i.amount, date: i._sortDate })))
+
+    let runningQty = 0
+    let runningUnitPrice = 0
+    let runningAmount = 0
+
+    for (const item of items) {
+      const qty = Number(item.qty || 0)
+      const amt = Number(item.amount || 0)
+
+      if (item.direction === 'in' && qty !== 0) {
+        runningQty = Number((runningQty + qty).toFixed(4))
+        runningAmount = Number((runningAmount + amt).toFixed(2))
+        runningUnitPrice = runningQty > 0 ? Number((runningAmount / runningQty).toFixed(4)) : 0
+        console.log(`  IN: qty=${qty}, amt=${amt} → runningQty=${runningQty}, runningAmount=${runningAmount}, runningUnitPrice=${runningUnitPrice}`)
+      }
+      if (item.direction === 'out' && qty !== 0) {
+        runningQty = Number((runningQty - qty).toFixed(4))
+        runningAmount = Number((runningAmount - amt).toFixed(2))
+        runningUnitPrice = runningQty > 0 ? Number((runningAmount / runningQty).toFixed(4)) : 0
+        console.log(`  OUT: qty=${qty}, amt=${amt} → runningQty=${runningQty}, runningAmount=${runningAmount}, runningUnitPrice=${runningUnitPrice}`)
+      }
+    }
+
+    console.log(`[calculateLedgerFinalCost] RESULT: unitPrice=${runningUnitPrice}, amount=${runningAmount}`)
+    return { unitPrice: runningUnitPrice, amount: runningAmount }
+  }
+
+  getProductLedger(productId: number, warehouseId: number, startDate?: string, endDate?: string, useTransferRunningCost: boolean = false): any[] {
     const items: any[] = []
 
     const dateFilter = (col: string) => {
@@ -2586,17 +2999,6 @@ export class InventoryDatabase {
     `).all(productId, warehouseId) as any[]
     console.log(`[getProductLedger] 采购入库: ${inboundItems.length} 条`)
 
-    inboundItems.forEach(item => {
-      items.push({
-        ...item,
-        _sortDate: item.inbound_date,
-        direction: 'in',
-        qty: item.quantity,
-        price: item.unit_price || 0,
-        amount: item.total_amount || 0
-      })
-    })
-
     const outboundItems = this.db!.prepare(`
       SELECT oi.*, so.outbound_no, so.outbound_date, so.customer_id,
              c.name as customer_name, w.name as warehouse_name,
@@ -2609,17 +3011,6 @@ export class InventoryDatabase {
         AND so.status != 'deleted'${dateFilter('so.outbound_date')}
       ORDER BY so.outbound_date, so.created_at
     `).all(productId, warehouseId) as any[]
-
-    outboundItems.forEach(item => {
-      items.push({
-        ...item,
-        _sortDate: item.outbound_date,
-        direction: 'out',
-        qty: item.quantity,
-        price: item.unit_price || 0,
-        amount: item.total_amount || 0
-      })
-    })
 
     const purchaseReturnItems = this.db!.prepare(`
       SELECT pri.*, pri_table.return_no, pri_table.return_date, pri_table.supplier_id,
@@ -2650,21 +3041,6 @@ export class InventoryDatabase {
       ORDER BY pri_table.return_date, pri_table.created_at
     `).all(productId, warehouseId) as any[]
 
-    // 为每个采购退货明细项应用单价
-    purchaseReturnItems.forEach(item => {
-      const unitPrice = Number(item.unit_price || 0)
-      const totalAmount = Number(item.total_amount || 0)
-      
-      items.push({
-        ...item,
-        _sortDate: item.return_date,
-        direction: 'in',
-        qty: -item.quantity,
-        price: -unitPrice,
-        amount: -totalAmount
-      })
-    })
-
     const salesReturnItems = this.db!.prepare(`
       SELECT sri.*, sr.return_no, sr.return_date, sr.customer_id, sr.original_order_no,
              -- 备注：显示原出库单号
@@ -2688,49 +3064,8 @@ export class InventoryDatabase {
       console.log('[getProductLedger] 销售退货原始数据:', JSON.stringify(salesReturnItems[0]))
     }
 
-    // 销售退货：数量以负数表示在出库数据中，单价和金额使用含税单价和含税金额（与其他单据保持一致）
-    salesReturnItems.forEach(item => {
-      // 优先使用含税单价和含税金额（与采购入库、销售出库保持一致）
-      let unitPrice = item.unit_price_incl || item.unit_price || 0
-      let totalAmount = item.total_inc || item.total_amount || 0
-      
-      console.log(`[getProductLedger] 销售退货处理: quantity=${item.quantity}, unit_price=${item.unit_price}, amount=${item.amount}, original_item_index=${item.original_item_index}`)
-      
-      // 如果没有保存单价和金额，尝试从原出库单查询
-      if ((!unitPrice || !totalAmount) && item.original_item_index !== undefined) {
-        // 需要先找到原出库单（通过 original_order_no）
-        const originalOutbound = this.db!.prepare(`
-          SELECT soi.unit_price, soi.total_amount
-          FROM sales_outbound_items soi
-          INNER JOIN sales_outbound so ON soi.outbound_id = so.id
-          WHERE so.outbound_no = (
-            SELECT sr.original_order_no FROM sales_returns sr WHERE sr.id = ?
-          ) AND soi.product_id = ?
-          LIMIT 1
-        `).get(item.return_id, productId) as any
-        
-        console.log(`[getProductLedger] 原出库单查询结果:`, originalOutbound)
-        
-        if (originalOutbound) {
-          unitPrice = originalOutbound.unit_price || unitPrice
-          totalAmount = originalOutbound.total_amount || totalAmount
-        }
-      }
-      
-      console.log(`[getProductLedger] 销售退货最终: qty=${-item.quantity}, price=${-unitPrice}, amount=${-totalAmount}`)
-      
-      items.push({
-        ...item,
-        _sortDate: item.return_date,
-        direction: 'out',
-        qty: -item.quantity,
-        price: -unitPrice,
-        amount: -totalAmount
-      })
-    })
-
     const transferOutItems = this.db!.prepare(`
-      SELECT tri.*, tr.transfer_no, tr.transfer_date,
+      SELECT tri.*, tr.transfer_no, tr.transfer_date, tr.from_warehouse_id, tr.to_warehouse_id, tr.status,
              fw.name as from_warehouse_name, tw.name as to_warehouse_name,
              'transfer_out' as doc_type, tr.created_at as _timestamp
       FROM transfer_record_items tri
@@ -2741,21 +3076,26 @@ export class InventoryDatabase {
         AND tr.status != 'deleted'${dateFilter('tr.transfer_date')}
       ORDER BY tr.transfer_date, tr.created_at
     `).all(productId, warehouseId) as any[]
-    console.log(`[getProductLedger] 调拨出库: ${transferOutItems.length} 条`)
-
-    transferOutItems.forEach(item => {
-      items.push({
-        ...item,
-        _sortDate: item.transfer_date,
-        direction: 'out',
-        qty: item.quantity,
-        price: 0,
-        amount: 0
-      })
-    })
+    console.log(`[getProductLedger] 调拨出库查询：产品${productId}，仓库${warehouseId}，日期范围${startDate || '全部'}~${endDate || '全部'}`)
+    console.log(`[getProductLedger] 调拨出库：${transferOutItems.length} 条`)
+    if (transferOutItems.length > 0) {
+      console.log('[getProductLedger] 调拨出库数据示例:', JSON.stringify(transferOutItems[0]))
+    } else {
+      // 调试：检查数据库中是否有该产品的调拨单
+      const allTransferOut = this.db!.prepare(`
+        SELECT tri.*, tr.transfer_no, tr.from_warehouse_id, tr.to_warehouse_id, tr.status
+        FROM transfer_record_items tri
+        INNER JOIN transfer_records tr ON tri.transfer_id = tr.id
+        WHERE tri.product_id = ? AND tr.status != 'deleted'
+      `).all(productId) as any[]
+      console.log(`[getProductLedger] 调试：产品${productId}的所有调拨出库（不限仓库）: ${allTransferOut.length} 条`)
+      if (allTransferOut.length > 0) {
+        console.log('[getProductLedger] 调试：调拨单示例:', JSON.stringify(allTransferOut[0]))
+      }
+    }
 
     const transferInItems = this.db!.prepare(`
-      SELECT tri.*, tr.transfer_no, tr.transfer_date,
+      SELECT tri.*, tr.transfer_no, tr.transfer_date, tr.from_warehouse_id, tr.to_warehouse_id, tr.status,
              fw.name as from_warehouse_name, tw.name as to_warehouse_name,
              'transfer_in' as doc_type, tr.created_at as _timestamp
       FROM transfer_record_items tri
@@ -2766,25 +3106,285 @@ export class InventoryDatabase {
         AND tr.status != 'deleted'${dateFilter('tr.transfer_date')}
       ORDER BY tr.transfer_date, tr.created_at
     `).all(productId, warehouseId) as any[]
-    console.log(`[getProductLedger] 调拨入库: ${transferInItems.length} 条`)
-    console.log(`[getProductLedger] 合计: ${items.length} 条明细`)
+    console.log(`[getProductLedger] 调拨入库查询：产品${productId}，仓库${warehouseId}，日期范围${startDate || '全部'}~${endDate || '全部'}`)
+    console.log(`[getProductLedger] 调拨入库：${transferInItems.length} 条`)
 
-    transferInItems.forEach(item => {
-      items.push({
-        ...item,
-        _sortDate: item.transfer_date,
-        direction: 'in',
-        qty: item.quantity,
-        price: 0,
-        amount: 0
+    // For real-time inventory query: use running weighted average cost for transfer orders
+    // instead of the stored transfer order cost
+    // 此逻辑仅当 useTransferRunningCost=true 时生效
+    if (useTransferRunningCost) {
+      let runningQty = 0
+      let runningAmount = 0
+      let runningUnitPrice = 0
+
+      // Build items array with all data first (before sorting)
+      const allItems: any[] = []
+      
+      // Add purchase inbound
+      inboundItems.forEach(item => {
+        allItems.push({
+          ...item,
+          _sortDate: item.inbound_date,
+          direction: 'in',
+          qty: item.quantity,
+          price: item.unit_price || 0,
+          amount: item.total_amount || 0
+        })
       })
-    })
 
-    items.sort((a, b) => {
-      if (a._sortDate !== b._sortDate) return a._sortDate > b._sortDate ? 1 : -1
-      if (a._timestamp !== b._timestamp) return a._timestamp > b._timestamp ? 1 : -1
-      return 0
-    })
+      // Add sales outbound
+      outboundItems.forEach(item => {
+        allItems.push({
+          ...item,
+          _sortDate: item.outbound_date,
+          direction: 'out',
+          qty: item.quantity,
+          price: item.unit_price || 0,
+          amount: item.total_amount || 0
+        })
+      })
+
+      // Add purchase returns
+      purchaseReturnItems.forEach(item => {
+        const unitPrice = Number(item.unit_price || 0)
+        const totalAmount = Number(item.total_amount || 0)
+        allItems.push({
+          ...item,
+          _sortDate: item.return_date,
+          direction: 'in',
+          qty: -item.quantity,
+          price: -unitPrice,
+          amount: -totalAmount
+        })
+      })
+
+      // Add sales returns
+      salesReturnItems.forEach(item => {
+        let unitPrice = item.unit_price_incl || item.unit_price || 0
+        let totalAmount = item.total_incl || item.total_amount || 0
+        
+        if ((!unitPrice || !totalAmount) && item.original_item_index !== undefined) {
+          const originalOutbound = this.db!.prepare(`
+            SELECT soi.unit_price, soi.total_amount
+            FROM sales_outbound_items soi
+            INNER JOIN sales_outbound so ON soi.outbound_id = so.id
+            WHERE so.outbound_no = (
+              SELECT sr.original_order_no FROM sales_returns sr WHERE sr.id = ?
+            ) AND soi.product_id = ?
+            LIMIT 1
+          `).get(item.return_id, productId) as any
+          
+          if (originalOutbound) {
+            unitPrice = originalOutbound.unit_price || unitPrice
+            totalAmount = originalOutbound.total_amount || totalAmount
+          }
+        }
+        
+        allItems.push({
+          ...item,
+          _sortDate: item.return_date,
+          direction: 'out',
+          qty: -item.quantity,
+          price: -unitPrice,
+          amount: -totalAmount
+        })
+      })
+
+      // Add transfer out items
+      transferOutItems.forEach(item => {
+        allItems.push({
+          ...item,
+          _sortDate: item.transfer_date,
+          direction: 'out',
+          qty: item.quantity,
+          price: item.cost || 0,
+          amount: item.amount || 0,
+          _isTransferOut: true,
+          _transferId: item.transfer_id,
+          _productId: productId
+        })
+      })
+
+      // Add transfer in items
+      transferInItems.forEach(item => {
+        allItems.push({
+          ...item,
+          _sortDate: item.transfer_date,
+          direction: 'in',
+          qty: item.quantity,
+          price: item.cost || 0,
+          amount: item.amount || 0,
+          _isTransferIn: true,
+          _fromWarehouseId: item.from_warehouse_id,
+          _transferId: item.transfer_id,
+          _productId: productId
+        })
+      })
+
+      // Sort all items by date and timestamp
+      allItems.sort((a, b) => {
+        if (a._sortDate !== b._sortDate) return a._sortDate > b._sortDate ? 1 : -1
+        if (a._timestamp !== b._timestamp) return a._timestamp > b._timestamp ? 1 : -1
+        return 0
+      })
+
+      // Now process items to calculate running cost and adjust transfer prices
+      for (const item of allItems) {
+        const qty = Number(item.qty || 0)
+        const amt = Number(item.amount || 0)
+        
+        if (item._isTransferOut) {
+          // For transfer out: use running weighted average cost at this point
+          const transferPrice = runningUnitPrice
+          const transferAmount = Number((qty * transferPrice).toFixed(2))
+          
+          items.push({
+            ...item,
+            price: transferPrice,
+            amount: transferAmount
+          })
+          
+          // Update running cost after transfer out
+          runningQty = Number((runningQty - qty).toFixed(4))
+          runningAmount = Number((runningAmount - transferAmount).toFixed(2))
+          runningUnitPrice = runningQty > 0 ? Number((runningAmount / runningQty).toFixed(4)) : 0
+        } else if (item._isTransferIn) {
+          // For transfer in: use the source warehouse's running cost at this point in time
+          const sourceRunningCost = this.getStockCostAtDate(item._productId, item._fromWarehouseId, item._sortDate)
+          
+          const transferPrice = sourceRunningCost
+          const transferAmount = Number((qty * transferPrice).toFixed(2))
+          
+          items.push({
+            ...item,
+            price: transferPrice,
+            amount: transferAmount
+          })
+          
+          // Update running cost after transfer in
+          runningQty = Number((runningQty + qty).toFixed(4))
+          runningAmount = Number((runningAmount + transferAmount).toFixed(2))
+          runningUnitPrice = runningQty > 0 ? Number((runningAmount / runningQty).toFixed(4)) : 0
+        } else if (item.direction === 'in' && qty !== 0) {
+          // Regular inbound
+          runningQty = Number((runningQty + qty).toFixed(4))
+          runningAmount = Number((runningAmount + amt).toFixed(2))
+          runningUnitPrice = runningQty > 0 ? Number((runningAmount / runningQty).toFixed(4)) : 0
+          
+          items.push(item)
+        } else if (item.direction === 'out' && qty !== 0) {
+          // Regular outbound: use running weighted average cost
+          const outPrice = runningUnitPrice
+          const outAmount = Number((qty * outPrice).toFixed(2))
+          
+          items.push({
+            ...item,
+            price: outPrice,
+            amount: outAmount
+          })
+          
+          runningQty = Number((runningQty - qty).toFixed(4))
+          runningAmount = Number((runningAmount - outAmount).toFixed(2))
+          runningUnitPrice = runningQty > 0 ? Number((runningAmount / runningQty).toFixed(4)) : 0
+        }
+      }
+    } else {
+      // Original behavior: use stored transfer order cost
+      transferOutItems.forEach(item => {
+        items.push({
+          ...item,
+          _sortDate: item.transfer_date,
+          direction: 'out',
+          qty: item.quantity,
+          price: item.cost || 0,
+          amount: item.amount || 0
+        })
+      })
+
+      transferInItems.forEach(item => {
+        items.push({
+          ...item,
+          _sortDate: item.transfer_date,
+          direction: 'in',
+          qty: item.quantity,
+          price: item.cost || 0,
+          amount: item.amount || 0
+        })
+      })
+
+      // Add other items
+      inboundItems.forEach(item => {
+        items.push({
+          ...item,
+          _sortDate: item.inbound_date,
+          direction: 'in',
+          qty: item.quantity,
+          price: item.unit_price || 0,
+          amount: item.total_amount || 0
+        })
+      })
+
+      outboundItems.forEach(item => {
+        items.push({
+          ...item,
+          _sortDate: item.outbound_date,
+          direction: 'out',
+          qty: item.quantity,
+          price: item.unit_price || 0,
+          amount: item.total_amount || 0
+        })
+      })
+
+      purchaseReturnItems.forEach(item => {
+        const unitPrice = Number(item.unit_price || 0)
+        const totalAmount = Number(item.total_amount || 0)
+        items.push({
+          ...item,
+          _sortDate: item.return_date,
+          direction: 'in',
+          qty: -item.quantity,
+          price: -unitPrice,
+          amount: -totalAmount
+        })
+      })
+
+      salesReturnItems.forEach(item => {
+        let unitPrice = item.unit_price_incl || item.unit_price || 0
+        let totalAmount = item.total_incl || item.total_amount || 0
+        
+        if ((!unitPrice || !totalAmount) && item.original_item_index !== undefined) {
+          const originalOutbound = this.db!.prepare(`
+            SELECT soi.unit_price, soi.total_amount
+            FROM sales_outbound_items soi
+            INNER JOIN sales_outbound so ON soi.outbound_id = so.id
+            WHERE so.outbound_no = (
+              SELECT sr.original_order_no FROM sales_returns sr WHERE sr.id = ?
+            ) AND soi.product_id = ?
+            LIMIT 1
+          `).get(item.return_id, productId) as any
+          
+          if (originalOutbound) {
+            unitPrice = originalOutbound.unit_price || unitPrice
+            totalAmount = originalOutbound.total_amount || totalAmount
+          }
+        }
+        
+        items.push({
+          ...item,
+          _sortDate: item.return_date,
+          direction: 'out',
+          qty: -item.quantity,
+          price: -unitPrice,
+          amount: -totalAmount
+        })
+      })
+
+      items.sort((a, b) => {
+        if (a._sortDate !== b._sortDate) return a._sortDate > b._sortDate ? 1 : -1
+        if (a._timestamp !== b._timestamp) return a._timestamp > b._timestamp ? 1 : -1
+        return 0
+      })
+    }
 
     const mappedItems = items.map(item => ({
       date: item.inbound_date || item.outbound_date || item.return_date || item.transfer_date,
@@ -2810,9 +3410,206 @@ export class InventoryDatabase {
     return mappedItems
   }
 
+  /**
+   * Get the running cost at a specific date for a product in a warehouse
+   * Used for transfer in to get the source warehouse's cost at transfer time
+   */
+  private getStockCostAtDate(productId: number, warehouseId: number, date: string): number {
+    const df = (dateCol: string) => ` AND ${dateCol} <= '${date}'`
+    let runningQty = 0
+    let runningAmount = 0
+    let runningUnitPrice = 0
+
+    try {
+      const inboundItems = this.db!.prepare(`
+        SELECT ii.*, pi.inbound_date, pi.created_at as _timestamp
+        FROM purchase_inbound_items ii
+        INNER JOIN purchase_inbound pi ON ii.inbound_id = pi.id
+        WHERE ii.product_id = ? AND pi.warehouse_id = ? AND pi.status != 'deleted'${df('pi.inbound_date')}
+        ORDER BY pi.inbound_date, pi.created_at
+      `).all(productId, warehouseId) as any[]
+
+      const outboundItems = this.db!.prepare(`
+        SELECT oi.*, so.outbound_date, so.created_at as _timestamp
+        FROM sales_outbound_items oi
+        INNER JOIN sales_outbound so ON oi.outbound_id = so.id
+        WHERE oi.product_id = ? AND so.warehouse_id = ? AND so.status != 'deleted'${df('so.outbound_date')}
+        ORDER BY so.outbound_date, so.created_at
+      `).all(productId, warehouseId) as any[]
+
+      const purchaseReturnItems = this.db!.prepare(`
+        SELECT pri.*, pri_table.return_date, pri_table.created_at as _timestamp,
+               COALESCE(pri.unit_price, ii.unit_price) as unit_price,
+               COALESCE(pri.total_amount, ii.total_amount) as total_amount
+        FROM purchase_return_items pri
+        INNER JOIN purchase_returns pri_table ON pri.return_id = pri_table.id
+        LEFT JOIN purchase_inbound pi ON pri_table.original_inbound_no = pi.inbound_no
+        LEFT JOIN purchase_inbound_items ii ON pi.id = ii.inbound_id AND pri.product_id = ii.product_id
+          AND ii.id = (
+            SELECT MIN(ii2.id) FROM purchase_inbound_items ii2
+            WHERE ii2.inbound_id = pi.id AND ii2.product_id = pri.product_id
+          )
+        WHERE pri.product_id = ? AND pri_table.warehouse_id = ? AND pri_table.status != 'deleted'${df('pri_table.return_date')}
+        ORDER BY pri_table.return_date, pri_table.created_at
+      `).all(productId, warehouseId) as any[]
+
+      const salesReturnItems = this.db!.prepare(`
+        SELECT sri.*, sr.return_date, sr.created_at as _timestamp
+        FROM sales_return_items sri
+        INNER JOIN sales_returns sr ON sri.return_id = sr.id
+        WHERE sri.product_id = ? AND sr.warehouse_id = ? AND sr.status != 'deleted'${df('sr.return_date')}
+        ORDER BY sr.return_date, sr.created_at
+      `).all(productId, warehouseId) as any[]
+
+      const transferOutItems = this.db!.prepare(`
+        SELECT tri.*, tr.transfer_date, tr.created_at as _timestamp
+        FROM transfer_record_items tri
+        INNER JOIN transfer_records tr ON tri.transfer_id = tr.id
+        WHERE tri.product_id = ? AND tr.from_warehouse_id = ? AND tr.status != 'deleted'${df('tr.transfer_date')}
+        ORDER BY tr.transfer_date, tr.created_at
+      `).all(productId, warehouseId) as any[]
+
+      const transferInItems = this.db!.prepare(`
+        SELECT tri.*, tr.transfer_date, tr.from_warehouse_id, tr.created_at as _timestamp
+        FROM transfer_record_items tri
+        INNER JOIN transfer_records tr ON tri.transfer_id = tr.id
+        WHERE tri.product_id = ? AND tr.to_warehouse_id = ? AND tr.status != 'deleted'${df('tr.transfer_date')}
+        ORDER BY tr.transfer_date, tr.created_at
+      `).all(productId, warehouseId) as any[]
+
+      const allItems: any[] = []
+
+      inboundItems.forEach(item => {
+        allItems.push({ _sortDate: item.inbound_date, _timestamp: item._timestamp, direction: 'in', qty: item.quantity || 0, amount: item.total_amount || 0 })
+      })
+
+      outboundItems.forEach(item => {
+        allItems.push({ _sortDate: item.outbound_date, _timestamp: item._timestamp, direction: 'out', qty: item.quantity || 0, amount: (item.unit_price || 0) * (item.quantity || 0) })
+      })
+
+      purchaseReturnItems.forEach(item => {
+        allItems.push({ _sortDate: item.return_date, _timestamp: item._timestamp, direction: 'in', qty: -(item.quantity || 0), amount: -(item.total_amount || 0) })
+      })
+
+      salesReturnItems.forEach(item => {
+        let unitPrice = item.unit_price_incl || item.unit_price || 0
+        let totalAmount = item.total_incl || item.total_amount || 0
+        if ((!unitPrice || !totalAmount) && item.original_item_index !== undefined) {
+          const originalOutbound = this.db!.prepare(`
+            SELECT soi.unit_price, soi.total_amount
+            FROM sales_outbound_items soi
+            INNER JOIN sales_outbound so ON soi.outbound_id = so.id
+            WHERE so.outbound_no = (
+              SELECT sr.original_order_no FROM sales_returns sr WHERE sr.id = ?
+            ) AND soi.product_id = ?
+            LIMIT 1
+          `).get(item.return_id, productId) as any
+          if (originalOutbound) { unitPrice = originalOutbound.unit_price || unitPrice; totalAmount = originalOutbound.total_amount || totalAmount }
+        }
+        allItems.push({ _sortDate: item.return_date, _timestamp: item._timestamp, direction: 'out', qty: -(item.quantity || 0), amount: -(totalAmount || 0) })
+      })
+
+      transferOutItems.forEach(item => {
+        allItems.push({ _sortDate: item.transfer_date, _timestamp: item._timestamp, direction: 'out', qty: item.quantity || 0, isTransferOut: true })
+      })
+
+      transferInItems.forEach(item => {
+        allItems.push({ _sortDate: item.transfer_date, _timestamp: item._timestamp, direction: 'in', qty: item.quantity || 0, isTransferIn: true, fromWarehouseId: item.from_warehouse_id })
+      })
+
+      allItems.sort((a, b) => {
+        if (a._sortDate !== b._sortDate) return a._sortDate > b._sortDate ? 1 : -1
+        if (a._timestamp !== b._timestamp) return a._timestamp > b._timestamp ? 1 : -1
+        return 0
+      })
+
+      for (const item of allItems) {
+        const qty = Number(item.qty || 0)
+
+        if (item.isTransferOut) {
+          const transferPrice = runningUnitPrice
+          const transferAmount = Number((qty * transferPrice).toFixed(2))
+          runningQty = Number((runningQty - qty).toFixed(4))
+          runningAmount = Number((runningAmount - transferAmount).toFixed(2))
+          runningUnitPrice = runningQty > 0 ? Number((runningAmount / runningQty).toFixed(4)) : 0
+        } else if (item.isTransferIn) {
+          const sourceCost = this.getStockCostAtDate(productId, item.fromWarehouseId, item._sortDate)
+          const transferAmount = Number((qty * sourceCost).toFixed(2))
+          runningQty = Number((runningQty + qty).toFixed(4))
+          runningAmount = Number((runningAmount + transferAmount).toFixed(2))
+          runningUnitPrice = runningQty > 0 ? Number((runningAmount / runningQty).toFixed(4)) : 0
+        } else if (item.direction === 'in') {
+          const amt = Number(item.amount || 0)
+          runningQty = Number((runningQty + qty).toFixed(4))
+          runningAmount = Number((runningAmount + amt).toFixed(2))
+          runningUnitPrice = runningQty > 0 ? Number((runningAmount / runningQty).toFixed(4)) : 0
+        } else if (item.direction === 'out') {
+          const outAmount = Number((qty * runningUnitPrice).toFixed(2))
+          runningQty = Number((runningQty - qty).toFixed(4))
+          runningAmount = Number((runningAmount - outAmount).toFixed(2))
+          runningUnitPrice = runningQty > 0 ? Number((runningAmount / runningQty).toFixed(4)) : 0
+        }
+      }
+    } catch (e) {
+      console.warn('[getStockCostAtDate] 计算失败:', e)
+    }
+
+    return runningUnitPrice
+  }
+
   getStockBeforeDate(productId: number, warehouseId: number, date: string): number {
     const result = this.calculateStockForProductAndWarehouse(productId, warehouseId, date)
     return result.stockQuantity
+  }
+
+  getStockCostBeforeDate(productId: number, warehouseId: number, date: string): number {
+    const result = this.calculateStockForProductAndWarehouse(productId, warehouseId, date)
+    return result.avgCost
+  }
+
+  /**
+   * 获取调拨单的实时库存和成本
+   * 返回指定日期某个产品在指定仓库的库存数量和成本价
+   * 优先从成本结算表获取加权平均成本，如果没有则实时计算
+   */
+  getTransferStockCost(productId: number, warehouseId: number, date: string): { stock: number; cost: number } {
+    // 解析日期，获取年月
+    const dateObj = new Date(date)
+    const year = dateObj.getFullYear()
+    const month = dateObj.getMonth() + 1
+
+    // 尝试从成本结算表获取数据
+    try {
+      const product = this.db!.prepare(`
+        SELECT code FROM products WHERE id = ?
+      `).get(productId) as any
+
+      if (product) {
+        const settlement = this.db!.prepare(`
+          SELECT closing_qty, closing_cost, avg_cost
+          FROM cost_settlements
+          WHERE product_code = ? AND warehouse_id = ? AND period_year = ? AND period_month = ?
+        `).get(product.code, warehouseId, year, month) as any
+
+        if (settlement && settlement.avg_cost > 0) {
+          console.log(`[getTransferStockCost] 从成本结算表获取：产品${productId}在仓库${warehouseId}的成本=${settlement.avg_cost}`)
+          return {
+            stock: settlement.closing_qty || 0,
+            cost: settlement.avg_cost
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[getTransferStockCost] 从成本结算表获取失败，使用实时计算:', e)
+    }
+
+    // 如果成本结算表没有数据，使用实时计算
+    const result = this.calculateStockForProductAndWarehouse(productId, warehouseId, date)
+    console.log(`[getTransferStockCost] 实时计算：产品${productId}在仓库${warehouseId}于${date}的库存=${result.stockQuantity}, 成本=${result.avgCost}`)
+    return {
+      stock: result.stockQuantity,
+      cost: result.avgCost || 0
+    }
   }
 
   // ==================== 库存期初期末 ====================
@@ -3003,6 +3800,104 @@ export class InventoryDatabase {
       console.error('【Electron 后端】保存开票记录失败:', error)
       throw error
     }
+  }
+
+  checkInboundHasReturns(id: number): { hasReturns: boolean; returnNos: string[] } {
+    const inbound = this.db!.prepare('SELECT inbound_no FROM purchase_inbound WHERE id = ?').get(id) as any
+    if (!inbound) {
+      return { hasReturns: false, returnNos: [] }
+    }
+    const returns = this.db!.prepare(
+      "SELECT return_no FROM purchase_returns WHERE original_inbound_no = ? AND status != 'deleted'"
+    ).all(inbound.inbound_no) as any[]
+    const returnNos = returns.map(r => r.return_no)
+    return { hasReturns: returnNos.length > 0, returnNos }
+  }
+
+  checkOutboundHasReturns(id: number): { hasReturns: boolean; returnNos: string[] } {
+    const outbound = this.db!.prepare('SELECT outbound_no FROM sales_outbound WHERE id = ?').get(id) as any
+    if (!outbound) {
+      return { hasReturns: false, returnNos: [] }
+    }
+    const returns = this.db!.prepare(
+      "SELECT return_no FROM sales_returns WHERE original_order_no = ? AND status != 'deleted'"
+    ).all(outbound.outbound_no) as any[]
+    const returnNos = returns.map(r => r.return_no)
+    return { hasReturns: returnNos.length > 0, returnNos }
+  }
+
+  validateInboundUpdateAgainstReturns(id: number, newItems: any[]): string[] {
+    const inbound = this.db!.prepare('SELECT inbound_no FROM purchase_inbound WHERE id = ?').get(id) as any
+    if (!inbound) return []
+
+    const returnItems = this.db!.prepare(`
+      SELECT pri.product_id, pri.product_name, SUM(pri.quantity) as total_return_qty
+      FROM purchase_return_items pri
+      INNER JOIN purchase_returns pr ON pri.return_id = pr.id
+      WHERE pr.original_inbound_no = ? AND pr.status != 'deleted'
+      GROUP BY pri.product_id
+    `).all(inbound.inbound_no) as any[]
+
+    if (returnItems.length === 0) return []
+
+    const returnQtyMap = new Map<number, { name: string; qty: number }>()
+    returnItems.forEach(item => {
+      returnQtyMap.set(item.product_id, { name: item.product_name || '', qty: item.total_return_qty })
+    })
+
+    const newQtyMap = new Map<number, number>()
+    newItems.forEach(item => {
+      if (item.product_id) {
+        newQtyMap.set(item.product_id, (newQtyMap.get(item.product_id) || 0) + (item.quantity || 0))
+      }
+    })
+
+    const errors: string[] = []
+    for (const [productId, returnInfo] of returnQtyMap.entries()) {
+      const newQty = newQtyMap.get(productId) || 0
+      if (newQty < returnInfo.qty) {
+        errors.push(`商品"${returnInfo.name}"修改后数量(${newQty})小于退货单累计退货数量(${returnInfo.qty})`)
+      }
+    }
+
+    return errors
+  }
+
+  validateOutboundUpdateAgainstReturns(id: number, newItems: any[]): string[] {
+    const outbound = this.db!.prepare('SELECT outbound_no FROM sales_outbound WHERE id = ?').get(id) as any
+    if (!outbound) return []
+
+    const returnItems = this.db!.prepare(`
+      SELECT sri.product_id, sri.product_name, SUM(sri.quantity) as total_return_qty
+      FROM sales_return_items sri
+      INNER JOIN sales_returns sr ON sri.return_id = sr.id
+      WHERE sr.original_order_no = ? AND sr.status != 'deleted'
+      GROUP BY sri.product_id
+    `).all(outbound.outbound_no) as any[]
+
+    if (returnItems.length === 0) return []
+
+    const returnQtyMap = new Map<number, { name: string; qty: number }>()
+    returnItems.forEach(item => {
+      returnQtyMap.set(item.product_id, { name: item.product_name || '', qty: item.total_return_qty })
+    })
+
+    const newQtyMap = new Map<number, number>()
+    newItems.forEach(item => {
+      if (item.product_id) {
+        newQtyMap.set(item.product_id, (newQtyMap.get(item.product_id) || 0) + (item.quantity || 0))
+      }
+    })
+
+    const errors: string[] = []
+    for (const [productId, returnInfo] of returnQtyMap.entries()) {
+      const newQty = newQtyMap.get(productId) || 0
+      if (newQty < returnInfo.qty) {
+        errors.push(`商品"${returnInfo.name}"修改后数量(${newQty})小于退货单累计退货数量(${returnInfo.qty})`)
+      }
+    }
+
+    return errors
   }
 
   close() {

@@ -32,10 +32,15 @@
       >
         <el-table-column type="selection" width="55" />
         <el-table-column prop="code" label="产品编码" width="120" />
-        <el-table-column prop="name" label="产品名称" min-width="150" />
+        <el-table-column prop="name" label="产品名称" width="180" />
         <el-table-column prop="category" label="分类" width="120" />
         <el-table-column prop="spec" label="规格" width="150" />
         <el-table-column prop="unit" label="单位" width="80" />
+        <el-table-column prop="taxRate" label="税率" width="80">
+          <template #default="{ row }">
+            {{ row.taxRate ? (row.taxRate === '免税' ? '免税' : row.taxRate + '%') : '-' }}
+          </template>
+        </el-table-column>
         <el-table-column prop="stockQuantity" label="库存" width="80">
           <template #default="{ row }">
             <el-tag :type="row.stockQuantity < row.warningQuantity ? 'danger' : 'success'">
@@ -104,13 +109,42 @@
           <el-input v-model="formData.name" placeholder="请输入产品名称" />
         </el-form-item>
         <el-form-item label="分类" prop="category">
-          <el-input v-model="formData.category" placeholder="请输入产品分类" />
+          <el-select
+            v-model="formData.category"
+            filterable
+            allow-create
+            default-first-option
+            placeholder="请选择或输入分类"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="cat in categoryOptions"
+              :key="cat"
+              :label="cat"
+              :value="cat"
+            />
+          </el-select>
         </el-form-item>
         <el-form-item label="规格型号" prop="spec">
           <el-input v-model="formData.spec" placeholder="请输入规格型号" />
         </el-form-item>
         <el-form-item label="单位" prop="unit">
           <el-input v-model="formData.unit" placeholder="个/件/箱等" />
+        </el-form-item>
+        <el-form-item label="税率" prop="taxRate">
+          <el-select v-model="formData.taxRate" placeholder="选填" clearable style="width: 100%">
+            <el-option label="免税" value="免税" />
+            <el-option label="0%" value="0" />
+            <el-option label="1%" value="1" />
+            <el-option label="3%" value="3" />
+            <el-option label="5%" value="5" />
+            <el-option label="6%" value="6" />
+            <el-option label="9%" value="9" />
+            <el-option label="10%" value="10" />
+            <el-option label="13%" value="13" />
+            <el-option label="16%" value="16" />
+            <el-option label="17%" value="17" />
+          </el-select>
         </el-form-item>
         <el-form-item label="条形码" prop="barcode">
           <el-input v-model="formData.barcode" placeholder="请输入条形码" />
@@ -179,6 +213,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { dbQuery, dbInsert, dbUpdate, dbDelete } from '@/utils/db'
+import { db } from '@/utils/db-ipc'
 import exportToCsv from '../../utils/exportCsv'
 
 interface Product {
@@ -188,6 +223,7 @@ interface Product {
   category?: string
   spec?: string
   unit?: string
+  taxRate?: string
   barcode?: string
   costPrice: number
   sellPrice: number
@@ -198,6 +234,7 @@ interface Product {
 }
 
 const products = ref<Product[]>([])
+const categoryOptions = ref<string[]>([])
 const total = ref(0)
 const currentPage = ref(1)
 const pageSize = ref(10)
@@ -212,6 +249,7 @@ const formData = reactive<Product>({
   category: '',
   spec: '',
   unit: '',
+  taxRate: '',
   barcode: '',
   costPrice: 0,
   sellPrice: 0,
@@ -223,7 +261,21 @@ const formData = reactive<Product>({
 
 const rules = {
   code: [{ required: true, message: '请输入产品编码', trigger: 'blur' }],
-  name: [{ required: true, message: '请输入产品名称', trigger: 'blur' }]
+  name: [{ required: true, message: '请输入产品名称', trigger: 'blur' }],
+  category: [{ required: true, message: '请输入产品分类', trigger: 'change' }],
+  spec: [{ required: true, message: '请输入规格型号', trigger: 'blur' }],
+  unit: [{ required: true, message: '请输入单位', trigger: 'change' }]
+}
+
+// 加载分类选项
+const loadCategoryOptions = async () => {
+  try {
+    const products = await db.getProducts()
+    const categories = [...new Set((products || []).map((p: any) => p.category).filter(Boolean))]
+    categoryOptions.value = categories.sort()
+  } catch (error) {
+    console.error('加载分类选项失败:', error)
+  }
 }
 
 // 加载产品列表
@@ -266,6 +318,7 @@ const handleAdd = () => {
     category: '',
     spec: '',
     unit: '',
+    taxRate: '',
     barcode: '',
     costPrice: 0,
     sellPrice: 0,
@@ -274,6 +327,7 @@ const handleAdd = () => {
     status: 1,
     remark: ''
   })
+  loadCategoryOptions()
   dialogVisible.value = true
 }
 
@@ -281,6 +335,7 @@ const handleAdd = () => {
 const handleEdit = (row: Product) => {
   dialogTitle.value = '编辑产品'
   Object.assign(formData, row)
+  loadCategoryOptions()
   dialogVisible.value = true
 }
 
@@ -322,6 +377,7 @@ const handleSubmit = async () => {
     
     dialogVisible.value = false
     loadProducts()
+    loadCategoryOptions()
   } catch (error: any) {
     console.error('提交失败:', error)
   }
@@ -363,6 +419,7 @@ const handleSelectionChange = (selection: any[]) => {
 
 onMounted(() => {
   loadProducts()
+  loadCategoryOptions()
 })
 </script>
 

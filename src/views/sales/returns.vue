@@ -283,7 +283,7 @@
           border
         >
           <el-table-column label="序号" width="60" type="index" />
-          <el-table-column label="商品" min-width="200">
+          <el-table-column label="商品" min-width="130">
             <template #default="{ row }">
               <el-select
                 v-model="row.productId"
@@ -301,7 +301,7 @@
               </el-select>
             </template>
           </el-table-column>
-          <el-table-column prop="productName" label="商品名称" min-width="150" />
+          <el-table-column prop="productName" label="商品名称" min-width="100" />
           <el-table-column prop="specification" label="规格" width="120" />
           <el-table-column label="退货数量" width="120">
             <template #default="{ row }">
@@ -481,6 +481,7 @@ import { ref, reactive, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Printer, Download, Search } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
+import * as XLSX from 'xlsx'
 import { handleDocumentSave, DocumentType } from '@/utils/cost-recalculation'
 import { dbQuery } from '@/utils/db'
 
@@ -644,13 +645,14 @@ const loadReturnsList = async () => {
           // 转换 items 字段名
           items: (Array.isArray(item.items) ? item.items : []).map((it: any) => ({
             productId: it.product_id,
+            productCode: it.product_code || it.productCode || '',
             productName: it.product_name || '',
             specification: it.specification || '',
             unit: it.unit || '',
             quantity: it.quantity || 0,
             originalQuantity: it.original_quantity || 0,  // 添加原出库数量字段
-            unitPrice: it.unit_price || 0,
-            unitPriceIncl: it.unit_price_incl || 0,
+            unitPrice: it.unit_price_ex || 0,        // 不含税单价
+            unitPriceIncl: it.unit_price || 0,       // 含税单价
             taxRate: it.tax_rate || 0,
             taxAmount: it.tax_amount || 0,
             totalInc: it.total_inc || 0,
@@ -805,28 +807,22 @@ const handleEdit = async (row: ReturnRecord) => {
   Object.assign(formData, row)
   console.log('[handleEdit] formData 赋值完成:', formData.voucherNo)
 
-  // 如果有原订单号，先从原订单加载所有商品，再填充已保存的数量
+  // 如果有原订单号，先从原订单加载所有商品，再填充已保存的数据
   if (formData.originalOrderNo) {
     const order = orderList.value.find(item => item.voucherNo === formData.originalOrderNo)
     if (order) {
-      // 先从原订单加载所有商品（优先使用含税单价计算）
+      // 先从原订单加载所有商品（获取产品信息和原数量）
       formData.items = order.items.map((item: any, index: number) => {
-        // 优先从原出库单提取含税单价，然后计算不含税单价
-        const unitPriceIncl = item.unitPrice || 0      // 含税单价（出库单字段）
-        const taxRate = item.taxRate !== undefined ? item.taxRate : 13
-        const r = taxRate / 100
-        const unitPriceEx = taxRate === 0 ? unitPriceIncl : round2(unitPriceIncl / (1 + r))  // 计算不含税单价
-
         return {
           productId: item.productId,
           productName: item.productName || '',
           specification: item.specification || '',
           quantity: 0,
           unit: item.unit || '',
-          unitPrice: unitPriceEx,        // 不含税单价（退货单字段）
-          unitPriceEx: unitPriceEx,
-          unitPriceIncl: unitPriceIncl,  // 含税单价（退货单字段）
-          taxRate: taxRate,
+          unitPrice: 0,
+          unitPriceEx: 0,
+          unitPriceIncl: 0,
+          taxRate: item.taxRate !== undefined ? item.taxRate : 13,
           taxAmount: 0,
           totalAmount: 0,
           deductionAmount: item.deductionAmount || 0,
@@ -836,7 +832,7 @@ const handleEdit = async (row: ReturnRecord) => {
         }
       })
 
-      // 然后根据已保存的数据填充数量（通过原索引匹配）
+      // 然后根据已保存的数据填充数量、单价等信息（通过原索引匹配）
       const savedItems = row.items || []
       savedItems.forEach(savedItem => {
         const origIndex = savedItem.originalItemIndex
@@ -844,6 +840,13 @@ const handleEdit = async (row: ReturnRecord) => {
           const matchedItem = formData.items[origIndex]
           if (matchedItem && matchedItem.productId === savedItem.productId) {
             matchedItem.quantity = savedItem.quantity
+            matchedItem.unitPrice = savedItem.unitPrice || 0        // 不含税单价
+            matchedItem.unitPriceEx = savedItem.unitPrice || 0
+            matchedItem.unitPriceIncl = savedItem.unitPriceIncl || 0 // 含税单价
+            matchedItem.taxRate = savedItem.taxRate || 0
+            matchedItem.taxAmount = savedItem.taxAmount || 0
+            matchedItem.totalAmount = savedItem.amount || 0
+            matchedItem.totalInc = savedItem.totalInc || 0
             calculateRowTotalss(matchedItem)
           }
         }
@@ -884,28 +887,22 @@ const handleView = async (row: ReturnRecord) => {
   Object.assign(formData, row)
   console.log('[handleView] formData 赋值完成:', formData.voucherNo)
 
-  // 如果有原订单号，先从原订单加载所有商品，再填充已保存的数量
+  // 如果有原订单号，先从原订单加载所有商品，再填充已保存的数据
   if (formData.originalOrderNo) {
     const order = orderList.value.find(item => item.voucherNo === formData.originalOrderNo)
     if (order) {
-      // 先从原订单加载所有商品（优先使用含税单价计算）
+      // 先从原订单加载所有商品（获取产品信息和原数量）
       formData.items = order.items.map((item: any, index: number) => {
-        // 优先从原出库单提取含税单价，然后计算不含税单价
-        const unitPriceIncl = item.unitPrice || 0      // 含税单价（出库单字段）
-        const taxRate = item.taxRate !== undefined ? item.taxRate : 13
-        const r = taxRate / 100
-        const unitPriceEx = taxRate === 0 ? unitPriceIncl : round2(unitPriceIncl / (1 + r))  // 计算不含税单价
-
         return {
           productId: item.productId,
           productName: item.productName || '',
           specification: item.specification || '',
           quantity: 0,
           unit: item.unit || '',
-          unitPrice: unitPriceEx,        // 不含税单价（退货单字段）
-          unitPriceEx: unitPriceEx,
-          unitPriceIncl: unitPriceIncl,  // 含税单价（退货单字段）
-          taxRate: taxRate,
+          unitPrice: 0,
+          unitPriceEx: 0,
+          unitPriceIncl: 0,
+          taxRate: item.taxRate !== undefined ? item.taxRate : 13,
           taxAmount: 0,
           totalAmount: 0,
           deductionAmount: item.deductionAmount || 0,
@@ -915,7 +912,7 @@ const handleView = async (row: ReturnRecord) => {
         }
       })
 
-      // 然后根据已保存的数据填充数量（通过原索引匹配）
+      // 然后根据已保存的数据填充数量、单价等信息（通过原索引匹配）
       const savedItems = row.items || []
       savedItems.forEach(savedItem => {
         const origIndex = savedItem.originalItemIndex
@@ -923,6 +920,13 @@ const handleView = async (row: ReturnRecord) => {
           const matchedItem = formData.items[origIndex]
           if (matchedItem && matchedItem.productId === savedItem.productId) {
             matchedItem.quantity = savedItem.quantity
+            matchedItem.unitPrice = savedItem.unitPrice || 0        // 不含税单价
+            matchedItem.unitPriceEx = savedItem.unitPrice || 0
+            matchedItem.unitPriceIncl = savedItem.unitPriceIncl || 0 // 含税单价
+            matchedItem.taxRate = savedItem.taxRate || 0
+            matchedItem.taxAmount = savedItem.taxAmount || 0
+            matchedItem.totalAmount = savedItem.amount || 0
+            matchedItem.totalInc = savedItem.totalInc || 0
             calculateRowTotalss(matchedItem)
           }
         }
@@ -1019,11 +1023,11 @@ const handleSubmit = async () => {
         handler_name: formData.handlerName,
         return_date: formData.voucherDate,
         total_amount: formData.totalAmount,
-        total_inc: formData.totalInc || 0,
+        total_incl: formData.totalInc || 0,
         return_reason: formData.returnReason,
         remark: formData.remark,
         items: formData.items
-          .filter((item: any) => item.quantity > 0) // 只保存数量>0 的商品
+          .filter((item: any) => item.quantity > 0)
           .map((item: any) => {
             console.log('[销售退货保存前] item.unitPrice:', item.unitPrice, 'unitPriceIncl:', item.unitPriceIncl, 'totalInc:', item.totalInc, 'taxRate:', item.taxRate)
             return {
@@ -1032,16 +1036,17 @@ const handleSubmit = async () => {
               specification: item.specification || '',
               unit: item.unit || '',
               quantity: item.quantity,
-              original_quantity: item.originalQuantity || 0,  // 保存原出库数量
-              unit_price: item.unitPrice || 0,           // 不含税单价
-              unit_price_incl: item.unitPriceIncl || 0,  // 含税单价
-              tax_rate: item.taxRate || 0,               // 税率
-              tax_amount: item.taxAmount || 0,           // 税额
-              total_inc: item.totalInc || 0,             // 含税金额
-              amount: item.amount || 0,                  // 不含税金额
-              cost_price: item.costPrice || 0,           // 成本价
+              original_quantity: item.originalQuantity || 0,
+              unit_price_ex: item.unitPrice || 0,
+              unit_price: item.unitPriceIncl || 0,
+              unit_price_incl: item.unitPriceIncl || 0,
+              tax_rate: item.taxRate || 0,
+              tax_amount: item.taxAmount || 0,
+              total_incl: item.totalInc || 0,
+              amount: item.amount || 0,
+              cost_price: item.costPrice || 0,
               remark: item.remark || '',
-              original_item_index: item.originalItemIndex // 保存原订单中的索引，用于重新加载时匹配
+              original_item_index: item.originalItemIndex
             }
           })
       }
@@ -1477,32 +1482,91 @@ const handleSelectionChange = (selection: ReturnRecord[]) => {
 }
 
 const handlePrint = (row: ReturnRecord) => {
-  handleView(row)
+  const printContent = generatePrintContent(row)
+  const printWindow = window.open('', '_blank')
+  if (printWindow) {
+    printWindow.document.write(printContent)
+    printWindow.document.close()
+    printWindow.focus()
+    setTimeout(() => {
+      printWindow.print()
+    }, 500)
+  } else {
+    ElMessage.error('无法打开打印窗口，请检查浏览器设置')
+  }
 }
 
 const handlePrintCurrent = () => {
-  if (selectedRows.value.length === 1) {
-    handlePrint(selectedRows.value[0])
-  } else if (dialogVisible.value) {
-    const printContent = generatePrintContent(formData)
-    const printWindow = window.open('', '_blank')
-    if (printWindow) {
-      printWindow.document.write(printContent)
-      printWindow.document.close()
-      printWindow.onload = () => {
-        printWindow.focus()
-        printWindow.print()
-      }
-    }
+  if (selectedRows.value.length === 0) {
+    ElMessage.warning('请先勾选要打印的退货单')
+    return
+  }
+  for (const row of selectedRows.value) {
+    handlePrint(row)
   }
 }
 
 const handleExport = () => {
-  ElMessage.info('导出功能开发中...')
+  const exportData = selectedRows.value.length > 0 ? selectedRows.value : returnsList.value
+  if (exportData.length === 0) {
+    ElMessage.warning('没有可导出的单据，请先勾选要导出的单据')
+    return
+  }
+
+  const headers = [
+    '退货单号', '退货日期', '原出库单号', '客户', '仓库', '经办人',
+    '商品编码', '商品名称', '规格型号', '单位', '数量',
+    '单价(不含税)', '单价(含税)', '税率', '税额', '金额(不含税)', '金额(含税)',
+    '加计扣除',
+    '合计金额', '备注'
+  ]
+
+  const rows: any[][] = []
+  for (const record of exportData) {
+    const items = record.items || []
+    const originalOrderNo = record.originalOrderNo || ''
+    if (items.length === 0) {
+      rows.push([
+        record.voucherNo, record.voucherDate, originalOrderNo,
+        record.customerName, record.warehouseName || '', record.handlerName || '',
+        '', '', '', '', '',
+        '', '', '', '', '', '',
+        '',
+        record.totalAmount, record.remark || ''
+      ])
+    } else {
+      for (const item of items) {
+        const unitPriceEx = item.unitPriceEx || item.unitPrice || 0
+        const unitPriceIncl = item.unitPriceIncl || 0
+        const amountEx = item.amount || item.totalAmount || 0
+        const amountIncl = item.totalInc || (unitPriceIncl * item.quantity) || 0
+        rows.push([
+          record.voucherNo, record.voucherDate, originalOrderNo,
+          record.customerName, record.warehouseName || '', record.handlerName || '',
+          item.productCode || '', item.productName || '', item.specification || '', item.unit || '', item.quantity,
+          unitPriceEx, unitPriceIncl, item.taxRate, item.taxAmount || 0, amountEx, amountIncl,
+          item.allowDeduction ? '是' : '否',
+          record.totalAmount, record.remark || ''
+        ])
+      }
+    }
+  }
+
+  const wb = XLSX.utils.book_new()
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows])
+  ws['!cols'] = headers.map((_, i) => ({ wch: i === 0 ? 22 : 14 }))
+  XLSX.utils.book_append_sheet(wb, ws, '销售退货单')
+  XLSX.writeFile(wb, `销售退货单_${dayjs().format('YYYYMMDDHHmmss')}.xlsx`)
+  ElMessage.success(`成功导出 ${exportData.length} 张单据`)
 }
 
 const generatePrintContent = (data: ReturnRecord) => {
-  const itemsHtml = data.items.map((item, index) => `
+  const companyName = localStorage.getItem('companyName') || '荆州供销农业服务有限公司'
+  const itemsHtml = data.items.map((item, index) => {
+    const unitPriceIncl = item.unitPriceIncl || (item.totalInc && item.quantity ? item.totalInc / item.quantity : item.unitPrice)
+    const amountEx = item.amount || item.totalAmount || 0
+    const amountIncl = item.totalInc || (unitPriceIncl * item.quantity) || 0
+    return `
     <tr>
       <td>${index + 1}</td>
       <td>${item.productName || '-'}</td>
@@ -1510,12 +1574,16 @@ const generatePrintContent = (data: ReturnRecord) => {
       <td>${item.quantity}</td>
       <td>${item.unit}</td>
       <td>${item.unitPrice.toFixed(2)}</td>
-      <td>${(item.unitPrice * (1 + item.taxRate / 100)).toFixed(2)}</td>
+      <td>${unitPriceIncl.toFixed(2)}</td>
       <td>${item.taxRate}%</td>
       <td>${item.taxAmount.toFixed(2)}</td>
-      <td>${item.amount.toFixed(2)}</td>
+      <td>${amountEx.toFixed(2)}</td>
+      <td>${amountIncl.toFixed(2)}</td>
     </tr>
-  `).join('')
+  `}).join('')
+
+  const totalAmountEx = data.totalAmount || 0
+  const totalAmountIncl = data.totalInc || data.items.reduce((sum, item) => sum + (item.totalInc || 0), 0) || 0
 
   return `
     <!DOCTYPE html>
@@ -1525,24 +1593,26 @@ const generatePrintContent = (data: ReturnRecord) => {
         <style>
           body { font-family: Arial, sans-serif; padding: 20px; }
           .header { text-align: center; margin-bottom: 20px; }
-          .info { margin-bottom: 10px; }
+          .info { margin-bottom: 10px; display: flex; flex-wrap: wrap; }
+          .info div { width: 50%; margin-bottom: 5px; }
           .table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
-          .table th, .table td { border: 1px solid #ddd; padding: 8px; }
+          .table th, .table td { border: 1px solid #ddd; padding: 8px; text-align: center; }
           .table th { background-color: #f5f5f5; }
         </style>
       </head>
       <body>
         <div class="header">
-          <h2>销售退货单</h2>
+          <h2>${companyName}</h2>
+          <h3>销售退货单</h3>
           <p>凭证号：${data.voucherNo}</p>
         </div>
         <div class="info">
           <div>退货日期：${data.voucherDate}</div>
           <div>原订单号：${data.originalOrderNo || '-'}</div>
           <div>客户：${data.customerName}</div>
+          <div>仓库：${data.warehouseName || '-'}</div>
           <div>经办人：${data.handlerName || data.operator}</div>
           <div>退货原因：${data.returnReason || '-'}</div>
-          <div>备注：${data.remark || '-'}</div>
         </div>
         <table class="table">
           <thead>
@@ -1552,18 +1622,25 @@ const generatePrintContent = (data: ReturnRecord) => {
               <th>规格</th>
               <th>退货数量</th>
               <th>单位</th>
-              <th>单价</th>
-              <th>含税单价</th>
+              <th>单价(不含税)</th>
+              <th>单价(含税)</th>
               <th>税率</th>
               <th>税额</th>
-              <th>退货金额</th>
+              <th>退货金额(不含税)</th>
+              <th>退货金额(含税)</th>
             </tr>
           </thead>
           <tbody>
             ${itemsHtml}
           </tbody>
         </table>
-        <div style="text-align: right; font-weight: bold;">退货总金额：-¥${Math.abs(data.totalAmount).toFixed(2)}</div>
+        <div style="text-align: right; font-weight: bold;">退货总金额（不含税）：-¥${Math.abs(totalAmountEx).toFixed(2)}</div>
+        <div style="text-align: right; font-weight: bold;">退货总金额（含税）：-¥${Math.abs(totalAmountIncl).toFixed(2)}</div>
+        <div style="margin-top: 10px; border: 1px solid #000; padding: 8px; text-align: left;">备注：${data.remark || '-'}</div>
+        <div style="margin-top: 15px; display: flex; justify-content: space-between; align-items: center;">
+          <div>经办人：${data.handlerName || data.operator || '-'}</div>
+          <div>经办人签字：____________________</div>
+        </div>
         <div style="text-align: right; margin-top: 10px;">打印时间：${dayjs().format('YYYY-MM-DD HH:mm:ss')}</div>
       </body>
     </html>

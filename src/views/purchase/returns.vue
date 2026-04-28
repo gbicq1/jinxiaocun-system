@@ -276,7 +276,7 @@
           border
         >
           <el-table-column label="序号" width="60" type="index" />
-          <el-table-column label="商品" min-width="200">
+          <el-table-column label="商品" min-width="130">
             <template #default="{ row }">
               <el-select
                 v-model="row.productId"
@@ -294,7 +294,7 @@
               </el-select>
             </template>
           </el-table-column>
-          <el-table-column label="商品名称" min-width="150">
+          <el-table-column label="商品名称" min-width="100">
             <template #default="{ row }">
               <el-input v-model="row.productName" disabled />
             </template>
@@ -499,6 +499,7 @@ import { ref, reactive, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Printer, Download, Search } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
+import * as XLSX from 'xlsx'
 import { getStockBeforeDateTime } from '@/utils/stock'
 import { handleDocumentSave, DocumentType } from '@/utils/cost-recalculation'
 import { dbQuery } from '@/utils/db'
@@ -849,6 +850,7 @@ const handleEdit = async (row: ReturnRecord) => {
     // 没有原入库单，直接加载保存的商品，需要转换字段名
     formData.items = (row.items || []).map((item: any) => ({
       productId: item.product_id || item.productId,
+      productCode: item.product_code || item.productCode || '',
       productName: item.product_name || item.productName || '',
       specification: item.specification || '',
       quantity: item.quantity || 0,
@@ -1737,34 +1739,90 @@ const handleSelectionChange = (selection: ReturnRecord[]) => {
 
 // 打印
 const handlePrint = (row: ReturnRecord) => {
-  handleView(row)
+  const printContent = generatePrintContent(row)
+  const printWindow = window.open('', '_blank')
+  if (printWindow) {
+    printWindow.document.write(printContent)
+    printWindow.document.close()
+    printWindow.focus()
+    setTimeout(() => {
+      printWindow.print()
+    }, 500)
+  } else {
+    ElMessage.error('无法打开打印窗口，请检查浏览器设置')
+  }
 }
 
 const handlePrintCurrent = () => {
-  if (selectedRows.value.length === 1) {
-    handlePrint(selectedRows.value[0])
-  } else if (dialogVisible.value) {
-    // 当前对话框中的单据
-    const printContent = generatePrintContent(formData)
-    const printWindow = window.open('', '_blank')
-    if (printWindow) {
-      printWindow.document.write(printContent)
-      printWindow.document.close()
-      printWindow.onload = () => {
-      printWindow.focus()
-      printWindow.print()
-    }
+  if (selectedRows.value.length === 0) {
+    ElMessage.warning('请先勾选要打印的退货单')
+    return
   }
-}
+  for (const row of selectedRows.value) {
+    handlePrint(row)
+  }
 }
 
 // 导出
 const handleExport = () => {
-  ElMessage.info('导出功能开发中...')
+  const exportData = selectedRows.value.length > 0 ? selectedRows.value : returnsList.value
+  if (exportData.length === 0) {
+    ElMessage.warning('没有可导出的单据，请先勾选要导出的单据')
+    return
+  }
+
+  const headers = [
+    '退货单号', '退货日期', '原入库单号', '供应商', '仓库', '经办人',
+    '商品编码', '商品名称', '规格型号', '单位', '数量',
+    '单价(不含税)', '单价(含税)', '税率', '税额', '金额(不含税)', '金额(含税)',
+    '是否开票', '发票类型', '加计扣除',
+    '合计金额', '备注'
+  ]
+
+  const rows: any[][] = []
+  for (const record of exportData) {
+    const items = record.items || []
+    const originalVoucherNo = record.originalVoucherNo || ''
+    const invoiceIssuedStr = record.invoiceIssued ? '已开票' : '未开票'
+    const invoiceTypeStr = record.invoiceIssued ? (record.invoiceType || '普票') : ''
+    if (items.length === 0) {
+      rows.push([
+        record.voucherNo, record.voucherDate, originalVoucherNo,
+        record.supplierName, record.warehouseName || '', record.operator || '',
+        '', '', '', '', '',
+        '', '', '', '', '', '',
+        invoiceIssuedStr, invoiceTypeStr, '',
+        record.totalAmount, record.remark || ''
+      ])
+    } else {
+      for (const item of items) {
+        const unitPriceIncl = item.unitPrice || 0
+        const totalAmountEx = (item.unitPriceEx || item.unitPrice || 0) * item.quantity - (item.taxAmount || 0)
+        rows.push([
+          record.voucherNo, record.voucherDate, originalVoucherNo,
+          record.supplierName, record.warehouseName || '', record.operator || '',
+          item.productCode || '', item.productName, item.specification, item.unit, item.quantity,
+          item.unitPriceEx || item.unitPrice || 0, unitPriceIncl, item.taxRate, item.taxAmount || 0, totalAmountEx, item.totalAmount || 0,
+          invoiceIssuedStr, invoiceTypeStr, item.allowDeduction ? '是' : '否',
+          record.totalAmount, record.remark || ''
+        ])
+      }
+    }
+  }
+
+  const wb = XLSX.utils.book_new()
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows])
+  ws['!cols'] = headers.map((_, i) => ({ wch: i === 0 ? 22 : 14 }))
+  XLSX.utils.book_append_sheet(wb, ws, '采购退货单')
+  XLSX.writeFile(wb, `采购退货单_${dayjs().format('YYYYMMDDHHmmss')}.xlsx`)
+  ElMessage.success(`成功导出 ${exportData.length} 张单据`)
 }
 
 // 生成打印内容
 const generatePrintContent = (data: ReturnRecord) => {
+  const companyName = localStorage.getItem('companyName') || '荆州供销农业服务有限公司'
+  const invoiceStatus = data.invoiceIssued ? '已开票' : '未开票'
+  const invoiceTypeStr = data.invoiceIssued ? (data.invoiceType || '普票') : ''
   const itemsHtml = data.items.map((item, index) => `
     <tr>
       <td>${index + 1}</td>
@@ -1788,24 +1846,27 @@ const generatePrintContent = (data: ReturnRecord) => {
         <style>
           body { font-family: Arial, sans-serif; padding: 20px; }
           .header { text-align: center; margin-bottom: 20px; }
-          .info { margin-bottom: 10px; }
+          .info { margin-bottom: 10px; display: flex; flex-wrap: wrap; }
+          .info div { width: 50%; margin-bottom: 5px; }
           .table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
-          .table th, .table td { border: 1px solid #ddd; padding: 8px; }
+          .table th, .table td { border: 1px solid #ddd; padding: 8px; text-align: center; }
           .table th { background-color: #f5f5f5; }
         </style>
       </head>
       <body>
         <div class="header">
-          <h2>采购退货单</h2>
+          <h2>${companyName}</h2>
+          <h3>采购退货单</h3>
           <p>凭证号：${data.voucherNo}</p>
         </div>
         <div class="info">
           <div>退货日期：${data.voucherDate}</div>
           <div>原入库单号：${data.originalVoucherNo || '-'}</div>
           <div>供应商：${data.supplierName}</div>
+          <div>仓库：${data.warehouseName || '-'}</div>
           <div>经办人：${data.operator}</div>
           <div>退货原因：${data.returnReason || '-'}</div>
-          <div>备注：${data.remark || '-'}</div>
+          <div>发票状态：${invoiceStatus}${invoiceTypeStr ? '（' + invoiceTypeStr + '）' : ''}</div>
         </div>
         <table class="table">
           <thead>
@@ -1827,6 +1888,11 @@ const generatePrintContent = (data: ReturnRecord) => {
           </tbody>
         </table>
         <div style="text-align: right; font-weight: bold;">退货总金额：-¥${Math.abs(data.totalAmount).toFixed(2)}</div>
+        <div style="margin-top: 10px; border: 1px solid #000; padding: 8px; text-align: left;">备注：${data.remark || '-'}</div>
+        <div style="margin-top: 15px; display: flex; justify-content: space-between; align-items: center;">
+          <div>经办人：${data.operator || '-'}</div>
+          <div>经办人签字：____________________</div>
+        </div>
         <div style="text-align: right; margin-top: 10px;">打印时间：${dayjs().format('YYYY-MM-DD HH:mm:ss')}</div>
       </body>
     </html>

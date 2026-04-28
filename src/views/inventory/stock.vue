@@ -68,12 +68,12 @@
         <el-table-column prop="unit" label="单位" width="80" />
         <el-table-column prop="costPrice" label="成本价" width="100">
           <template #default="{ row }">
-            ¥{{ row.costPrice }}
+            ¥{{ Number(row.costPrice).toFixed(2) }}
           </template>
         </el-table-column>
         <el-table-column prop="totalValue" label="库存金额" width="120">
           <template #default="{ row }">
-            ¥{{ (row.stockQuantity * row.costPrice).toLocaleString() }}
+            ¥{{ (row.stockQuantity * row.costPrice).toFixed(2) }}
           </template>
         </el-table-column>
         <el-table-column label="操作" width="150" fixed="right">
@@ -112,7 +112,7 @@
                   <span v-else>{{ row.date }}</span>
                 </template>
               </el-table-column>
-              <el-table-column prop="docNo" label="单号" width="170" min-width="140" fixed>
+              <el-table-column prop="docNo" label="单号" width="210" min-width="180" fixed>
                 <template #default="{ row }">
                   <a v-if="!row._isSummary && row.docNo && row.docType" class="doc-link" @click.stop="handleDocClick(row)">{{ row.docNo }}</a>
                   <span v-else-if="!row._isSummary">{{ row.docNo }}</span>
@@ -171,10 +171,22 @@
               
               <!-- 库存信息区域 -->
               <el-table-column label="库存结余" align="center">
-                <el-table-column prop="runningQty" label="库存数量" width="120" min-width="100" class-name="stock-col">
+                <el-table-column prop="runningQty" label="数量" width="120" min-width="100" class-name="stock-col">
                   <template #default="{ row }">
                     <span v-if="row.runningQty === null || row.runningQty === undefined">-</span>
                     <span v-else>{{ row.runningQty }}</span>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="runningUnitPrice" label="单价" width="120" min-width="100" class-name="stock-col">
+                  <template #default="{ row }">
+                    <span v-if="row.runningUnitPrice === null || row.runningUnitPrice === undefined">-</span>
+                    <span v-else>{{ Number(row.runningUnitPrice).toFixed(2) }}</span>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="runningAmount" label="金额" width="140" min-width="120" class-name="stock-col">
+                  <template #default="{ row }">
+                    <span v-if="row.runningAmount === null || row.runningAmount === undefined">-</span>
+                    <span v-else>{{ Number(row.runningAmount).toFixed(2) }}</span>
                   </template>
                 </el-table-column>
               </el-table-column>
@@ -306,7 +318,7 @@ const handleDocClick = async (row: any) => {
     docDetailData.value = {
       docNo: noField,
       date: dateField,
-      counter: data.supplier_name || data.customer_name || data.from_warehouse_name + ' → ' + data.to_warehouse_name || '',
+      counter: data.supplier_name || data.customer_name || ((data.from_warehouse_name || '') + ' → ' + (data.to_warehouse_name || '')) || '',
       warehouseName: data.warehouse_name || data.to_warehouse_name || '',
       remark: data.remark || ''
     }
@@ -459,26 +471,37 @@ const loadLedger = async (row: any) => {
 
     console.log('[loadLedger] 调用参数:', { productId: row.productId, warehouseId: row.warehouseId, startDate, endDate, originalStart: rawStartDate, originalEnd: rawEndDate })
 
-    const ledgerData = await db.getProductLedger(row.productId, row.warehouseId, startDate, endDate)
+    const ledgerData = await db.getProductLedger(row.productId, row.warehouseId, startDate, endDate, true)
 
     console.log('[loadLedger] 原始返回数据:', ledgerData)
     console.log('[loadLedger] 数据条数:', Array.isArray(ledgerData) ? ledgerData.length : '非数组')
 
     const result: any[] = []
     let runningQty = 0
+    let runningUnitPrice = 0
+    let runningAmount = 0
+    let lastValidUnitPrice = 0
 
+    const startYear = rawStartDate ? new Date(rawStartDate).getFullYear() : new Date().getFullYear()
     const startMonth = rawStartDate ? new Date(rawStartDate).getMonth() + 1 : null
     const endYear = rawEndDate ? new Date(rawEndDate).getFullYear() : new Date().getFullYear()
     const endMonth = rawEndDate ? new Date(rawEndDate).getMonth() + 1 : new Date().getMonth() + 1
 
     if (startMonth !== null && rawStartDate) {
       let prevQty = 0
+      let prevCost = 0
       if (startMonth === 1) {
-        prevQty = await db.getStockBeforeDate(row.productId, row.warehouseId, `${endYear - 1}-12-31`)
+        prevQty = await db.getStockBeforeDate(row.productId, row.warehouseId, `${startYear - 1}-12-31`)
+        prevCost = await db.getStockCostBeforeDate(row.productId, row.warehouseId, `${startYear - 1}-12-31`)
+        runningQty = prevQty
+        runningUnitPrice = prevQty > 0 ? Number((prevCost / prevQty).toFixed(4)) : 0
+        runningAmount = prevCost
+        lastValidUnitPrice = runningUnitPrice > 0 ? runningUnitPrice : 0
+
         result.push({
           _isSummary: true,
           _summaryType: 'carryover',
-          date: `${endYear - 1}-12-31`,
+          date: `${startYear - 1}-12-31`,
           docNo: '上年结转',
           productName: row.productName,
           specification: row.specification || '-',
@@ -491,12 +514,19 @@ const loadLedger = async (row: any) => {
           outboundAmount: 0,
           counter: '',
           remark: '',
-          runningQty: prevQty
+          runningQty: prevQty,
+          runningUnitPrice,
+          runningAmount
         })
       } else {
-        const prevMonthLastDay = new Date(endYear, startMonth - 1, 0)
+        const prevMonthLastDay = new Date(startYear, startMonth - 1, 0)
         const prevDateStr = `${prevMonthLastDay.getFullYear()}-${String(prevMonthLastDay.getMonth() + 1).padStart(2, '0')}-${String(prevMonthLastDay.getDate()).padStart(2, '0')}`
+        prevCost = await db.getStockCostBeforeDate(row.productId, row.warehouseId, prevDateStr)
         prevQty = await db.getStockBeforeDate(row.productId, row.warehouseId, prevDateStr)
+        runningQty = prevQty
+        runningUnitPrice = prevQty > 0 ? Number((prevCost / prevQty).toFixed(4)) : 0
+        runningAmount = prevCost
+        lastValidUnitPrice = runningUnitPrice > 0 ? runningUnitPrice : 0
         result.push({
           _isSummary: true,
           _summaryType: 'carryover',
@@ -513,14 +543,44 @@ const loadLedger = async (row: any) => {
           outboundAmount: 0,
           counter: '',
           remark: '',
-          runningQty: prevQty
+          runningQty: prevQty,
+          runningUnitPrice,
+          runningAmount
         })
       }
-      runningQty = prevQty
     }
 
     for (const en of ledgerData) {
-      runningQty = Number((runningQty + en.inboundQty - en.outboundQty).toFixed(4))
+      const inQty = Number(en.inboundQty || 0)
+      const outQty = Number(en.outboundQty || 0)
+      const inAmt = Number(en.inboundAmount || 0)
+
+      const displayOutboundUnitPrice = en.outboundUnitPrice || 0
+      const displayOutboundAmount = en.outboundAmount || 0
+
+      if (inQty > 0) {
+        runningQty = Number((runningQty + inQty).toFixed(4))
+        runningAmount = Number((runningAmount + inAmt).toFixed(2))
+        runningUnitPrice = runningQty > 0 ? Number((runningAmount / runningQty).toFixed(4)) : 0
+        if (runningUnitPrice > 0) lastValidUnitPrice = runningUnitPrice
+      } else if (inQty < 0) {
+        const effectiveUnitPrice = runningUnitPrice > 0 ? runningUnitPrice : lastValidUnitPrice
+        runningQty = Number((runningQty + inQty).toFixed(4))
+        runningAmount = Number((runningQty * effectiveUnitPrice).toFixed(2))
+      }
+
+      if (outQty > 0) {
+        runningQty = Number((runningQty - outQty).toFixed(4))
+        runningAmount = Number((runningAmount - displayOutboundAmount).toFixed(2))
+      } else if (outQty < 0) {
+        const returnQty = Math.abs(outQty)
+        const returnCost = Math.abs(displayOutboundAmount)
+        runningQty = Number((runningQty + returnQty).toFixed(4))
+        runningAmount = Number((runningAmount + returnCost).toFixed(2))
+        runningUnitPrice = runningQty > 0 ? Number((runningAmount / runningQty).toFixed(4)) : 0
+        if (runningUnitPrice > 0) lastValidUnitPrice = runningUnitPrice
+      }
+
       result.push({
         productCode: row.productCode,
         productName: row.productName,
@@ -536,19 +596,20 @@ const loadLedger = async (row: any) => {
         inboundUnitPrice: en.inboundUnitPrice || 0,
         inboundAmount: en.inboundAmount || 0,
         outboundQty: en.outboundQty || 0,
-        outboundUnitPrice: en.outboundUnitPrice || 0,
-        outboundAmount: en.outboundAmount || 0,
+        outboundUnitPrice: displayOutboundUnitPrice,
+        outboundAmount: displayOutboundAmount,
         counter: en.counter || '',
         remark: en.remark || '',
         runningQty,
+        runningUnitPrice,
+        runningAmount,
         _sortDate: en._sortDate || en.date,
         _timestamp: en._timestamp
       })
     }
 
     const detailStartIdx = startMonth !== null && rawStartDate ? 1 : 0
-    const detailEndIdx = rawEndDate ? result.length - 2 : result.length
-    const detailRows = result.slice(detailStartIdx, detailEndIdx)
+    const detailRows = result.slice(detailStartIdx)
     detailRows.sort((a: any, b: any) => {
       const da = new Date(a._sortDate || a.date || '1970-01-01').getTime()
       const db_ = new Date(b._sortDate || b.date || '1970-01-01').getTime()
@@ -557,12 +618,41 @@ const loadLedger = async (row: any) => {
       const tb = b._timestamp ? new Date(b._timestamp).getTime() : 0
       return ta - tb
     })
-    result.splice(detailStartIdx, detailEndIdx - detailStartIdx, ...detailRows)
+    result.splice(detailStartIdx, result.length - detailStartIdx, ...detailRows)
 
     let finalRunningQty = result.length > 0 && result[0]._isSummary ? result[0].runningQty : 0
-    for (let i = (result[0]?._isSummary ? 1 : 0); i < (rawEndDate ? result.length - 2 : result.length); i++) {
-      finalRunningQty = Number((finalRunningQty + result[i].inboundQty - result[i].outboundQty).toFixed(4))
+    let finalRunningUnitPrice = result.length > 0 && result[0]._isSummary ? (result[0].runningUnitPrice || 0) : 0
+    let finalRunningAmount = result.length > 0 && result[0]._isSummary ? (result[0].runningAmount || 0) : 0
+    let lastValidFinalUnitPrice = finalRunningUnitPrice > 0 ? finalRunningUnitPrice : 0
+    for (let i = (result[0]?._isSummary ? 1 : 0); i < result.length; i++) {
+      const inQty = Number(result[i].inboundQty || 0)
+      const outQty = Number(result[i].outboundQty || 0)
+      const inAmt = Number(result[i].inboundAmount || 0)
+      const outAmt = Number(result[i].outboundAmount || 0)
+      if (inQty > 0) {
+        finalRunningQty = Number((finalRunningQty + inQty).toFixed(4))
+        finalRunningAmount = Number((finalRunningAmount + inAmt).toFixed(2))
+        finalRunningUnitPrice = finalRunningQty > 0 ? Number((finalRunningAmount / finalRunningQty).toFixed(4)) : 0
+        if (finalRunningUnitPrice > 0) lastValidFinalUnitPrice = finalRunningUnitPrice
+      } else if (inQty < 0) {
+        const effectiveInPrice = finalRunningUnitPrice > 0 ? finalRunningUnitPrice : lastValidFinalUnitPrice
+        finalRunningQty = Number((finalRunningQty + inQty).toFixed(4))
+        finalRunningAmount = Number((finalRunningQty * effectiveInPrice).toFixed(2))
+      }
+      if (outQty > 0) {
+        finalRunningQty = Number((finalRunningQty - outQty).toFixed(4))
+        finalRunningAmount = Number((finalRunningAmount - outAmt).toFixed(2))
+      } else if (outQty < 0) {
+        const returnQty = Math.abs(outQty)
+        const returnCost = Math.abs(outAmt)
+        finalRunningQty = Number((finalRunningQty + returnQty).toFixed(4))
+        finalRunningAmount = Number((finalRunningAmount + returnCost).toFixed(2))
+        finalRunningUnitPrice = finalRunningQty > 0 ? Number((finalRunningAmount / finalRunningQty).toFixed(4)) : 0
+        if (finalRunningUnitPrice > 0) lastValidFinalUnitPrice = finalRunningUnitPrice
+      }
       result[i].runningQty = finalRunningQty
+      result[i].runningUnitPrice = finalRunningUnitPrice
+      result[i].runningAmount = finalRunningAmount
     }
 
     if (rawEndDate) {
@@ -570,13 +660,21 @@ const loadLedger = async (row: any) => {
       const monthEnd = `${endYear}-${String(endMonth).padStart(2, '0')}-${new Date(endYear, endMonth, 0).getDate()}`
 
       let monthInQty = 0, monthInAmt = 0, monthOutQty = 0, monthOutAmt = 0
-      for (const en of ledgerData) {
+      for (let i = 0; i < result.length; i++) {
+        const en = result[i]
+        if (en._isSummary) continue
         if (en.date >= monthStart && en.date <= monthEnd) {
-          if (en.inboundQty) { monthInQty += en.inboundQty; monthInAmt += en.inboundAmount || 0 }
-          if (en.outboundQty) { monthOutQty += en.outboundQty; monthOutAmt += en.outboundAmount || 0 }
+          const inQty = Number(en.inboundQty || 0)
+          const outQty = Number(en.outboundQty || 0)
+          const inAmt = Number(en.inboundAmount || 0)
+          const outAmt = Number(en.outboundAmount || 0)
+
+          if (inQty !== 0) { monthInQty += inQty; monthInAmt += inAmt }
+          if (outQty !== 0) { monthOutQty += outQty; monthOutAmt += outAmt }
         }
       }
-      const monthAvgPrice = (monthInQty + monthOutQty) > 0 ? ((monthInAmt + Math.abs(monthOutAmt)) / (monthInQty + monthOutQty)) : 0
+      const totalMonthQty = Math.abs(monthInQty) + Math.abs(monthOutQty)
+      const monthAvgPrice = totalMonthQty > 0 ? ((Math.abs(monthInAmt) + Math.abs(monthOutAmt)) / totalMonthQty) : 0
       result.push({
         _isSummary: true,
         _summaryType: 'monthly',
@@ -593,17 +691,33 @@ const loadLedger = async (row: any) => {
         outboundAmount: Number(monthOutAmt.toFixed(2)),
         counter: '',
         remark: '',
-        runningQty: null
+        runningQty: null,
+        runningUnitPrice: null,
+        runningAmount: null
       })
 
       const yearStartStr = `${endYear}-01-01`
-      const yearData = await db.getProductLedger(row.productId, row.warehouseId, yearStartStr, endDate)
       let yearInQty = 0, yearInAmt = 0, yearOutQty = 0, yearOutAmt = 0
-      for (const en of yearData) {
-        if (en.inboundQty) { yearInQty += en.inboundQty; yearInAmt += en.inboundAmount || 0 }
-        if (en.outboundQty) { yearOutQty += en.outboundQty; yearOutAmt += en.outboundAmount || 0 }
+      let yearReturnInAmt = 0
+      for (let i = 0; i < result.length; i++) {
+        const en = result[i]
+        if (en._isSummary) continue
+        if (en.date >= yearStartStr && en.date <= monthEnd) {
+          const inQty = Number(en.inboundQty || 0)
+          const outQty = Number(en.outboundQty || 0)
+          const inAmt = Number(en.inboundAmount || 0)
+          const outAmt = Number(en.outboundAmount || 0)
+          if (inQty !== 0) {
+            yearInQty += inQty
+            yearInAmt += inAmt
+            if (inQty < 0) { yearReturnInAmt += Math.abs(inAmt) }
+          }
+          if (outQty !== 0) { yearOutQty += outQty; yearOutAmt += outAmt }
+        }
       }
-      const yearAvgPrice = (yearInQty + yearOutQty) > 0 ? ((yearInAmt + Math.abs(yearOutAmt)) / (yearInQty + yearOutQty)) : 0
+      const yearTotalQty = Math.abs(yearInQty) + Math.abs(yearOutQty)
+      const netYearOutAmt = yearOutAmt - yearReturnInAmt
+      const yearAvgPrice = yearTotalQty > 0 ? ((Math.abs(yearInAmt) + Math.abs(netYearOutAmt)) / yearTotalQty) : 0
       result.push({
         _isSummary: true,
         _summaryType: 'yearly',
@@ -617,17 +731,54 @@ const loadLedger = async (row: any) => {
         inboundAmount: Number(yearInAmt.toFixed(2)),
         outboundQty: Number(yearOutQty.toFixed(4)),
         outboundUnitPrice: Number(yearAvgPrice.toFixed(2)),
-        outboundAmount: Number(yearOutAmt.toFixed(2)),
+        outboundAmount: Number(netYearOutAmt.toFixed(2)),
         counter: '',
         remark: '',
-        runningQty: null
+        runningQty: null,
+        runningUnitPrice: null,
+        runningAmount: null
       })
     } else {
       let totalInQty = 0, totalInAmt = 0, totalOutQty = 0, totalOutAmt = 0
-      for (const en of ledgerData) {
-        if (en.inboundQty) { totalInQty += en.inboundQty; totalInAmt += en.inboundAmount || 0 }
-        if (en.outboundQty) { totalOutQty += en.outboundQty; totalOutAmt += en.outboundAmount || 0 }
+      let returnInQty = 0, returnInAmt = 0
+      for (let i = 0; i < result.length; i++) {
+        const en = result[i]
+        if (en._isSummary) continue
+        const inQty = Number(en.inboundQty || 0)
+        const outQty = Number(en.outboundQty || 0)
+        const inAmt = Number(en.inboundAmount || 0)
+        const outAmt = Number(en.outboundAmount || 0)
+
+        if (inQty !== 0) {
+          if (inQty > 0) {
+            totalInQty += inQty
+            totalInAmt += inAmt
+          } else {
+            returnInQty += Math.abs(inQty)
+            returnInAmt += Math.abs(inAmt)
+            totalInQty += inQty
+            totalInAmt += inAmt
+          }
+        }
+        if (outQty !== 0) {
+          if (outQty > 0) {
+            totalOutQty += outQty
+            totalOutAmt += outAmt
+          } else {
+            totalOutQty += outQty
+            totalOutAmt += outAmt
+          }
+        }
       }
+
+      // 计算净额：实际入库 = 正常入库 - 销售退货；实际出库 = 正常出库 - 采购退货
+      const netInQty = totalInQty
+      const netInAmt = totalInAmt
+      const netOutQty = totalOutQty
+      const netOutAmt = totalOutAmt - returnInAmt  // 出库净额需扣减销售退货金额
+
+      const absNetInQty = Math.abs(netInQty)
+      const absNetOutQty = Math.abs(netOutQty)
       result.push({
         _isSummary: true,
         _summaryType: 'total',
@@ -636,15 +787,17 @@ const loadLedger = async (row: any) => {
         productName: row.productName,
         specification: row.specification || '-',
         unit: row.unit || '-',
-        inboundQty: Number(totalInQty.toFixed(4)),
-        inboundUnitPrice: totalInQty > 0 ? Number((totalInAmt / totalInQty).toFixed(2)) : 0,
-        inboundAmount: Number(totalInAmt.toFixed(2)),
-        outboundQty: Number(totalOutQty.toFixed(4)),
-        outboundUnitPrice: totalOutQty > 0 ? Number((Math.abs(totalOutAmt) / totalOutQty).toFixed(2)) : 0,
-        outboundAmount: Number(Math.abs(totalOutAmt).toFixed(2)),
+        inboundQty: Number(netInQty.toFixed(4)),
+        inboundUnitPrice: absNetInQty > 0 ? Number((Math.abs(netInAmt) / absNetInQty).toFixed(2)) : 0,
+        inboundAmount: Number(netInAmt.toFixed(2)),
+        outboundQty: Number(netOutQty.toFixed(4)),
+        outboundUnitPrice: absNetOutQty > 0 ? Number((Math.abs(netOutAmt) / absNetOutQty).toFixed(2)) : 0,
+        outboundAmount: Number(netOutAmt.toFixed(2)),
         counter: '',
         remark: '',
-        runningQty: null
+        runningQty: null,
+        runningUnitPrice: null,
+        runningAmount: null
       })
     }
 
@@ -735,7 +888,7 @@ onMounted(async () => {
 .stock-detail-dialog {
   position: relative;
   width: 90%;
-  max-width: 1600px;
+  max-width: 95vw;
   height: 85vh;
   min-height: 600px;
   background: #fff;

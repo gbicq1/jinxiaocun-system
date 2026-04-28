@@ -56,6 +56,11 @@ export class MonthlyCostSettlementService {
         }
       }
 
+      // 如果是点击月份卡片（不锁定），确保前一个月已计算
+      if (!lock) {
+        this.ensurePreviousMonthCalculated(year, month)
+      }
+
       const productWarehouseCombinations = this.getAllProductWarehouseCombinations()
       console.log(`产品仓库组合数量：${productWarehouseCombinations.length}`)
       productWarehouseCombinations.forEach(c => console.log(`  - ${c.productCode}(${c.productName}) @ ${c.warehouseId}(${c.warehouseName})`))
@@ -99,16 +104,45 @@ export class MonthlyCostSettlementService {
 
       if (settlements.length > 0) {
         this.costDb.saveSettlements(settlements)
+        
+        // 如果 lock 为 true，保存后锁定该月份
+        if (lock) {
+          this.costDb.lockSettlement(year, month)
+          console.log(`  ✓ 已锁定 ${year}年${month}月`)
+        }
       }
 
       this.calculateAndSaveSalesCostSummary(year, month, lock)
 
       this.calculateAndSaveTransferCostSummary(year, month, lock)
 
+      console.log(`✓ ${year}年${month}月 成本结算全部完成（含销售成本和调拨成本）`)
+      
       return { success: true, count: settlements.length }
     } catch (error) {
       console.error(`结算 ${year}年${month}月 失败:`, error)
       return { success: false, count: 0, error: String(error) }
+    }
+  }
+
+  /**
+   * 确保前一个月已计算（用于不锁定模式）
+   * 递归检查并计算从年度第一个月到当前月份的所有月份
+   */
+  private ensurePreviousMonthCalculated(year: number, month: number): void {
+    let prevMonth = month - 1
+    let prevYear = year
+
+    if (prevMonth === 0) {
+      prevMonth = 12
+      prevYear = year - 1
+    }
+    
+    const hasPreviousData = this.costDb.checkSettlementExists(prevYear, prevMonth)
+    
+    if (!hasPreviousData) {
+      console.log(`  前一个月 (${prevYear}年${prevMonth}月) 未计算，先计算前一个月`)
+      this.settleMonth(prevYear, prevMonth, false)
     }
   }
 
@@ -239,6 +273,7 @@ export class MonthlyCostSettlementService {
         AND pi.inbound_date >= ?
         AND pi.inbound_date < ?
         AND ii.product_id = ?
+        AND pi.status != 'deleted'
     `
     const purchaseInboundItems = this.mainDb.prepare(purchaseInboundSql).all(
       warehouseId, monthStart, monthEnd, productId
@@ -265,9 +300,18 @@ export class MonthlyCostSettlementService {
     })
 
     // 2. 采购退货（负数）- 按退货数量占原入库数量的比例计算成本
+    // 当无法关联原入库单时，使用退货单自身的价格字段作为回退
     const purchaseReturnSql = `
       SELECT
         pri.quantity,
+        pri.unit_price as return_unit_price,
+        pri.unit_price_ex as return_unit_price_ex,
+        pri.total_amount as return_total_amount,
+        pri.total_amount_ex as return_total_amount_ex,
+        pr.invoice_type as return_invoice_type,
+        pr.invoice_issued as return_invoice_issued,
+        pri.tax_rate as return_tax_rate,
+        pri.allow_deduction as return_allow_deduction,
         CASE 
           WHEN (pi.invoice_type = '专票' OR pi.invoice_type = '专用发票') AND (pi.invoice_issued = 1 OR pi.invoice_issued = true) THEN ii.unit_price_ex
           WHEN (pi.invoice_issued = 1 OR pi.invoice_issued = true) AND (ii.tax_rate = 0 OR ii.tax_rate IS NULL OR ii.tax_rate = '0%') AND (ii.allow_deduction = 1 OR ii.allow_deduction = true) THEN ii.unit_price_ex
@@ -291,21 +335,46 @@ export class MonthlyCostSettlementService {
         AND pr.return_date >= ?
         AND pr.return_date < ?
         AND pri.product_id = ?
+        AND pr.status != 'deleted'
     `
     const purchaseReturnItems = this.mainDb.prepare(purchaseReturnSql).all(
       warehouseId, monthStart, monthEnd, productId
     ) as any[]
+    console.log(`    采购退货记录数：${purchaseReturnItems.length}`)
     purchaseReturnItems.forEach(item => {
       const returnQty = Number(item.quantity || 0)
       const inboundQty = Number(item.inbound_qty || 0)
       const inboundTotalAmt = Number(item.inbound_total_amount || 0)
-      
-      // 按退货数量占原入库数量的比例计算成本
+
       let costAmt = 0
-      if (inboundQty > 0) {
+      if (inboundQty > 0 && inboundTotalAmt > 0) {
         costAmt = inboundTotalAmt * (returnQty / inboundQty)
+      } else {
+        const retIsSpecialInvoice = (item.return_invoice_type === '专票' || item.return_invoice_type === '专用发票')
+        const retIsInvoiceIssued = item.return_invoice_issued === 1 || item.return_invoice_issued === true
+        const retIsTaxExempt = (Number(item.return_tax_rate || 0) === 0)
+        const retIsDeductionAllowed = item.return_allow_deduction === 1 || item.return_allow_deduction === true
+        const useExPrice = (retIsSpecialInvoice && retIsInvoiceIssued) || (retIsInvoiceIssued && retIsTaxExempt && retIsDeductionAllowed)
+
+        if (useExPrice) {
+          const fallbackAmount = Number(item.return_total_amount_ex || 0)
+          const fallbackPrice = Number(item.return_unit_price_ex || 0)
+          if (fallbackAmount > 0) {
+            costAmt = fallbackAmount * (returnQty / (Math.abs(returnQty) || 1))
+          } else if (fallbackPrice > 0) {
+            costAmt = Math.abs(returnQty) * fallbackPrice
+          }
+        } else {
+          const fallbackAmount = Number(item.return_total_amount || 0)
+          const fallbackPrice = Number(item.return_unit_price || 0)
+          if (fallbackAmount > 0) {
+            costAmt = fallbackAmount * (returnQty / (Math.abs(returnQty) || 1))
+          } else if (fallbackPrice > 0) {
+            costAmt = Math.abs(returnQty) * fallbackPrice
+          }
+        }
       }
-      
+
       totalQty -= returnQty
       totalCost -= costAmt
     })
@@ -319,6 +388,7 @@ export class MonthlyCostSettlementService {
         AND tr.transfer_date >= ?
         AND tr.transfer_date < ?
         AND tri.product_id = ?
+        AND tr.status != 'deleted'
     `
     const transferInItems = this.mainDb.prepare(transferInSql).all(
       warehouseId, monthStart, monthEnd, productId
@@ -358,6 +428,7 @@ export class MonthlyCostSettlementService {
         AND so.outbound_date >= ?
         AND so.outbound_date < ?
         AND soi.product_id = ?
+        AND so.status != 'deleted'
     `
     const salesOutboundItems = this.mainDb.prepare(salesOutboundSql).all(
       warehouseId, monthStart, monthEnd, productId
@@ -376,6 +447,7 @@ export class MonthlyCostSettlementService {
         AND sr.return_date >= ?
         AND sr.return_date < ?
         AND sri.product_id = ?
+        AND sr.status != 'deleted'
     `
     const salesReturnItems = this.mainDb.prepare(salesReturnSql).all(
       warehouseId, monthStart, monthEnd, productId
@@ -393,6 +465,7 @@ export class MonthlyCostSettlementService {
         AND tr.transfer_date >= ?
         AND tr.transfer_date < ?
         AND tri.product_id = ?
+        AND tr.status != 'deleted'
     `
     const transferOutItems = this.mainDb.prepare(transferOutSql).all(
       warehouseId, monthStart, monthEnd, productId
@@ -589,7 +662,7 @@ export class MonthlyCostSettlementService {
   }
 
   /**
-   * 计算并保存销售成本统计
+   * 计算并保存销售成本统计（只包括销售出库和销售退货，不包括调拨）
    */
   private calculateAndSaveSalesCostSummary(year: number, month: number, lock: boolean) {
     const monthStart = `${year}-${String(month).padStart(2, '0')}-01`
@@ -601,6 +674,18 @@ export class MonthlyCostSettlementService {
     }
     const monthEnd = `${nextMonthYear}-${String(nextMonth).padStart(2, '0')}-01`
 
+    console.log(`[销售成本统计] 开始计算 ${year}年${month}月 销售成本数据...`)
+
+    // 0. 先删除当月的旧数据（重新计算）
+    try {
+      this.costDb.deleteSalesCostItemsByPeriod(year, month)
+      console.log(`[销售成本统计] 已删除 ${year}年${month}月 的旧数据`)
+    } catch (error) {
+      console.error('[销售成本统计] 删除旧数据失败:', error)
+    }
+
+    // 1. 获取销售出库数据（正数）
+    // 规则：直接提取数据库中的不含税价和含税价字段
     const salesOutbounds = this.mainDb.prepare(`
       SELECT 
         so.id as doc_id,
@@ -610,8 +695,12 @@ export class MonthlyCostSettlementService {
         w.id as warehouse_id,
         w.name as warehouse_name,
         soi.quantity as qty,
-        soi.unit_price as unit_price,
+        soi.unit_price_ex as unit_price_ex,
+        soi.unit_price as unit_price_incl,
+        soi.tax_rate as tax_rate,
+        soi.tax_amount as tax_amount,
         soi.total_amount as amount,
+        soi.total_amount_ex as amount_ex,
         so.outbound_date as date
       FROM sales_outbound_items soi
       JOIN sales_outbound so ON soi.outbound_id = so.id
@@ -621,9 +710,54 @@ export class MonthlyCostSettlementService {
         AND so.status != 'deleted'
     `).all(monthStart, monthEnd) as any[]
 
+    console.log(`[销售成本统计] 销售出库数据共 ${salesOutbounds.length} 条`)
+    console.log('[销售成本统计] 销售出库示例数据:', salesOutbounds[0])
+    console.log('[销售成本统计] 出库数据详情:')
+    salesOutbounds.forEach(item => {
+      console.log(`  单号：${item.doc_no}`)
+      console.log(`    数量：${item.qty}`)
+      console.log(`    unit_price_ex (不含税单价): ${item.unit_price_ex}`)
+      console.log(`    unit_price (含税单价): ${item.unit_price_incl}`)
+      console.log(`    tax_rate: ${item.tax_rate}`)
+      console.log(`    tax_amount: ${item.tax_amount}`)
+      console.log(`    total_amount (含税金额): ${item.amount}`)
+      console.log(`    total_amount_ex (不含税金额): ${item.amount_ex}`)
+      console.log('---')
+    })
+
     for (const item of salesOutbounds) {
       const avgCost = this.getAvgCostAtDate(item.product_code, item.warehouse_id, item.date)
       const costAmount = Number(item.qty || 0) * avgCost
+      
+      // 直接使用数据库字段，如果为 0 则从含税单价和税率反推
+      let unitPriceEx = Number(item.unit_price_ex || 0)
+      const unitPriceIncl = Number(item.unit_price_incl || 0)
+      const taxRate = Number(item.tax_rate || 0)
+      
+      // 如果不含税单价为 0，从含税单价和税率反推
+      if (unitPriceEx === 0 && unitPriceIncl > 0) {
+        if (taxRate > 0) {
+          unitPriceEx = unitPriceIncl / (1 + taxRate / 100)
+        } else {
+          unitPriceEx = unitPriceIncl  // 无税率时，不含税=含税
+        }
+      }
+      
+      // amount = 含税金额，amount_ex = 不含税金额
+      let salesAmount = Number(item.amount || 0)
+      let salesAmountEx = Number(item.amount_ex || 0)
+      
+      // 如果不含税金额为 0，从数量*不含税单价计算
+      if (salesAmountEx === 0 && unitPriceEx > 0) {
+        salesAmountEx = Number(item.qty || 0) * unitPriceEx
+      }
+      
+      // 如果含税金额为 0，从数量*含税单价计算
+      if (salesAmount === 0 && unitPriceIncl > 0) {
+        salesAmount = Number(item.qty || 0) * unitPriceIncl
+      }
+
+      console.log(`[销售出库] ${item.doc_no}: qty=${item.qty}, unitPriceEx=${unitPriceEx}, unitPriceIncl=${unitPriceIncl}, taxRate=${taxRate}, amount=${salesAmount}, amount_ex=${salesAmountEx}`)
 
       this.costDb.saveSalesCostItem({
         doc_type: 'sales_outbound',
@@ -634,17 +768,114 @@ export class MonthlyCostSettlementService {
         warehouse_id: item.warehouse_id,
         warehouse_name: item.warehouse_name,
         quantity: item.qty,
-        unit_price: item.unit_price,
-        sales_amount: item.amount,
+        unit_price_ex: unitPriceEx,
+        unit_price: unitPriceIncl,
+        tax_amount: item.tax_amount,
+        sales_amount_ex: salesAmountEx,
+        sales_amount: salesAmount,
         cost_unit_price: avgCost,
         cost_amount: costAmount,
-        profit_amount: Number(item.amount || 0) - costAmount,
+        profit_amount: salesAmountEx - costAmount,
         date: item.date,
         period_year: year,
         period_month: month,
         is_locked: lock ? 1 : 0
       })
     }
+
+    // 2. 获取销售退货数据（负数，作为销售的抵减）
+    // 规则：退货单价优先从对应的销售出库记录获取（通过 original_order_no 匹配），其次使用退货单自身字段
+    const salesReturns = this.mainDb.prepare(`
+      WITH return_outbound_prices AS (
+        SELECT
+          o.outbound_no,
+          oi.product_id,
+          oi.unit_price_ex,
+          oi.unit_price,
+          oi.tax_amount as outbound_tax_amount,
+          oi.quantity as outbound_qty
+        FROM sales_outbound_items oi
+        JOIN sales_outbound o ON oi.outbound_id = o.id
+        WHERE o.outbound_date >= ? AND o.outbound_date < ?
+          AND o.status != 'deleted'
+      )
+      SELECT 
+        sr.id as doc_id,
+        sr.return_no as doc_no,
+        p.code as product_code,
+        p.name as product_name,
+        w.id as warehouse_id,
+        w.name as warehouse_name,
+        sri.quantity as qty,
+        COALESCE(rop.unit_price_ex, sri.unit_price_ex, sri.unit_price) as unit_price_ex,
+        COALESCE(rop.unit_price, sri.unit_price, sri.unit_price_incl) as unit_price_incl,
+        COALESCE(rop.unit_price_ex, sri.unit_price_ex, sri.unit_price) * sri.quantity as amount_ex,
+        COALESCE(rop.unit_price, sri.unit_price, sri.unit_price_incl) * sri.quantity as amount,
+        CASE
+          WHEN rop.outbound_qty > 0 THEN rop.outbound_tax_amount * 1.0 * sri.quantity / rop.outbound_qty
+          ELSE sri.tax_amount
+        END as tax_amount,
+        sr.return_date as date
+      FROM sales_return_items sri
+      JOIN sales_returns sr ON sri.return_id = sr.id
+      JOIN products p ON sri.product_id = p.id
+      JOIN warehouses w ON sr.warehouse_id = w.id
+      LEFT JOIN return_outbound_prices rop ON rop.outbound_no = sr.original_order_no
+        AND rop.product_id = sri.product_id
+      WHERE sr.return_date >= ? AND sr.return_date < ?
+        AND sr.status != 'deleted'
+    `).all(monthStart, monthEnd, monthStart, monthEnd) as any[]
+
+    console.log(`[销售成本统计] 销售退货数据共 ${salesReturns.length} 条`)
+    console.log('[销售成本统计] 销售退货示例数据:', salesReturns[0])
+    console.log('[销售成本统计] 退货数据详情:', JSON.stringify(salesReturns.map(item => ({
+      doc_no: item.doc_no,
+      unit_price_ex: item.unit_price_ex,
+      unit_price_incl: item.unit_price_incl,
+      amount_ex: item.amount_ex,
+      amount: item.amount,
+      tax_amount: item.tax_amount
+    })), null, 2))
+
+    for (const item of salesReturns) {
+      const avgCost = this.getAvgCostAtDate(item.product_code, item.warehouse_id, item.date)
+      // 销售退货：数量和金额为负数
+      const negativeQty = -Math.abs(Number(item.qty || 0))
+      const costAmount = negativeQty * avgCost
+      // 直接使用数据库字段，金额取负数
+      const salesAmountEx = -Math.abs(Number(item.amount_ex || 0))
+      const salesAmount = -Math.abs(Number(item.amount || 0))
+      // 使用数据库的不含税单价和含税单价
+      const unitPriceEx = Number(item.unit_price_ex || 0)
+      const unitPriceIncl = Number(item.unit_price_incl || 0)
+      
+      console.log(`[销售退货] ${item.doc_no}: qty=${item.qty}, unitPriceEx=${unitPriceEx}, unitPriceIncl=${unitPriceIncl}, amount_ex=${item.amount_ex}, amount=${item.amount}, salesAmountEx=${salesAmountEx}`)
+
+      this.costDb.saveSalesCostItem({
+        doc_type: 'sales_return',
+        doc_id: item.doc_id,
+        doc_no: item.doc_no,
+        product_code: item.product_code,
+        product_name: item.product_name,
+        warehouse_id: item.warehouse_id,
+        warehouse_name: item.warehouse_name,
+        quantity: negativeQty,
+        unit_price_ex: unitPriceEx,
+        unit_price: unitPriceIncl,
+        tax_amount: -Math.abs(Number(item.tax_amount || 0)),
+        sales_amount_ex: salesAmountEx,
+        sales_amount: salesAmount,
+        cost_unit_price: avgCost,
+        cost_amount: costAmount,
+        profit_amount: salesAmountEx - costAmount,
+        date: item.date,
+        period_year: year,
+        period_month: month,
+        is_locked: lock ? 1 : 0
+      })
+    }
+
+    console.log(`[销售成本统计] ${year}年${month}月 销售成本计算完成`)
   }
 
   /**
@@ -659,6 +890,14 @@ export class MonthlyCostSettlementService {
       nextMonthYear = year + 1
     }
     const monthEnd = `${nextMonthYear}-${String(nextMonth).padStart(2, '0')}-01`
+
+    // 0. 先删除当月的旧数据（重新计算）
+    try {
+      this.costDb.deleteTransferCostItemsByPeriod(year, month)
+      console.log(`[调拨成本统计] 已删除 ${year}年${month}月 的旧数据`)
+    } catch (error) {
+      console.error('[调拨成本统计] 删除旧数据失败:', error)
+    }
 
     const transfers = this.mainDb.prepare(`
       SELECT 
@@ -709,14 +948,15 @@ export class MonthlyCostSettlementService {
    * 获取指定日期的加权平均成本
    */
   getAvgCostAtDate(productCode: string, warehouseId: number, date: string): number {
-    const product = this.mainDb.prepare('SELECT id FROM products WHERE code = ?').get(productCode) as any
-    if (!product) return 0
-    const productId = product.id
-
+    console.log(`[getAvgCostAtDate] 查询成本: product=${productCode}, warehouse=${warehouseId}, date=${date}`)
+    
     const year = parseInt(date.split('-')[0])
     const month = parseInt(date.split('-')[1])
 
-    const settlement = this.costDb.getSettlement(productId, warehouseId, year, month)
+    // ✅ 修复：直接使用 productCode（如 'p01'），而不是 productId
+    const settlement = this.costDb.getSettlement(productCode, warehouseId, year, month)
+    console.log(`[getAvgCostAtDate] 当月结算:`, settlement ? { avg_cost: settlement.avg_cost } : '未找到')
+    
     if (settlement && settlement.avg_cost) {
       return settlement.avg_cost
     }
@@ -728,11 +968,14 @@ export class MonthlyCostSettlementService {
       prevMonth = 12
     }
 
-    const prevSettlement = this.costDb.getSettlement(productId, warehouseId, prevYear, prevMonth)
+    const prevSettlement = this.costDb.getSettlement(productCode, warehouseId, prevYear, prevMonth)
+    console.log(`[getAvgCostAtDate] 上月结算:`, prevSettlement ? { avg_cost: prevSettlement.avg_cost } : '未找到')
+    
     if (prevSettlement && prevSettlement.avg_cost) {
       return prevSettlement.avg_cost
     }
 
+    console.warn(`[getAvgCostAtDate] 未找到 ${productCode} 在 ${date} 的成本数据`)
     return 0
   }
 

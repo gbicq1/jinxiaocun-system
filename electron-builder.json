@@ -1,0 +1,75 @@
+{
+  "appId": "com.jxc.inventory",
+  "productName": "JXC Inventory System",
+  "copyright": "Copyright © 2024 进销存开发团队",
+  "directories": {
+    "output": "release",
+    "buildResources": "build"
+  },
+  "files": [
+    "dist/**/*",
+    "dist-electron/**/*",
+    {
+      "from": "node_modules",
+      "filter": [
+        "**/*",
+        "!**/README*",
+        "!**/CHANGELOG*",
+        "!**/LICENSE*",
+        "!**/*.md",
+        "!**/*.ts",
+        "!**/test/**/*",
+        "!**/tests/**/*",
+        "!**/.github/**/*"
+      ]
+    }
+  ],
+  "npmRebuild": true,
+  "asarUnpack": [
+    "node_modules/better-sqlite3/**/*"
+  ],
+  "extraResources": [
+    {
+      "from": "electron/database.db",
+      "to": "database.db",
+      "filter": ["**/*"]
+    }
+  ],
+  "win": {
+    "target": [
+      {
+        "target": "nsis",
+        "arch": ["x64"]
+      },
+      {
+        "target": "portable",
+        "arch": ["x64"]
+      }
+    ],
+    "icon": "build/icon.ico",
+    "artifactName": "${productName}-Setup-${version}-${arch}.${ext}",
+    "requestedExecutionLevel": "asInvoker",
+    "verifyUpdateCodeSignature": false
+  },
+  "nsis": {
+    "oneClick": false,
+    "perMachine": false,
+    "allowElevation": true,
+    "allowToChangeInstallationDirectory": true,
+    "deleteAppDataOnUninstall": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "进销存管理系统",
+    "installerLanguages": ["zh_CN", "en_US"],
+    "language": "2052",
+    "runAfterFinish": true,
+    "installerIcon": "build/icon.ico",
+    "uninstallerIcon": "build/icon.ico",
+    "include": "build/installer.nsh",
+    "warningsAsErrors": false,
+    "differentialPackage": true
+  },
+  "portable": {
+    "artifactName": "${productName}-Portable-${version}-${arch}.${ext}"
+  }
+}

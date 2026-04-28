@@ -23,23 +23,23 @@
         @selection-change="handleSelectionChange"
       >
         <el-table-column type="selection" width="55" />
-        <el-table-column prop="type" label="类型" width="100">
+        <el-table-column prop="type" label="类型" width="110">
           <template #default="{ row }">
-            <el-tag :type="row.type === 'inbound' ? 'success' : 'warning'">
-              {{ row.type === 'inbound' ? '入库单' : '出库单' }}
+            <el-tag :type="getTypeTagType(row.type)">
+              {{ getTypeLabel(row.type) }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="voucherNo" label="凭证号" width="150" />
+        <el-table-column prop="voucherNo" label="单据编号" width="160" />
         <el-table-column prop="voucherDate" label="单据日期" width="120" />
         <el-table-column label="客户/供应商" min-width="120">
           <template #default="{ row }">
-            {{ row.type === 'inbound' ? row.supplierName : row.customerName }}
+            {{ row.supplierName || row.customerName || '-' }}
           </template>
         </el-table-column>
-        <el-table-column prop="totalAmount" label="总金额" width="120">
+        <el-table-column prop="totalAmount" label="总金额" width="120" align="right">
           <template #default="{ row }">
-            {{ row.totalAmount.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
+            {{ Number(row.totalAmount || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
           </template>
         </el-table-column>
         <el-table-column prop="deletedAt" label="删除时间" width="180">
@@ -58,7 +58,6 @@
       </el-table>
     </el-card>
 
-    <!-- 批量操作 -->
     <el-card v-if="selectedItems.length > 0" style="margin-top: 20px">
       <div class="batch-toolbar">
         <span>已选择 {{ selectedItems.length }} 项</span>
@@ -72,13 +71,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, toRaw } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Delete } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
+import { db } from '@/utils/db-ipc'
 
 interface RecycleBinItem {
   id: number
-  type: 'inbound' | 'outbound'
+  type: string
   voucherNo: string
   voucherDate: string
   customerName?: string
@@ -91,7 +92,28 @@ interface RecycleBinItem {
 const recycleBinItems = ref<RecycleBinItem[]>([])
 const selectedItems = ref<RecycleBinItem[]>([])
 
-// 加载回收站数据
+const getTypeLabel = (type: string): string => {
+  const map: Record<string, string> = {
+    inbound: '入库单',
+    outbound: '出库单',
+    purchase_return: '采购退货',
+    sales_return: '销售退货',
+    transfer: '调拨单'
+  }
+  return map[type] || type
+}
+
+const getTypeTagType = (type: string): string => {
+  const map: Record<string, string> = {
+    inbound: 'success',
+    outbound: 'warning',
+    purchase_return: 'danger',
+    sales_return: 'info',
+    transfer: ''
+  }
+  return map[type] || ''
+}
+
 const loadRecycleBin = async () => {
   try {
     recycleBinItems.value = await db.getRecycleBinItems()
@@ -101,25 +123,72 @@ const loadRecycleBin = async () => {
   }
 }
 
-// 保存回收站数据
 const saveRecycleBin = async () => {
   try {
-    await db.saveRecycleBinItems(recycleBinItems.value)
+    const rawItems = JSON.parse(JSON.stringify(recycleBinItems.value))
+    await db.saveRecycleBinItems(rawItems)
   } catch (error) {
     console.error('保存回收站数据失败:', error)
   }
 }
 
-// 格式化日期时间
 const formatDateTime = (dateTime: string) => {
   return dayjs(dateTime).format('YYYY-MM-DD HH:mm:ss')
 }
 
-// 恢复单个项目
+const MAIN_EXTRA_FIELDS: Record<string, string[]> = {
+  inbound: ['id', 'warehouse_name', 'supplier_name'],
+  outbound: ['id', 'warehouse_name', 'customer_name'],
+  purchase_return: ['id', 'warehouse_name', 'supplier_name'],
+  sales_return: ['id', 'warehouse_name', 'customer_name'],
+  transfer: ['id', 'from_warehouse_name', 'to_warehouse_name']
+}
+
+const ITEM_EXTRA_FIELDS = ['id', 'product_code', 'product_name', 'unit', 'inbound_id', 'outbound_id', 'return_id', 'transfer_id']
+
+const cleanRestoreData = (type: string, raw: any): any => {
+  const data = JSON.parse(JSON.stringify(raw))
+  const mainFields = MAIN_EXTRA_FIELDS[type] || []
+  mainFields.forEach(field => delete data[field])
+
+  if (Array.isArray(data.items)) {
+    data.items = data.items.map((item: any) => {
+      const cleaned = { ...item }
+      ITEM_EXTRA_FIELDS.forEach(field => delete cleaned[field])
+      return cleaned
+    })
+  }
+
+  return data
+}
+
+const restoreItem = async (item: RecycleBinItem) => {
+  const data = cleanRestoreData(item.type, toRaw(item.originalData))
+  switch (item.type) {
+    case 'inbound':
+      await db.addInbound(data)
+      break
+    case 'outbound':
+      await db.addOutbound(data)
+      break
+    case 'purchase_return':
+      await db.addPurchaseReturn(data)
+      break
+    case 'sales_return':
+      await db.addSalesReturn(data)
+      break
+    case 'transfer':
+      await db.addTransfer(data)
+      break
+    default:
+      throw new Error(`不支持的单据类型: ${item.type}`)
+  }
+}
+
 const handleRestore = async (item: RecycleBinItem) => {
   try {
     await ElMessageBox.confirm(
-      `确定要恢复 ${item.type === 'inbound' ? '入库单' : '出库单'} "${item.voucherNo}" 吗？`,
+      `确定要恢复 ${getTypeLabel(item.type)} "${item.voucherNo}" 吗？`,
       '恢复确认',
       {
         confirmButtonText: '确定恢复',
@@ -128,25 +197,22 @@ const handleRestore = async (item: RecycleBinItem) => {
       }
     )
 
-    if (item.type === 'inbound') {
-      await db.addInbound(item.originalData)
-    } else {
-      await db.addOutbound(item.originalData)
-    }
-
+    await restoreItem(item)
+    await db.removeFromRecycleBin(item.id)
     recycleBinItems.value = recycleBinItems.value.filter(r => r.id !== item.id)
-    await saveRecycleBin()
     ElMessage.success('恢复成功')
-  } catch {
-    ElMessage.info('已取消恢复')
+  } catch (error: any) {
+    if (error !== 'cancel' && error?.toString() !== 'Error: cancel') {
+      console.error('恢复失败:', error)
+      ElMessage.error('恢复失败：' + (error.message || '未知错误'))
+    }
   }
 }
 
-// 永久删除单个项目
 const handlePermanentDelete = async (item: RecycleBinItem) => {
   try {
     await ElMessageBox.confirm(
-      `确定要永久删除 ${item.type === 'inbound' ? '入库单' : '出库单'} "${item.voucherNo}" 吗？此操作不可恢复！`,
+      `确定要永久删除 ${getTypeLabel(item.type)} "${item.voucherNo}" 吗？此操作不可恢复！`,
       '永久删除确认',
       {
         confirmButtonText: '确定删除',
@@ -156,15 +222,17 @@ const handlePermanentDelete = async (item: RecycleBinItem) => {
       }
     )
 
+    await db.removeFromRecycleBin(item.id)
     recycleBinItems.value = recycleBinItems.value.filter(r => r.id !== item.id)
-    saveRecycleBin()
     ElMessage.success('永久删除成功')
-  } catch {
-    ElMessage.info('已取消删除')
+  } catch (error: any) {
+    if (error !== 'cancel' && error?.toString() !== 'Error: cancel') {
+      console.error('永久删除失败:', error)
+      ElMessage.error('永久删除失败')
+    }
   }
 }
 
-// 清空回收站
 const handleEmptyRecycleBin = async () => {
   if (recycleBinItems.value.length === 0) {
     ElMessage.warning('回收站已经是空的')
@@ -183,15 +251,17 @@ const handleEmptyRecycleBin = async () => {
       }
     )
 
+    await db.saveRecycleBinItems([])
     recycleBinItems.value = []
-    saveRecycleBin()
     ElMessage.success('回收站已清空')
-  } catch {
-    ElMessage.info('已取消清空')
+  } catch (error: any) {
+    if (error !== 'cancel' && error?.toString() !== 'Error: cancel') {
+      console.error('清空回收站失败:', error)
+      ElMessage.error('清空回收站失败')
+    }
   }
 }
 
-// 批量恢复
 const handleBatchRestore = async () => {
   if (selectedItems.value.length === 0) {
     ElMessage.warning('请先选择要恢复的项目')
@@ -209,26 +279,31 @@ const handleBatchRestore = async () => {
       }
     )
 
-    // 恢复选中的项目
+    let restoredCount = 0
     for (const item of selectedItems.value) {
-      if (item.type === 'inbound') {
-        await db.addInbound(item.originalData)
-      } else {
-        await db.addOutbound(item.originalData)
+      try {
+        await restoreItem(item)
+        await db.removeFromRecycleBin(item.id)
+        recycleBinItems.value = recycleBinItems.value.filter(r => r.id !== item.id)
+        restoredCount++
+      } catch (error: any) {
+        console.error(`恢复 ${item.voucherNo} 失败:`, error)
+        ElMessage.warning(`恢复 ${item.voucherNo} 失败：${error.message}`)
       }
-      recycleBinItems.value = recycleBinItems.value.filter(r => r.id !== item.id)
     }
 
-    const restoredCount = selectedItems.value.length
-    await saveRecycleBin()
     selectedItems.value = []
-    ElMessage.success(`成功恢复 ${restoredCount} 项`)
-  } catch {
-    ElMessage.info('已取消批量恢复')
+    if (restoredCount > 0) {
+      ElMessage.success(`成功恢复 ${restoredCount} 项`)
+    }
+  } catch (error: any) {
+    if (error !== 'cancel' && error?.toString() !== 'Error: cancel') {
+      console.error('批量恢复失败:', error)
+      ElMessage.error('批量恢复失败')
+    }
   }
 }
 
-// 批量永久删除
 const handleBatchDelete = async () => {
   if (selectedItems.value.length === 0) {
     ElMessage.warning('请先选择要删除的项目')
@@ -247,20 +322,23 @@ const handleBatchDelete = async () => {
       }
     )
 
-    // 删除选中的项目
     const selectedIds = selectedItems.value.map(item => item.id)
+    for (const id of selectedIds) {
+      await db.removeFromRecycleBin(id)
+    }
     recycleBinItems.value = recycleBinItems.value.filter(item => !selectedIds.includes(item.id))
 
-    const deletedCount = selectedItems.value.length
-    saveRecycleBin()
+    const deletedCount = selectedIds.length
     selectedItems.value = []
     ElMessage.success(`成功永久删除 ${deletedCount} 项`)
-  } catch {
-    ElMessage.info('已取消批量删除')
+  } catch (error: any) {
+    if (error !== 'cancel' && error?.toString() !== 'Error: cancel') {
+      console.error('批量删除失败:', error)
+      ElMessage.error('批量删除失败')
+    }
   }
 }
 
-// 选择变化处理
 const handleSelectionChange = (selection: RecycleBinItem[]) => {
   selectedItems.value = selection
 }

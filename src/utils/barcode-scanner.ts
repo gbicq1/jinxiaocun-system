@@ -14,28 +14,25 @@ export type BarcodeScanHandler = (event: BarcodeScanEvent) => void
 class BarcodeScannerService {
   private buffer: string = ''
   private timer: NodeJS.Timeout | null = null
-  private scanTimeout: number = 100 // 扫描超时时间（毫秒）
+  private scanTimeout: number = 100
   private handlers: BarcodeScanHandler[] = []
   private enabled: boolean = true
   private lastScanTime: Date | null = null
-  private minScanInterval: number = 500 // 最小扫描间隔（毫秒）
+  private minScanInterval: number = 500
+  private boundHandleKeyDown: ((event: KeyboardEvent) => void) | null = null
 
-  /**
-   * 初始化条码扫描器
-   */
   init() {
     if (typeof document !== 'undefined') {
-      document.addEventListener('keydown', this.handleKeyDown.bind(this))
+      this.boundHandleKeyDown = this.handleKeyDown.bind(this)
+      document.addEventListener('keydown', this.boundHandleKeyDown)
       console.log('[BarcodeScanner] 初始化完成')
     }
   }
 
-  /**
-   * 销毁扫描器
-   */
   destroy() {
-    if (typeof document !== 'undefined') {
-      document.removeEventListener('keydown', this.handleKeyDown.bind(this))
+    if (typeof document !== 'undefined' && this.boundHandleKeyDown) {
+      document.removeEventListener('keydown', this.boundHandleKeyDown)
+      this.boundHandleKeyDown = null
     }
     if (this.timer) {
       clearTimeout(this.timer)

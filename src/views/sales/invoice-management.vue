@@ -328,7 +328,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import dayjs from 'dayjs'
 import { db } from '../../utils/db-ipc'
 
@@ -539,7 +539,7 @@ const loadInvoiceList = async () => {
     allOutbounds = outboundResult.data || []
 
     // 从数据库获取退货单
-    const returnResult = await db.getSalesReturnList(1, 1000)
+    const returnResult = await db.getSalesReturns(1, 1000)
     allReturns = returnResult.data || []
     
     // 2. 创建出库单记录
@@ -602,7 +602,7 @@ const loadInvoiceList = async () => {
     // 3. 处理退货单关联
     for (let i = 0; i < allReturns.length; i++) {
       const ret = allReturns[i]
-      const origNo = ret.originalOrderNo
+      const origNo = ret.original_order_no || ret.originalOrderNo
       
       if (!origNo) continue
       
@@ -610,36 +610,33 @@ const loadInvoiceList = async () => {
       const invRecord = map.get(origNo)
       if (!invRecord) continue
       
-      // 计算退货含税金额（优先使用已保存的 totalInc，如果没有则计算）
       let retInclAmount = 0
-      if (ret.totalInc != null) {
-        retInclAmount = ret.totalInc
-      } else if (ret.items && ret.items.length > 0) {
-        retInclAmount = ret.items.reduce((sum: number, item: any) => sum + (item.totalInc || 0), 0)
+      if (ret.items && ret.items.length > 0) {
+        retInclAmount = ret.items.reduce((sum: number, item: any) => {
+          return sum + (item.total_amount || item.totalAmount || 0)
+        }, 0)
       } else {
-        retInclAmount = ret.totalAmount || 0
+        retInclAmount = ret.total_amount || ret.totalAmount || 0
       }
       
-      // 累加退货金额（使用含税金额）
       invRecord.returnedAmount += Math.abs(retInclAmount)
       
-      // 添加退货明细
       if (ret.items && ret.items.length > 0) {
         for (let j = 0; j < ret.items.length; j++) {
           const it = ret.items[j]
           invRecord.returnItems.push({
-            voucherNo: ret.voucherNo,
-            productId: it.productId,
-            productName: it.productName,
-            specification: it.specification,
+            voucherNo: ret.return_no || ret.voucherNo || '',
+            productId: it.product_id || it.productId,
+            productName: it.product_name || it.productName,
+            specification: it.specification || '',
             quantity: it.quantity,
-            unit: it.unit,
-            unitPrice: it.unitPrice,
-            unitPriceIncl: it.unitPriceIncl,
-            taxRate: it.taxRate,
-            taxAmount: it.taxAmount,
-            amount: it.amount,
-            totalInc: it.totalInc
+            unit: it.unit || '',
+            unitPrice: it.unit_price || it.unitPrice || 0,
+            unitPriceIncl: it.unit_price || it.unitPriceIncl,
+            taxRate: it.tax_rate ?? it.taxRate ?? 0,
+            taxAmount: it.tax_amount || it.taxAmount || 0,
+            amount: it.total_amount_ex || it.amount || 0,
+            totalInc: it.total_amount || it.totalInc || 0
           })
         }
       }
@@ -773,27 +770,27 @@ const handleInvoice = async (row: InvoiceRecord) => {
     
     // 更新出库单的已开票金额
     try {
-      if (window.electron && window.electron.outboundUpdate) {
-        // 从数据库获取出库单
-        const outboundResult = await window.electron.outboundList(1, 1000)
-        const outbounds = outboundResult.data || []
-        
-        const outbound = outbounds.find((o: any) => o.voucherNo === row.voucherNo)
-        if (outbound) {
-          // 更新已开票金额
-          const updatedOutbound = {
-            ...outbound,
-            invoicedAmount: (outbound.invoicedAmount || 0) + invoiceAmount,
-            invoiceDate: dayjs().format('YYYY-MM-DD')
-          }
-
-          await db.updateOutbound(updatedOutbound)
-
-          // 重新加载列表
-          loadInvoiceList()
-
-          ElMessage.success(`开票成功，开票金额：¥${invoiceAmount.toFixed(2)}`)
+      const outboundResult = await db.getOutboundList(1, 1000)
+      const outbounds = outboundResult.data || []
+      
+      const outbound = outbounds.find((o: any) => o.voucherNo === row.voucherNo)
+      if (outbound) {
+        const newInvoicedAmount = (outbound.invoicedAmount || 0) + invoiceAmount
+        const netAmount = outbound.totalAmount - row.returnedAmount
+        const updateData: any = {
+          id: outbound.id,
+          invoiced_amount: newInvoicedAmount,
+          invoice_date: dayjs().format('YYYY-MM-DD')
         }
+        if (newInvoicedAmount >= netAmount) {
+          updateData.invoice_issued = 1
+        }
+
+        await db.updateOutbound(updateData)
+
+        loadInvoiceList()
+
+        ElMessage.success(`开票成功，开票金额：¥${invoiceAmount.toFixed(2)}`)
       }
     } catch (error) {
       console.error('开票失败:', error)

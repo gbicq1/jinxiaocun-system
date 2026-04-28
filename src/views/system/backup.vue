@@ -71,7 +71,7 @@
           <el-switch v-model="config.autoBackupEnabled" @change="saveConfig" />
         </el-form-item>
         <el-form-item label="备份间隔" v-if="config.autoBackupEnabled">
-          <el-select v-model="config.autoBackupInterval" @change="saveConfig" style="width: 150px">
+          <el-select v-model="config.autoBackupInterval" style="width: 150px">
             <el-option label="每天" :value="1" />
             <el-option label="每 2 天" :value="2" />
             <el-option label="每 3 天" :value="3" />
@@ -81,7 +81,10 @@
           </el-select>
         </el-form-item>
         <el-form-item label="保留数量">
-          <el-input-number v-model="config.keepCount" :min="1" :max="100" @change="saveConfig" />
+          <el-input-number v-model="config.keepCount" :min="1" :max="100" />
+        </el-form-item>
+        <el-form-item>
+          <el-button type="primary" @click="saveConfig">保存配置</el-button>
         </el-form-item>
       </el-form>
     </el-card>
@@ -89,7 +92,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, toRaw } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Download, Upload, RefreshLeft, Refresh } from '@element-plus/icons-vue'
 
@@ -150,7 +153,8 @@ const loadConfig = async () => {
 
 const saveConfig = async () => {
   try {
-    await window.electron!.dbBackupSaveConfig!(config.value)
+    const plainConfig = JSON.parse(JSON.stringify(toRaw(config.value)))
+    await window.electron!.dbBackupSaveConfig!(plainConfig)
     ElMessage.success('配置已保存')
   } catch (error: any) {
     ElMessage.error('保存配置失败：' + error.message)

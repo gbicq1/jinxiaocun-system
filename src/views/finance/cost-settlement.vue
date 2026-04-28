@@ -184,7 +184,11 @@
                   <span v-else>{{ row.docNo }}</span>
                 </template>
               </el-table-column>
-              <el-table-column prop="type" label="单据类型" width="100" min-width="80" />
+              <el-table-column prop="type" label="单据类型" width="100" min-width="80">
+                <template #default="{ row }">
+                  <span>{{ getDocTypeName(row.type) }}</span>
+                </template>
+              </el-table-column>
 
               <!-- 入库数据区域 -->
               <el-table-column label="入库数据" align="center">
@@ -540,6 +544,19 @@ const handleOverlayClick = () => {
 const loadDetailData = (row: any) => {
   // TODO: 实现成本明细查询
   ledgerEntries.value = []
+}
+
+// 获取单据类型中文名称
+const getDocTypeName = (type: string): string => {
+  const map: Record<string, string> = {
+    purchase_inbound: '采购入库',
+    sales_outbound: '销售出库',
+    purchase_return: '采购退货',
+    sales_return: '销售退货',
+    transfer_in: '调拨入库',
+    transfer_out: '调拨出库'
+  }
+  return map[type] || type || '-'
 }
 
 onMounted(() => {

@@ -81,7 +81,7 @@
 
       <el-table :data="filteredOutbounds" style="width: 100%" @selection-change="handleSelectionChange">
         <el-table-column type="selection" width="55" />
-        <el-table-column prop="voucherNo" label="凭证号" width="150" />
+        <el-table-column prop="voucherNo" label="凭证号" width="210" />
         <el-table-column prop="voucherDate" label="出库日期" width="120" />
         <el-table-column prop="customerName" label="客户" min-width="120" />
         <el-table-column prop="warehouseName" label="仓库" width="120">
@@ -208,9 +208,10 @@
             <template #default="{ row, $index }">
               <el-select 
                 v-model="row.productId" 
-                placeholder="请选择商品" 
+                :placeholder="formData.warehouseId ? '请选择商品' : '请先选择仓库'" 
                 style="width: 100%" 
                 filterable 
+                :disabled="!formData.warehouseId"
                 @change="(val: number) => handleProductChange($index, val)"
               >
                 <el-option 
@@ -266,7 +267,7 @@
           <el-table-column label="操作" width="80" fixed="right"><template #default="{ $index }"><el-button type="danger" size="small" @click="removeItem($index)">删除</el-button></template></el-table-column>
         </el-table>
 
-        <el-button type="primary" style="margin-top: 10px" @click="addItem"><el-icon><Plus /></el-icon> 添加商品行</el-button>
+        <el-button type="primary" style="margin-top: 10px" :disabled="!formData.warehouseId" @click="addItem"><el-icon><Plus /></el-icon> 添加商品行</el-button>
 
         <el-alert title="单据汇总" type="success" :closable="false" show-icon style="margin: 20px 0" />
 
@@ -305,6 +306,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Printer, Download } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import { dbQuery, dbInsert, dbUpdate, dbDelete } from '@/utils/db'
+import { db } from '@/utils/db-ipc'
 import { handleDocumentSave, DocumentType } from '@/utils/cost-recalculation'
 // 获取单个产品的实时库存（从数据库）
 const getProductStock = async (productId: number, warehouseId: number): Promise<number> => {
@@ -319,6 +321,7 @@ const getProductStock = async (productId: number, warehouseId: number): Promise<
   }
 }
 import exportToCsv from '../../utils/exportCsv'
+import * as XLSX from 'xlsx'
 import { onBarcodeScan, type BarcodeScanEvent } from '@/utils/barcode-scanner'
 
 interface OutboundItem {
@@ -478,16 +481,16 @@ const filteredOutbounds = computed(() => {
     filtered = filtered.filter(record => record.totalAmount <= queryForm.maxAmount)
   }
 
-  // 按日期和时间戳正序排序（对副本排序）
+  // 按日期和时间戳倒序排序（对副本排序）
   filtered.sort((a: any, b: any) => {
     const dateA = new Date(a.voucherDate || a.date || '1970-01-01').getTime()
     const dateB = new Date(b.voucherDate || b.date || '1970-01-01').getTime()
     if (dateA !== dateB) {
-      return dateA - dateB
+      return dateB - dateA
     }
     const timeA = a.createdAt || a._timestamp || a.voucherDate || '1970-01-01'
     const timeB = b.createdAt || b._timestamp || b.voucherDate || '1970-01-01'
-    return new Date(timeA).getTime() - new Date(timeB).getTime()
+    return new Date(timeB).getTime() - new Date(timeA).getTime()
   })
 
   return filtered
@@ -717,7 +720,7 @@ const handleAdd = async () => {
 const handleDelete = async (row: OutboundRecord) => {
   try {
     await ElMessageBox.confirm(
-      `确定要删除出库单 "${row.voucherNo}" 吗？将移到回收站，可在回收站恢复。`,
+      `确定要删除出库单 "${row.voucherNo}" 吗？`,
       '删除确认',
       {
         confirmButtonText: '确定删除',
@@ -726,37 +729,16 @@ const handleDelete = async (row: OutboundRecord) => {
         confirmButtonClass: 'el-button--danger'
       }
     )
-    
-    // 将数据移到回收站
-    const recycleBinItem = {
-      id: Date.now(),
-      type: 'outbound' as const,
-      voucherNo: row.voucherNo,
-      voucherDate: row.voucherDate,
-      customerName: row.customerName,
-      totalAmount: row.totalAmount,
-      deletedAt: new Date().toISOString(),
-      originalData: { ...row }
-    }
 
-    // 保存到回收站
-    const savedRecycleBin = localStorage.getItem('recycle_bin')
-    const recycleBin = savedRecycleBin ? JSON.parse(savedRecycleBin) : []
-    recycleBin.push(recycleBinItem)
-    localStorage.setItem('recycle_bin', JSON.stringify(recycleBin))
-
-    // 从数据库删除
-    if (window.electron && window.electron.dbDelete) {
-      await window.electron.dbDelete('sales_outbound', 'id = ?', [row.id])
-    } else {
-      await dbDelete('sales_outbound', 'id = ?', [row.id])
-    }
+    await db.deleteOutbound(row.id)
     
-    ElMessage.success('已移到回收站')
+    ElMessage.success('删除成功')
     loadOutbounds()
-  } catch {
-    // 用户点击取消或关闭弹窗
-    ElMessage.info('已取消删除')
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('删除失败:', error)
+      ElMessage.error('删除失败')
+    }
   }
 }
 
@@ -804,6 +786,10 @@ const handleProductChange = async (index: number, productId: number) => {
     // 优先使用 spec（产品表字段），其次使用 specification，最后使用 code 作为备用
     item.specification = product.spec || product.specification || product.code || ''
     item.unit = product.unit || ''
+    const productTaxRate = product.taxRate || product.tax_rate || ''
+    if (productTaxRate && productTaxRate !== '') {
+      item.taxRate = productTaxRate
+    }
     // 如果产品有售价则使用，否则保持为空
     item.unitPriceEx = product.salePrice && product.salePrice > 0 ? product.salePrice : ('' as any)
     item._lastEdited = 'unitEx'
@@ -1022,6 +1008,8 @@ const handleSubmit = async () => {
       warehouse_id: formData.warehouseId,
       outbound_date: formData.voucherDate,
       total_amount: formData.totalAmount,
+      received_amount: formData.receivedAmount || 0,
+      invoice_issued: formData.invoiceIssued ? 1 : 0,
       status: 'completed',
       remark: formData.remark,
       handler_name: formData.handlerName,
@@ -1122,14 +1110,54 @@ const handlePrintCurrent = () => {
 }
 
 const handleExport = () => {
-  const columns = [
-    { label: '凭证号', key: 'voucherNo' },
-    { label: '出库日期', key: 'voucherDate' },
-    { label: '客户', key: 'customerName' },
-    { label: '总金额', key: 'totalAmount' },
-    { label: '状态', key: 'status' }
+  const exportData = selectedRows.value.length > 0 ? selectedRows.value : filteredOutbounds.value
+  if (exportData.length === 0) {
+    ElMessage.warning('没有可导出的单据，请先勾选要导出的单据')
+    return
+  }
+
+  const headers = [
+    '出库单号', '出库日期', '客户', '仓库', '经办人', '操作员',
+    '商品编码', '商品名称', '规格型号', '单位', '数量',
+    '单价(不含税)', '单价(含税)', '税率', '税额', '金额(含税)',
+    '是否开票', '发票类型',
+    '已收款', '合计金额', '备注'
   ]
-  exportToCsv('outbounds.csv', columns, outbounds.value)
+
+  const rows: any[][] = []
+  for (const record of exportData) {
+    const items = record.items || []
+    const invoiceIssuedStr = record.invoiceIssued ? '已开票' : '未开票'
+    const invoiceTypeStr = record.invoiceIssued ? (record.invoiceType || '普票') : ''
+    if (items.length === 0) {
+      rows.push([
+        record.voucherNo, record.voucherDate, record.customerName,
+        record.warehouseName || '', record.handlerName || '', record.operator || '',
+        '', '', '', '', '',
+        '', '', '', '', '',
+        invoiceIssuedStr, invoiceTypeStr,
+        record.receivedAmount || 0, record.totalAmount, record.remark || ''
+      ])
+    } else {
+      for (const item of items) {
+        rows.push([
+          record.voucherNo, record.voucherDate, record.customerName,
+          record.warehouseName || '', record.handlerName || '', record.operator || '',
+          item.productCode || '', item.productName, item.specification, item.unit, item.quantity,
+          item.unitPriceEx || 0, item.unitPrice || 0, item.taxRate, item.taxAmount || 0, item.totalAmount || 0,
+          invoiceIssuedStr, invoiceTypeStr,
+          record.receivedAmount || 0, record.totalAmount, record.remark || ''
+        ])
+      }
+    }
+  }
+
+  const wb = XLSX.utils.book_new()
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows])
+  ws['!cols'] = headers.map((_, i) => ({ wch: i === 0 ? 22 : 14 }))
+  XLSX.utils.book_append_sheet(wb, ws, '销售出库单')
+  XLSX.writeFile(wb, `销售出库单_${dayjs().format('YYYYMMDDHHmmss')}.xlsx`)
+  ElMessage.success(`成功导出 ${exportData.length} 张单据`)
 }
 
 const printOutboundForm = (row: OutboundRecord & { handlerName?: string }) => {
@@ -1149,6 +1177,8 @@ const printOutboundForm = (row: OutboundRecord & { handlerName?: string }) => {
     `).join('')
 
   const companyName = localStorage.getItem('companyName') || '荆州供销农业服务有限公司'
+  const invoiceStatus = row.invoiceIssued ? '已开票' : '未开票'
+  const invoiceTypeStr = row.invoiceIssued ? (row.invoiceType || '普票') : ''
 
   const printContent = `
     <html>
@@ -1160,9 +1190,10 @@ const printOutboundForm = (row: OutboundRecord & { handlerName?: string }) => {
           .header h2 { margin: 10px 0; font-size: 24px; }
           .header h3 { margin: 10px 0; font-size: 20px; }
           .table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
-          .table th, .table td { border: 1px solid #ddd; padding: 8px; }
+          .table th, .table td { border: 1px solid #ddd; padding: 8px; text-align: center; }
           .table th { background-color: #f5f5f5; }
-          .info { margin-bottom: 10px; }
+          .info { margin-bottom: 10px; display: flex; flex-wrap: wrap; }
+          .info div { width: 50%; margin-bottom: 5px; }
         </style>
       </head>
       <body>
@@ -1174,8 +1205,10 @@ const printOutboundForm = (row: OutboundRecord & { handlerName?: string }) => {
         <div class="info">
           <div>出库日期：${row.voucherDate}</div>
           <div>客户：${row.customerName}</div>
+          <div>仓库：${row.warehouseName || '-'}</div>
           <div>经办人：${row.handlerName || '-'}</div>
-          <div>发票状态：${row.invoiceIssued ? '已开票' : '未开票'}</div>
+          <div>发票状态：${invoiceStatus}${invoiceTypeStr ? '（' + invoiceTypeStr + '）' : ''}</div>
+          <div>已收款：¥${(row.receivedAmount || 0).toFixed(2)}</div>
         </div>
         <table class="table">
           <thead>
@@ -1196,7 +1229,7 @@ const printOutboundForm = (row: OutboundRecord & { handlerName?: string }) => {
             ${itemsHtml}
           </tbody>
         </table>
-        <div style="text-align: right; font-weight: bold;">总金额：${row.totalAmount.toFixed(2)}</div>
+        <div style="text-align: right; font-weight: bold;">总金额：¥${row.totalAmount.toFixed(2)}</div>
         <div style="margin-top: 10px; border: 1px solid #000; padding: 8px; text-align: left;">备注：${row.remark || '-'}</div>
         <div style="margin-top: 15px; display: flex; justify-content: space-between; align-items: center;">
           <div>操作员：${row.operator}  &nbsp;&nbsp;&nbsp;&nbsp; 经办人：${row.handlerName || '-'}</div>

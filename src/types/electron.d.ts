@@ -19,6 +19,12 @@ declare global {
       dbBackupConfig: () => Promise<{ autoBackupEnabled: boolean; autoBackupInterval: number; keepCount: number }>
       dbBackupSaveConfig: (config: { autoBackupEnabled: boolean; autoBackupInterval: number; keepCount: number }) => Promise<{ success: boolean }>
       dbBackupStats: () => Promise<{ totalBackups: number; totalSize: number; oldestBackup: Date | null; newestBackup: Date | null }>
+      // 回收站
+      recycleBinList: () => Promise<any[]>
+      recycleBinSave: (items: any[]) => Promise<void>
+      recycleBinAdd: (type: string, data: any) => Promise<void>
+      recycleBinRestore: (itemId: number) => Promise<any>
+      recycleBinRemove: (itemId: number) => Promise<void>
     }
   }
 }

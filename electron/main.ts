@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain, Menu, dialog } from 'electron'
 import { resolve } from 'path'
+import { format as formatUrl } from 'url'
 import { InventoryDatabase } from './database'
 import { CostSettlementHandler } from './cost-settlement-handler'
 import { MonthlyCostSettlementService } from './cost-settlement-service'
@@ -16,7 +17,12 @@ let databaseBackup: DatabaseBackup
 let backupScheduler: BackupScheduler
 
 function createWindow() {
-  console.log('创建窗口，preload 路径:', resolve(__dirname, 'preload.js'))
+  const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged
+  console.log('========== 窗口创建 ==========')
+  console.log('是否开发环境:', isDev)
+  console.log('app.getAppPath():', app.getAppPath())
+  console.log('__dirname:', __dirname)
+  console.log('process.resourcesPath:', process.resourcesPath)
   
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -26,23 +32,50 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: true,
-      preload: resolve(__dirname, 'preload.js')
+      preload: isDev 
+        ? resolve(__dirname, 'preload.js')
+        : resolve(app.getAppPath(), 'dist-electron', 'preload.js')
     },
     icon: resolve(__dirname, '../assets/icon.png'),
-    title: '进销存管理系统'
+    title: '进销存管理系统',
+    show: false
   })
 
-  // 开发环境加载 Vite 服务器，生产环境加载构建文件
-  const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged
-  console.log('是否开发环境:', isDev)
   if (isDev) {
+    console.log('加载开发服务器: http://localhost:5173')
     mainWindow.loadURL('http://localhost:5173')
+    mainWindow.webContents.openDevTools()
   } else {
-    mainWindow.loadFile(resolve(__dirname, '../dist/index.html'))
+    const indexPath = resolve(app.getAppPath(), 'dist', 'index.html')
+    const fileUrl = formatUrl({
+      pathname: indexPath,
+      protocol: 'file:',
+      slashes: true
+    })
+    console.log('加载生产环境页面:', fileUrl)
+    mainWindow.loadURL(fileUrl)
+    // 生产环境不打开 DevTools
   }
+
+  mainWindow.once('ready-to-show', () => {
+    console.log('页面准备就绪，显示窗口')
+    mainWindow!.show()
+  })
 
   mainWindow.on('closed', () => {
     mainWindow = null
+  })
+
+  mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
+    console.error('页面加载失败:', errorCode, errorDescription)
+  })
+
+  mainWindow.webContents.on('render-process-gone', (event, details) => {
+    console.error('渲染进程崩溃:', details)
+  })
+
+  mainWindow.webContents.on('unresponsive', () => {
+    console.error('页面失去响应')
   })
 
   // 设置中文菜单
@@ -324,6 +357,14 @@ function setupIpcHandlers() {
           throw new Error(`无法修改单据！${year}年${month}月已进行成本结算，请先反结算后再操作`)
         }
       }
+
+      // 检查修改后数量是否小于退货单数量
+      if (inbound.items && inbound.items.length > 0) {
+        const errors = db.validateInboundUpdateAgainstReturns(inbound.id, inbound.items)
+        if (errors.length > 0) {
+          throw new Error(`无法保存！${errors.join('；')}`)
+        }
+      }
     }
 
     return db.updateInbound(inbound)
@@ -349,6 +390,12 @@ function setupIpcHandlers() {
       if (db.costDb.isSettled(year, month)) {
         throw new Error(`无法删除单据！${year}年${month}月已进行成本结算，请先反结算后再操作`)
       }
+    }
+
+    // 检查是否有关联的退货单
+    const returnCheck = db.checkInboundHasReturns(id)
+    if (returnCheck.hasReturns) {
+      throw new Error(`无法删除入库单！该入库单存在关联的采购退货单：${returnCheck.returnNos.join('、')}，请先删除相关退货单`)
     }
 
     return db.deleteInbound(id)
@@ -389,6 +436,14 @@ function setupIpcHandlers() {
           throw new Error(`无法修改单据！${year}年${month}月已进行成本结算，请先反结算后再操作`)
         }
       }
+
+      // 检查修改后数量是否小于退货单数量
+      if (outbound.items && outbound.items.length > 0) {
+        const errors = db.validateOutboundUpdateAgainstReturns(outbound.id, outbound.items)
+        if (errors.length > 0) {
+          throw new Error(`无法保存！${errors.join('；')}`)
+        }
+      }
     }
 
     return db.updateOutbound(outbound)
@@ -405,6 +460,12 @@ function setupIpcHandlers() {
       if (db.costDb.isSettled(year, month)) {
         throw new Error(`无法删除单据！${year}年${month}月已进行成本结算，请先反结算后再操作`)
       }
+    }
+
+    // 检查是否有关联的退货单
+    const returnCheck = db.checkOutboundHasReturns(id)
+    if (returnCheck.hasReturns) {
+      throw new Error(`无法删除出库单！该出库单存在关联的销售退货单：${returnCheck.returnNos.join('、')}，请先删除相关退货单`)
     }
 
     return db.deleteOutbound(id)
@@ -598,12 +659,26 @@ function setupIpcHandlers() {
   })
 
   // 获取产品明细账（用于库存明细查询）
-  ipcMain.handle('product-ledger', async (event, productId: number, warehouseId: number, startDate?: string, endDate?: string) => {
-    return db.getProductLedger(productId, warehouseId, startDate, endDate)
+  ipcMain.handle('product-ledger', async (event, productId: number, warehouseId: number, startDate?: string, endDate?: string, useTransferRunningCost?: boolean) => {
+    return db.getProductLedger(productId, warehouseId, startDate, endDate, useTransferRunningCost || false)
   })
 
   ipcMain.handle('stock-before-date', async (event, productId: number, warehouseId: number, date: string) => {
     return db.getStockBeforeDate(productId, warehouseId, date)
+  })
+
+  ipcMain.handle('stock-cost-before-date', async (event, productId: number, warehouseId: number, date: string) => {
+    return db.getStockCostBeforeDate(productId, warehouseId, date)
+  })
+
+  // 获取调拨单的实时库存和成本（专用方法）
+  ipcMain.handle('get-transfer-stock-cost', async (event, productId: number, warehouseId: number, date: string) => {
+    return db.getTransferStockCost(productId, warehouseId, date)
+  })
+
+  // 获取指定日期的库存和成本（用于调拨单编辑时刷新成本价）
+  ipcMain.handle('get-product-stock-cost-on-date', async (event, productId: number, warehouseId: number, date: string) => {
+    return db.getTransferStockCost(productId, warehouseId, date)
   })
 
   // 库存盘点 CRUD
@@ -652,6 +727,29 @@ function setupIpcHandlers() {
       }
     } catch (error: any) {
       console.error('成本初始化失败:', error)
+      return { success: false, message: error.message, count: 0 }
+    }
+  })
+
+  // 计算成本但不锁定（用于月份卡片点击）
+  ipcMain.handle('cost:calculate-without-lock', async (event, params: { year: number; month: number }) => {
+    if (!costSettlementService || !db.costDb) {
+      throw new Error('成本结算服务未初始化')
+    }
+
+    try {
+      const year = params.year
+      const month = params.month
+      // 使用 lock=false 参数调用 settleMonth
+      const result = costSettlementService.settleMonth(year, month, false)
+
+      return {
+        success: result.success,
+        message: result.error ? result.error : `成功计算${result.count}条记录`,
+        count: result.count
+      }
+    } catch (error: any) {
+      console.error('计算成本失败:', error)
       return { success: false, message: error.message, count: 0 }
     }
   })
@@ -713,24 +811,258 @@ function setupIpcHandlers() {
     return result
   })
 
+  // 按日期范围查询成本结算汇总数据
+  ipcMain.handle('cost:settlement-query-by-date-range', async (event, params: any) => {
+    if (!db.costDb) {
+      throw new Error('成本结算数据库未初始化')
+    }
+    console.log('[cost:settlement-query-by-date-range] 收到参数:', params)
+    
+    const result = db.costDb.getSettlementsByDateRange(
+      params.startDate,
+      params.endDate,
+      params.productSearch,
+      params.warehouseId
+    )
+    console.log(`[cost:settlement-query-by-date-range] 返回 ${result.length} 条记录`)
+    return result
+  })
+
   // 获取销售成本统计
   ipcMain.handle('cost:sales-summary', async (event, params: any) => {
     if (!db.costDb) {
       throw new Error('成本结算数据库未初始化')
     }
-    const dateSource = params.periodRange || params.startDate
-    let year: number, month: number
-    if (dateSource) {
-      const dateStr = Array.isArray(dateSource) ? dateSource[0] : String(dateSource)
-      const [y, m] = dateStr.split('-').map(Number)
-      year = y
-      month = m
+    let result: any[]
+    if (params.startDate && params.endDate) {
+      result = db.costDb.getSalesCostSummaryByDateRange(params.startDate, params.endDate, params.productSearch, params.warehouseId)
     } else {
-      const now = new Date()
-      year = now.getFullYear()
-      month = now.getMonth() + 1
+      const dateSource = params.periodRange || params.startDate
+      let year: number, month: number
+      if (dateSource) {
+        const dateStr = Array.isArray(dateSource) ? dateSource[0] : String(dateSource)
+        const [y, m] = dateStr.split('-').map(Number)
+        year = y
+        month = m
+      } else {
+        const now = new Date()
+        year = now.getFullYear()
+        month = now.getMonth() + 1
+      }
+      result = db.costDb.getSalesCostSummary(year, month, params.productSearch, params.warehouseId)
     }
-    return db.costDb.getSalesCostSummary(year, month, params.productSearch)
+    console.log(`[cost:sales-summary IPC] 返回给前端：${result.length} 条数据`, result)
+    return result
+  })
+
+  // 获取销售成本明细
+  ipcMain.handle('cost:sales-detail', async (event, params: any) => {
+    if (!db.costDb) {
+      throw new Error('成本结算数据库未初始化')
+    }
+    let result: any[]
+    if (params.startDate && params.endDate) {
+      result = db.costDb.getSalesCostDetailByDateRange(params.startDate, params.endDate, params.productCode, params.warehouseId)
+    } else {
+      const dateSource = params.periodRange || params.startDate
+      let year: number, month: number
+      if (dateSource) {
+        const dateStr = Array.isArray(dateSource) ? dateSource[0] : String(dateSource)
+        const [y, m] = dateStr.split('-').map(Number)
+        year = y
+        month = m
+      } else {
+        const now = new Date()
+        year = now.getFullYear()
+        month = now.getMonth() + 1
+      }
+      result = db.costDb.getSalesCostDetail(year, month, params.productCode, params.warehouseId)
+    }
+    console.log(`[cost:sales-detail IPC] 返回给前端：${result.length} 条数据`, result)
+    return result
+  })
+
+  ipcMain.handle('cost:sales-daily-summary', async (event, params: any) => {
+    if (!db.costDb) {
+      throw new Error('成本结算数据库未初始化')
+    }
+    const result = db.costDb.getSalesCostDailySummary(params.startDate, params.endDate)
+    console.log(`[cost:sales-daily-summary IPC] 返回给前端：${result.length} 条数据`)
+    return result
+  })
+
+  ipcMain.handle('cost:sales-monthly-summary', async (event, params: any) => {
+    if (!db.costDb) {
+      throw new Error('成本结算数据库未初始化')
+    }
+    const result = db.costDb.getSalesCostMonthlySummary(params.startDate, params.endDate)
+    console.log(`[cost:sales-monthly-summary IPC] 返回给前端：${result.length} 条数据`)
+    return result
+  })
+
+  ipcMain.handle('cost:sales-profit-daily-summary', async (event, params: any) => {
+    if (!db.costDb) {
+      throw new Error('成本结算数据库未初始化')
+    }
+    return db.costDb.getSalesProfitDailySummary(params.startDate, params.endDate)
+  })
+
+  ipcMain.handle('cost:sales-profit-monthly-summary', async (event, params: any) => {
+    if (!db.costDb) {
+      throw new Error('成本结算数据库未初始化')
+    }
+    return db.costDb.getSalesProfitMonthlySummary(params.startDate, params.endDate)
+  })
+
+  ipcMain.handle('cost:sales-cost-items-periods', async (event, params: any) => {
+    if (!db.costDb) {
+      throw new Error('成本结算数据库未初始化')
+    }
+    return db.costDb.getSalesCostItemsPeriods(params.startDate, params.endDate)
+  })
+
+  ipcMain.handle('cost:sales-profit-by-product', async (event, params: any) => {
+    if (!db.costDb) {
+      throw new Error('成本结算数据库未初始化')
+    }
+    return db.costDb.getSalesProfitByProduct(params.startDate, params.endDate)
+  })
+
+  ipcMain.handle('cost:sales-profit-by-category', async (event, params: any) => {
+    if (!db.costDb) {
+      throw new Error('成本结算数据库未初始化')
+    }
+    return db.costDb.getSalesProfitByCategory(params.startDate, params.endDate)
+  })
+
+  // 调试：查询销售退货单原始数据
+  ipcMain.handle('debug:sales-return-data', async (event, docNo: string) => {
+    const sql = `
+      SELECT 
+        sr.return_no,
+        sr.return_date,
+        sri.quantity,
+        sri.unit_price,
+        sri.total_amount,
+        p.code as product_code,
+        p.name as product_name
+      FROM sales_return_items sri
+      JOIN sales_returns sr ON sri.return_id = sr.id
+      JOIN products p ON sri.product_id = p.id
+      WHERE sr.return_no = ?
+    `
+    const result = db.db.prepare(sql).get(docNo) as any
+    console.log(`[debug:sales-return-data] 退货单数据:`, result)
+    return result
+  })
+
+  // 调试：检查销售退货数据
+  ipcMain.handle('debug:check-sales-returns', async () => {
+    console.log('\n========== 检查销售退货数据 ==========\n')
+    
+    // 0. 检查 sales_returns 表结构
+    console.log('0. sales_returns 表结构：')
+    const columns = db.db.prepare(`PRAGMA table_info(sales_returns)`).all() as any[]
+    console.log(JSON.stringify(columns, null, 2))
+    
+    // 0.5 直接测试 r.warehouse_id
+    console.log('\n0.5 测试 r.warehouse_id：')
+    try {
+      const testResult = db.db.prepare(`SELECT r.warehouse_id FROM sales_returns r LIMIT 1`).get() as any
+      console.log('成功:', testResult)
+    } catch (e) {
+      console.error('失败:', e)
+    }
+    
+    // 1. 检查 sales_returns 表
+    console.log('1. sales_returns 表数据：')
+    const returns = db.db.prepare(`
+      SELECT 
+        id, 
+        return_no, 
+        original_order_no, 
+        return_date, 
+        total_amount,
+        status,
+        warehouse_id
+      FROM sales_returns 
+      ORDER BY return_date DESC
+      LIMIT 10
+    `).all() as any[]
+    console.log(JSON.stringify(returns, null, 2))
+
+    // 2. 检查 sales_return_items 表
+    console.log('\n2. sales_return_items 表数据：')
+    const returnItems = db.db.prepare(`
+      SELECT 
+        id,
+        return_id,
+        product_id,
+        product_name,
+        quantity,
+        unit_price_ex,
+        unit_price,
+        total_amount_ex,
+        total_amount,
+        cost_price
+      FROM sales_return_items
+      ORDER BY id DESC
+      LIMIT 10
+    `).all() as any[]
+    console.log(JSON.stringify(returnItems, null, 2))
+
+    // 3. 检查是否有退货单但没有明细
+    console.log('\n3. 检查没有明细的退货单：')
+    const orphanReturns = db.db.prepare(`
+      SELECT r.*
+      FROM sales_returns r
+      LEFT JOIN sales_return_items ri ON r.id = ri.return_id
+      WHERE ri.id IS NULL
+    `).all() as any[]
+    console.log(JSON.stringify(orphanReturns, null, 2))
+
+    // 4. 检查 4 月份的退货单
+    console.log('\n4. 2026 年 4 月份的退货单：')
+    const aprilReturns = db.db.prepare(`
+      SELECT 
+        r.id,
+        r.return_no,
+        r.return_date,
+        r.total_amount,
+        COUNT(ri.id) as item_count
+      FROM sales_returns r
+      LEFT JOIN sales_return_items ri ON r.id = ri.return_id
+      WHERE r.return_date >= '2026-04-01' AND r.return_date <= '2026-04-30'
+      GROUP BY r.id, r.return_no, r.return_date, r.total_amount
+    `).all() as any[]
+    console.log(JSON.stringify(aprilReturns, null, 2))
+
+    // 5. 检查所有退货单及明细
+    console.log('\n5. 所有退货单及明细（JOIN 查询）：')
+    const allReturnsWithItems = db.db.prepare(`
+      SELECT 
+        r.return_no,
+        r.return_date,
+        ri.product_name,
+        ri.quantity,
+        ri.unit_price_ex,
+        ri.unit_price,
+        ri.total_amount_ex,
+        ri.total_amount
+      FROM sales_returns r
+      JOIN sales_return_items ri ON r.id = ri.return_id
+      ORDER BY r.return_date DESC
+      LIMIT 10
+    `).all() as any[]
+    console.log(JSON.stringify(allReturnsWithItems, null, 2))
+
+    return {
+      returns,
+      returnItems,
+      orphanReturns,
+      aprilReturns,
+      allReturnsWithItems
+    }
   })
 
   // 获取调拨成本统计
@@ -806,16 +1138,12 @@ function setupIpcHandlers() {
       const deleteResult = db.costDb.deleteSettlement(params.year, params.month)
       console.log(`  已删除成本结算数据，影响行数：${deleteResult.changes}`)
   
-      // 解锁成本结算
-      db.costDb.unlockSettlement(params.year, params.month)
-      console.log(`  已解锁 ${params.year}年${params.month}月`)
-  
-      // 删除销售成本统计
-      db.costDb.deleteSalesCostSummary(params.year, params.month)
+      // 删除销售成本统计（只删除指定月份）
+      db.costDb.deleteSalesCostItemsByPeriod(params.year, params.month)
       console.log(`  已删除销售成本统计`)
   
-      // 删除调拨成本统计
-      db.costDb.deleteTransferCostSummary(params.year, params.month)
+      // 删除调拨成本统计（只删除指定月份）
+      db.costDb.deleteTransferCostItemsByPeriod(params.year, params.month)
       console.log(`  已删除调拨成本统计`)
       
       // 验证是否删除成功
@@ -1132,6 +1460,18 @@ function setupIpcHandlers() {
     return db.saveRecycleBinItems(items)
   })
 
+  ipcMain.handle('recycle-bin-add', async (event, type: string, data: any) => {
+    return db.addToRecycleBin(type, data)
+  })
+
+  ipcMain.handle('recycle-bin-restore', async (event, itemId: number) => {
+    return db.restoreFromRecycleBin(itemId)
+  })
+
+  ipcMain.handle('recycle-bin-remove', async (event, itemId: number) => {
+    return db.removeFromRecycleBin(itemId)
+  })
+
   // ==================== 价格列表 ====================
 
   ipcMain.handle('price-list-get', async () => {
@@ -1152,13 +1492,19 @@ if (!gotTheLock) {
   console.log('已有实例在运行，退出')
   app.quit()
 } else {
-  app.whenReady().then(() => {
-    createWindow()
-    initDatabase()
-    setupIpcHandlers()
-
-    // 系统启动完成
-    console.log('\n========== 系统启动完成 ==========')
+  app.whenReady().then(async () => {
+    try {
+      console.log('========== 应用启动 ==========')
+      createWindow()
+      console.log('窗口创建完成，开始初始化数据库...')
+      initDatabase()
+      setupIpcHandlers()
+      console.log('========== 系统启动完成 ==========')
+    } catch (error) {
+      console.error('应用启动失败:', error)
+      dialog.showErrorBox('启动失败', '应用启动时发生错误：\n' + (error as Error).message)
+      app.quit()
+    }
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {

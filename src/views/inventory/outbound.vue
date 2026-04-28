@@ -163,13 +163,14 @@
         />
 
         <el-table :data="formData.items" style="width: 100%" border>
-          <el-table-column label="商品" min-width="200">
+          <el-table-column label="商品" min-width="130">
             <template #default="{ row, $index }">
               <el-select
                 v-model="row.productId"
-                placeholder="请选择商品"
+                :placeholder="formData.warehouseId ? '请选择商品' : '请先选择仓库'"
                 style="width: 100%"
                 filterable
+                :disabled="!formData.warehouseId"
                 @change="handleProductChange($index, $event)"
               >
                 <el-option
@@ -181,7 +182,7 @@
               </el-select>
             </template>
           </el-table-column>
-          <el-table-column label="商品名称" min-width="150">
+          <el-table-column label="商品名称" min-width="100">
             <template #default="{ row }">
               <el-input v-model="row.productName" disabled />
             </template>
@@ -298,7 +299,7 @@
           </el-table-column>
         </el-table>
 
-        <el-button type="primary" style="margin-top: 10px" @click="addItem">
+        <el-button type="primary" style="margin-top: 10px" :disabled="!formData.warehouseId" @click="addItem">
           <el-icon><Plus /></el-icon> 添加商品行
         </el-button>
 
@@ -490,7 +491,8 @@ const loadProducts = async () => {
         name: p.name || p.productName || '',
         specification: p.specification || p.spec || '',
         unit: p.unit || '',
-        salePrice: p.salePrice || p.sellPrice || p.costPrice || 0
+        salePrice: p.salePrice || p.sellPrice || p.costPrice || 0,
+        taxRate: p.taxRate || p.tax_rate || ''
       }))
     console.log('加载产品列表成功（数据库），共', productList.value.length, '个产品')
   } catch (error) {
@@ -613,6 +615,10 @@ const handleProductChange = (index: number, productId: number) => {
     // 优先使用 spec（产品表字段），其次使用 specification，最后使用 code 作为备用
     item.specification = product.spec || product.specification || product.code || ''
     item.unit = product.unit || ''
+    const productTaxRate = product.taxRate || product.tax_rate || ''
+    if (productTaxRate && productTaxRate !== '') {
+      item.taxRate = productTaxRate
+    }
     // 如果产品有售价则使用，否则保持为空
     item.unitPriceEx = product.salePrice && product.salePrice > 0 ? product.salePrice : ('' as any)
     item._lastEdited = 'unitEx'
@@ -993,6 +999,7 @@ const handlePrint = (row: OutboundRecord) => {
 
 const printOutboundForm = (row: OutboundRecord) => {
   const hasDeduction = row.items.some((item: any) => item.allowDeduction)
+  const companyName = localStorage.getItem('companyName') || '荆州供销农业服务有限公司'
   
   const itemsHtml = row.items.map((item: any, index) => `
       <tr>
@@ -1019,21 +1026,23 @@ const printOutboundForm = (row: OutboundRecord) => {
           body { font-family: Arial, sans-serif; padding: 20px; }
           .header { text-align: center; margin-bottom: 20px; }
           .table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
-          .table th, .table td { border: 1px solid #ddd; padding: 8px; }
+          .table th, .table td { border: 1px solid #ddd; padding: 8px; text-align: center; }
           .table th { background-color: #f5f5f5; }
-          .info { margin-bottom: 10px; }
+          .info { margin-bottom: 10px; display: flex; flex-wrap: wrap; }
+          .info div { width: 50%; margin-bottom: 5px; }
         </style>
       </head>
       <body>
         <div class="header">
-          <h2>出库单</h2>
+          <h2>${companyName}</h2>
+          <h3>出库单</h3>
           <p>凭证号：${row.voucherNo}</p>
         </div>
         <div class="info">
           <div>出库日期：${row.voucherDate}</div>
           <div>客户：${row.customerName}</div>
+          <div>仓库：${row.warehouseName || '-'}</div>
           <div>操作员：${row.operator}</div>
-          <div>备注：${row.remark || '-'}</div>
         </div>
         <table class="table">
           <thead>
@@ -1056,8 +1065,13 @@ const printOutboundForm = (row: OutboundRecord) => {
             ${itemsHtml}
           </tbody>
         </table>
-        <div style="text-align: right; font-weight: bold;">总金额：${row.totalAmount.toFixed(2)}</div>
-        ${hasDeduction ? `<div style="text-align: right; font-weight: bold; color: #67c23a;">加计扣除总额：${row.items.reduce((sum: number, item: any) => sum + (item.deductionAmount || 0), 0).toFixed(2)}</div>` : ''}
+        <div style="text-align: right; font-weight: bold;">总金额：¥${row.totalAmount.toFixed(2)}</div>
+        ${hasDeduction ? `<div style="text-align: right; font-weight: bold; color: #67c23a;">加计扣除总额：¥${row.items.reduce((sum: number, item: any) => sum + (item.deductionAmount || 0), 0).toFixed(2)}</div>` : ''}
+        <div style="margin-top: 10px; border: 1px solid #000; padding: 8px; text-align: left;">备注：${row.remark || '-'}</div>
+        <div style="margin-top: 15px; display: flex; justify-content: space-between; align-items: center;">
+          <div>操作员：${row.operator}</div>
+          <div>经办人签字：____________________</div>
+        </div>
         <div style="text-align: right; margin-top: 10px;">打印时间：${dayjs().format('YYYY-MM-DD HH:mm:ss')}</div>
       </body>
     </html>
@@ -1098,14 +1112,15 @@ const printBatchOutboundForms = (rows: OutboundRecord[]) => {
     return `
       <div class="form-container" style="page-break-after: always; margin-bottom: 40px;">
         <div class="header" style="text-align: center; margin-bottom: 20px;">
-          <h2>出库单</h2>
+          <h2>${companyName}</h2>
+          <h3>出库单</h3>
           <p>凭证号：${row.voucherNo}</p>
         </div>
-        <div class="info" style="margin-bottom: 10px;">
-          <div>出库日期：${row.voucherDate}</div>
-          <div>客户：${row.customerName}</div>
-          <div>操作员：${row.operator}</div>
-          <div>备注：${row.remark || '-'}</div>
+        <div class="info" style="margin-bottom: 10px; display: flex; flex-wrap: wrap;">
+          <div style="width: 50%; margin-bottom: 5px;">出库日期：${row.voucherDate}</div>
+          <div style="width: 50%; margin-bottom: 5px;">客户：${row.customerName}</div>
+          <div style="width: 50%; margin-bottom: 5px;">仓库：${row.warehouseName || '-'}</div>
+          <div style="width: 50%; margin-bottom: 5px;">操作员：${row.operator}</div>
         </div>
         <table class="table" style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
           <thead>
@@ -1128,8 +1143,13 @@ const printBatchOutboundForms = (rows: OutboundRecord[]) => {
             ${itemsHtml}
           </tbody>
         </table>
-        <div style="text-align: right; font-weight: bold;">总金额：${row.totalAmount.toFixed(2)}</div>
-        ${hasDeduction ? `<div style="text-align: right; font-weight: bold; color: #67c23a;">加计扣除总额：${row.items.reduce((sum: number, item: any) => sum + (item.deductionAmount || 0), 0).toFixed(2)}</div>` : ''}
+        <div style="text-align: right; font-weight: bold;">总金额：¥${row.totalAmount.toFixed(2)}</div>
+        ${hasDeduction ? `<div style="text-align: right; font-weight: bold; color: #67c23a;">加计扣除总额：¥${row.items.reduce((sum: number, item: any) => sum + (item.deductionAmount || 0), 0).toFixed(2)}</div>` : ''}
+        <div style="margin-top: 10px; border: 1px solid #000; padding: 8px; text-align: left;">备注：${row.remark || '-'}</div>
+        <div style="margin-top: 15px; display: flex; justify-content: space-between; align-items: center;">
+          <div>操作员：${row.operator}</div>
+          <div>经办人签字：____________________</div>
+        </div>
         <div style="text-align: right; margin-top: 10px; border-top: 1px solid #ddd; padding-top: 10px;">
           第 ${formIndex + 1} 张 / 共 ${rows.length} 张
         </div>

@@ -39,6 +39,10 @@
               <el-icon><RefreshLeft /></el-icon>
               重置
             </el-button>
+            <el-button type="success" @click="handleExport">
+              <el-icon><Download /></el-icon>
+              导出Excel
+            </el-button>
           </el-form-item>
         </el-form>
       </div>
@@ -121,7 +125,7 @@
         <div class="detail-table-wrapper">
           <el-table :data="detailRecords" style="width: 100%" border show-summary :summary-method="getSummary">
             <el-table-column prop="date" label="日期" width="120" fixed />
-            <el-table-column prop="docNo" label="单号" width="160" fixed />
+            <el-table-column prop="docNo" label="单号" width="180" fixed />
             <el-table-column prop="type" label="类型" width="100">
               <template #default="{ row }">
                 <el-tag :type="getTypeColor(row.type)">{{ row.type }}</el-tag>
@@ -134,7 +138,10 @@
               <el-table-column prop="receivableAmount" label="金额" width="130" align="right">
                 <template #default="{ row }">
                   <span v-if="row.receivableAmount > 0" style="color: #f56c6c">
-                    ¥{{ row.receivableAmount.toLocaleString() }}
+                    ¥{{ row.receivableAmount.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
+                  </span>
+                  <span v-else-if="row.receivableAmount < 0" style="color: #67c23a">
+                    -¥{{ Math.abs(row.receivableAmount).toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}
                   </span>
                   <span v-else>-</span>
                 </template>
@@ -175,7 +182,10 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Search, RefreshLeft, Close } from '@element-plus/icons-vue'
+import { Search, RefreshLeft, Close, Download } from '@element-plus/icons-vue'
+import * as XLSX from 'xlsx'
+import dayjs from 'dayjs'
+import { db } from '@/utils/db-ipc'
 
 const round2 = (num: number) => Math.round(num * 100) / 100
 
@@ -210,9 +220,9 @@ watch(detailVisible, (v) => {
   try { document.body.style.overflow = v ? 'hidden' : '' } catch {}
 })
 
-const handlePartnerTypeChange = () => {
-  loadPartners()
+const handlePartnerTypeChange = async () => {
   queryForm.partnerId = ''
+  await loadPartners()
   handleQuery()
 }
 
@@ -250,6 +260,274 @@ const handleReset = () => {
   calculateBalances()
 }
 
+const handleExport = async () => {
+  if (balanceList.value.length === 0) {
+    ElMessage.warning('没有可导出的数据，请先查询')
+    return
+  }
+
+  try {
+    ElMessage.info('正在生成Excel，请稍候...')
+    const wb = XLSX.utils.book_new()
+    const isCustomer = queryForm.partnerType === 'customer'
+    const startDate = queryForm.periodRange?.[0] || ''
+    const endDate = queryForm.periodRange?.[1] || ''
+    const periodLabel = startDate && endDate ? `${startDate}_${endDate}` : dayjs().format('YYYYMMDD')
+
+    const summaryHeaders = [
+      isCustomer ? '客户名称' : '供应商名称',
+      '期初余额',
+      isCustomer ? '本期应收' : '本期应付',
+      isCustomer ? '本期已收' : '本期已付',
+      '期末余额'
+    ]
+    const summaryRows = balanceList.value.map(item => [
+      item.name,
+      item.openingBalance,
+      item.currentReceivable,
+      item.currentPaid,
+      item.closingBalance
+    ])
+    const totalOpening = round2(balanceList.value.reduce((s, r) => s + r.openingBalance, 0))
+    const totalReceivable = round2(balanceList.value.reduce((s, r) => s + r.currentReceivable, 0))
+    const totalPaid = round2(balanceList.value.reduce((s, r) => s + r.currentPaid, 0))
+    const totalClosing = round2(balanceList.value.reduce((s, r) => s + r.closingBalance, 0))
+    summaryRows.push(['合计', totalOpening, totalReceivable, totalPaid, totalClosing])
+
+    const wsSummary = XLSX.utils.aoa_to_sheet([summaryHeaders, ...summaryRows])
+    wsSummary['!cols'] = [
+      { wch: 20 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }
+    ]
+    XLSX.utils.book_append_sheet(wb, wsSummary, isCustomer ? '客户汇总' : '供应商汇总')
+
+    for (const partner of balanceList.value) {
+      const detailData = await loadDetailRecordsForExport(partner)
+      const detailHeaders = [
+        '日期', '单号', '类型', '商品名称', '数量',
+        isCustomer ? '应收款' : '应付款',
+        isCustomer ? '已收款' : '已付款',
+        '余额', '备注'
+      ]
+      const detailRows = detailData.map((r: any) => [
+        r.date, r.docNo, r.type, r.productName, r.quantity,
+        r.receivableAmount, r.paidAmount, r.balance, r.remark
+      ])
+
+      const wsDetail = XLSX.utils.aoa_to_sheet([detailHeaders, ...detailRows])
+      wsDetail['!cols'] = [
+        { wch: 12 }, { wch: 18 }, { wch: 10 }, { wch: 20 }, { wch: 8 },
+        { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 20 }
+      ]
+      const sheetName = partner.name.substring(0, 31)
+      XLSX.utils.book_append_sheet(wb, wsDetail, sheetName)
+    }
+
+    const filename = isCustomer ? `客户对账_${periodLabel}.xlsx` : `供应商对账_${periodLabel}.xlsx`
+    XLSX.writeFile(wb, filename)
+    ElMessage.success('导出成功')
+  } catch (error) {
+    console.error('导出失败:', error)
+    ElMessage.error('导出失败')
+  }
+}
+
+const loadDetailRecordsForExport = async (partner: BalanceItem) => {
+  const startDate = queryForm.periodRange?.[0] || '1970-01-01'
+  const endDate = queryForm.periodRange?.[1] || '2099-12-31'
+  const tempRecords: any[] = []
+
+  try {
+    if (queryForm.partnerType === 'customer') {
+      const outbounds = await db.getOutboundList(1, 10000)
+      for (const rec of (outbounds?.data || [])) {
+        const recCustomerId = rec.customerId || rec.customer_id
+        const recCustomerName = rec.customerName || rec.customer_name
+        if (recCustomerId !== partner.id && recCustomerName !== partner.name) continue
+        const recDate = rec.voucherDate || rec.outbound_date || ''
+        if (!recDate) continue
+        const dateStr = recDate.slice(0, 10)
+        if (dateStr < startDate || dateStr > endDate) continue
+
+        let productName = ''
+        let quantity = 0
+        const items = rec.items || []
+        items.forEach((item: any) => {
+          productName = productName ? productName + '、' + (item.productName || '') : (item.productName || '')
+          quantity += Number(item.quantity || 0)
+        })
+
+        tempRecords.push({
+          date: dateStr,
+          docNo: rec.voucherNo || rec.outbound_no || '',
+          type: '销售出库',
+          productName,
+          quantity,
+          receivableAmount: round2(Number(rec.totalAmount || rec.total_amount || 0)),
+          paidAmount: round2(Number(rec.receivedAmount || rec.received_amount || 0)),
+          remark: rec.remark || '',
+          _timestamp: rec.createdAt || rec.created_at || recDate
+        })
+      }
+
+      const receipts = await db.getReceiptList()
+      for (const rec of (receipts || [])) {
+        const recCustomerId = rec.customer_id ?? rec.customerId
+        const recCustomerName = rec.customer_name || rec.customerName
+        if (recCustomerId !== partner.id && recCustomerName !== partner.name) continue
+        const recDate = rec.receipt_date || rec.receiptDate || ''
+        if (!recDate) continue
+        const dateStr = recDate.slice(0, 10)
+        if (dateStr < startDate || dateStr > endDate) continue
+
+        tempRecords.push({
+          date: dateStr,
+          docNo: rec.receipt_no || rec.receiptNo || '',
+          type: '收款单',
+          productName: '',
+          quantity: 0,
+          receivableAmount: 0,
+          paidAmount: round2(Number(rec.amount || 0)),
+          remark: rec.remark || '',
+          _timestamp: rec.created_at || rec.createdAt || recDate
+        })
+      }
+
+      const salesReturns = await db.getSalesReturns(1, 10000)
+      for (const rec of (salesReturns?.data || [])) {
+        const recCustomerId = rec.customerId || rec.customer_id
+        const recCustomerName = rec.customer_name || rec.customerName
+        if (recCustomerId !== partner.id && recCustomerName !== partner.name) continue
+        const recDate = rec.returnDate || rec.return_date || ''
+        if (!recDate) continue
+        const dateStr = recDate.slice(0, 10)
+        if (dateStr < startDate || dateStr > endDate) continue
+
+        let productName = ''
+        let quantity = 0
+        const items = rec.items || []
+        items.forEach((item: any) => {
+          productName = productName ? productName + '、' + (item.productName || item.product_name || '') : (item.productName || item.product_name || '')
+          quantity += Number(item.quantity || 0)
+        })
+
+        tempRecords.push({
+          date: dateStr,
+          docNo: rec.returnNo || rec.return_no || '',
+          type: '销售退货',
+          productName,
+          quantity,
+          receivableAmount: -round2(Number(rec.total_incl || rec.totalInc || rec.total_inc || rec.totalAmount || rec.total_amount || 0)),
+          paidAmount: 0,
+          remark: rec.return_reason || rec.remark || '',
+          _timestamp: rec.created_at || rec.createdAt || recDate
+        })
+      }
+    } else {
+      const inbounds = await db.getInboundList(1, 10000)
+      for (const rec of (inbounds?.data || [])) {
+        const recSupplierId = rec.supplierId || rec.supplier_id
+        const recSupplierName = rec.supplierName || rec.supplier_name
+        if (recSupplierId !== partner.id && recSupplierName !== partner.name) continue
+        const recDate = rec.voucherDate || rec.inbound_date || ''
+        if (!recDate) continue
+        const dateStr = recDate.slice(0, 10)
+        if (dateStr < startDate || dateStr > endDate) continue
+
+        let productName = ''
+        let quantity = 0
+        const items = rec.items || []
+        items.forEach((item: any) => {
+          productName = productName ? productName + '、' + (item.productName || '') : (item.productName || '')
+          quantity += Number(item.quantity || 0)
+        })
+
+        tempRecords.push({
+          date: dateStr,
+          docNo: rec.voucherNo || rec.inbound_no || '',
+          type: '采购入库',
+          productName,
+          quantity,
+          receivableAmount: round2(Number(rec.totalAmount || rec.total_amount || 0)),
+          paidAmount: round2(Number(rec.paidAmount || rec.paid_amount || 0)),
+          remark: rec.remark || '',
+          _timestamp: rec.createdAt || rec.created_at || recDate
+        })
+      }
+
+      const payments = await db.getPaymentList()
+      for (const rec of (payments || [])) {
+        const recSupplierId = rec.supplier_id ?? rec.supplierId
+        const recSupplierName = rec.supplier_name || rec.supplierName
+        if (recSupplierId !== partner.id && recSupplierName !== partner.name) continue
+        const recDate = rec.payment_date || rec.paymentDate || ''
+        if (!recDate) continue
+        const dateStr = recDate.slice(0, 10)
+        if (dateStr < startDate || dateStr > endDate) continue
+
+        tempRecords.push({
+          date: dateStr,
+          docNo: rec.payment_no || rec.paymentNo || '',
+          type: '付款单',
+          productName: '',
+          quantity: 0,
+          receivableAmount: 0,
+          paidAmount: round2(Number(rec.amount || 0)),
+          remark: rec.remark || '',
+          _timestamp: rec.created_at || rec.createdAt || recDate
+        })
+      }
+
+      const purchaseReturns = await db.getPurchaseReturns(1, 10000)
+      for (const rec of (purchaseReturns?.data || [])) {
+        const recSupplierId = rec.supplierId || rec.supplier_id
+        const recSupplierName = rec.supplier_name || rec.supplierName
+        if (recSupplierId !== partner.id && recSupplierName !== partner.name) continue
+        const recDate = rec.returnDate || rec.return_date || ''
+        if (!recDate) continue
+        const dateStr = recDate.slice(0, 10)
+        if (dateStr < startDate || dateStr > endDate) continue
+
+        let productName = ''
+        let quantity = 0
+        const items = rec.items || []
+        items.forEach((item: any) => {
+          productName = productName ? productName + '、' + (item.productName || item.product_name || '') : (item.productName || item.product_name || '')
+          quantity += Number(item.quantity || 0)
+        })
+
+        tempRecords.push({
+          date: dateStr,
+          docNo: rec.returnNo || rec.return_no || '',
+          type: '采购退货',
+          productName,
+          quantity,
+          receivableAmount: -round2(Number(rec.total_incl || rec.totalAmount || rec.total_amount || 0)),
+          paidAmount: 0,
+          remark: rec.return_reason || rec.remark || '',
+          _timestamp: rec.created_at || rec.createdAt || recDate
+        })
+      }
+    }
+  } catch (error) {
+    console.error('加载明细记录失败:', error)
+  }
+
+  tempRecords.sort((a, b) => {
+    const dateA = new Date(a.date).getTime()
+    const dateB = new Date(b.date).getTime()
+    if (dateA !== dateB) return dateA - dateB
+    const timeA = a._timestamp ? new Date(a._timestamp).getTime() : dateA
+    const timeB = b._timestamp ? new Date(b._timestamp).getTime() : dateB
+    return timeA - timeB
+  })
+
+  let balance = partner.openingBalance
+  return tempRecords.map((r: any) => {
+    balance = round2(balance + r.receivableAmount - r.paidAmount)
+    return { ...r, balance }
+  })
+}
+
 const calculateBalances = async () => {
   const startDate = queryForm.periodRange?.[0] || '1970-01-01'
   const endDate = queryForm.periodRange?.[1] || '2099-12-31'
@@ -270,61 +548,95 @@ const calculateBalances = async () => {
         const outbounds = await db.getOutboundList(1, 10000)
         const outboundList = outbounds?.data || []
         for (const rec of outboundList) {
-          if (rec.customerId !== partner.id && rec.customerName !== partner.name) continue
-          const recDate = rec.voucherDate || ''
+          const recCustomerId = rec.customerId || rec.customer_id
+          const recCustomerName = rec.customerName || rec.customer_name
+          if (recCustomerId !== partner.id && recCustomerName !== partner.name) continue
+          const recDate = rec.voucherDate || rec.outbound_date || ''
           if (!recDate) continue
           const dateStr = recDate.slice(0, 10)
           const inPeriod = dateStr >= startDate && dateStr <= endDate
           const beforePeriod = dateStr < startDate
 
-          const amount = round2(Number(rec.totalAmount || 0))
+          const amount = round2(Number(rec.totalAmount || rec.total_amount || 0))
           if (beforePeriod) openingBalance = round2(openingBalance + amount)
           else if (inPeriod) currentReceivable = round2(currentReceivable + amount)
 
-          const paidFromOutbound = round2(Number(rec.paidAmount || rec.paid || 0))
+          const paidFromOutbound = round2(Number(rec.receivedAmount || rec.received_amount || 0))
           if (beforePeriod) openingBalance = round2(openingBalance - paidFromOutbound)
           else if (inPeriod) currentPaid = round2(currentPaid + paidFromOutbound)
         }
 
         const receipts = await db.getReceiptList()
         for (const rec of receipts || []) {
-          const recDate = rec.receiptDate || ''
+          const recDate = rec.receipt_date || rec.receiptDate || ''
           if (!recDate) continue
           const dateStr = recDate.slice(0, 10)
-          if (rec.customerId !== partner.id && rec.customerName !== partner.name) continue
+          const recCustomerId = rec.customer_id ?? rec.customerId
+          const recCustomerName = rec.customer_name || rec.customerName
+          if (recCustomerId !== partner.id && recCustomerName !== partner.name) continue
           const amount = round2(Number(rec.amount || 0))
           if (dateStr < startDate) openingBalance = round2(openingBalance - amount)
           else if (dateStr >= startDate && dateStr <= endDate) currentPaid = round2(currentPaid + amount)
+        }
+
+        const salesReturns = await db.getSalesReturns(1, 10000)
+        for (const rec of (salesReturns?.data || [])) {
+          const recCustomerId = rec.customerId || rec.customer_id
+          const recCustomerName = rec.customer_name || rec.customerName
+          if (recCustomerId !== partner.id && recCustomerName !== partner.name) continue
+          const recDate = rec.returnDate || rec.return_date || ''
+          if (!recDate) continue
+          const dateStr = recDate.slice(0, 10)
+          const amount = round2(Number(rec.total_incl || rec.totalInc || rec.total_inc || rec.totalAmount || rec.total_amount || 0))
+          if (dateStr < startDate) openingBalance = round2(openingBalance - amount)
+          else if (dateStr >= startDate && dateStr <= endDate) currentReceivable = round2(currentReceivable - amount)
         }
       } else {
         const inbounds = await db.getInboundList(1, 10000)
         const inboundList = inbounds?.data || []
         for (const rec of inboundList) {
-          if (rec.supplierId !== partner.id && rec.supplierName !== partner.name) continue
-          const recDate = rec.voucherDate || ''
+          const recSupplierId = rec.supplierId || rec.supplier_id
+          const recSupplierName = rec.supplierName || rec.supplier_name
+          if (recSupplierId !== partner.id && recSupplierName !== partner.name) continue
+          const recDate = rec.voucherDate || rec.inbound_date || ''
           if (!recDate) continue
           const dateStr = recDate.slice(0, 10)
           const inPeriod = dateStr >= startDate && dateStr <= endDate
           const beforePeriod = dateStr < startDate
 
-          const amount = round2(Number(rec.totalAmount || 0))
+          const amount = round2(Number(rec.totalAmount || rec.total_amount || 0))
           if (beforePeriod) openingBalance = round2(openingBalance + amount)
           else if (inPeriod) currentReceivable = round2(currentReceivable + amount)
 
-          const paidFromInbound = round2(Number(rec.paidAmount || rec.paid || 0))
+          const paidFromInbound = round2(Number(rec.paidAmount || rec.paid_amount || 0))
           if (beforePeriod) openingBalance = round2(openingBalance - paidFromInbound)
           else if (inPeriod) currentPaid = round2(currentPaid + paidFromInbound)
         }
 
         const payments = await db.getPaymentList()
         for (const rec of payments || []) {
-          const recDate = rec.paymentDate || ''
+          const recDate = rec.payment_date || rec.paymentDate || ''
           if (!recDate) continue
           const dateStr = recDate.slice(0, 10)
-          if (rec.supplierId !== partner.id && rec.supplierName !== partner.name) continue
+          const recSupplierId = rec.supplier_id ?? rec.supplierId
+          const recSupplierName = rec.supplier_name || rec.supplierName
+          if (recSupplierId !== partner.id && recSupplierName !== partner.name) continue
           const amount = round2(Number(rec.amount || 0))
           if (dateStr < startDate) openingBalance = round2(openingBalance - amount)
           else if (dateStr >= startDate && dateStr <= endDate) currentPaid = round2(currentPaid + amount)
+        }
+
+        const purchaseReturns = await db.getPurchaseReturns(1, 10000)
+        for (const rec of (purchaseReturns?.data || [])) {
+          const recSupplierId = rec.supplierId || rec.supplier_id
+          const recSupplierName = rec.supplier_name || rec.supplierName
+          if (recSupplierId !== partner.id && recSupplierName !== partner.name) continue
+          const recDate = rec.returnDate || rec.return_date || ''
+          if (!recDate) continue
+          const dateStr = recDate.slice(0, 10)
+          const amount = round2(Number(rec.total_incl || rec.totalAmount || rec.total_amount || 0))
+          if (dateStr < startDate) openingBalance = round2(openingBalance - amount)
+          else if (dateStr >= startDate && dateStr <= endDate) currentReceivable = round2(currentReceivable - amount)
         }
       }
     } catch (error) {
@@ -361,8 +673,10 @@ const loadDetailRecords = async (partner: BalanceItem) => {
     if (queryForm.partnerType === 'customer') {
       const outbounds = await db.getOutboundList(1, 10000)
       for (const rec of (outbounds?.data || [])) {
-        if (rec.customerId !== partner.id && rec.customerName !== partner.name) continue
-        const recDate = rec.voucherDate || ''
+        const recCustomerId = rec.customerId || rec.customer_id
+        const recCustomerName = rec.customerName || rec.customer_name
+        if (recCustomerId !== partner.id && recCustomerName !== partner.name) continue
+        const recDate = rec.voucherDate || rec.outbound_date || ''
         if (!recDate) continue
         const dateStr = recDate.slice(0, 10)
         if (dateStr < startDate || dateStr > endDate) continue
@@ -377,42 +691,77 @@ const loadDetailRecords = async (partner: BalanceItem) => {
 
         tempRecords.push({
           date: dateStr,
-          docNo: rec.voucherNo || '',
+          docNo: rec.voucherNo || rec.outbound_no || '',
           type: '销售出库',
           productName,
           quantity,
-          receivableAmount: round2(Number(rec.totalAmount || 0)),
-          paidAmount: round2(Number(rec.paidAmount || rec.paid || 0)),
+          receivableAmount: round2(Number(rec.totalAmount || rec.total_amount || 0)),
+          paidAmount: round2(Number(rec.receivedAmount || rec.received_amount || 0)),
           remark: rec.remark || '',
-          _timestamp: rec.createdAt || recDate
+          _timestamp: rec.createdAt || rec.created_at || recDate
         })
       }
 
       const receipts = await db.getReceiptList()
       for (const rec of (receipts || [])) {
-        if (rec.customerId !== partner.id && rec.customerName !== partner.name) continue
-        const recDate = rec.receiptDate || ''
+        const recCustomerId = rec.customer_id ?? rec.customerId
+        const recCustomerName = rec.customer_name || rec.customerName
+        if (recCustomerId !== partner.id && recCustomerName !== partner.name) continue
+        const recDate = rec.receipt_date || rec.receiptDate || ''
         if (!recDate) continue
         const dateStr = recDate.slice(0, 10)
         if (dateStr < startDate || dateStr > endDate) continue
 
         tempRecords.push({
           date: dateStr,
-          docNo: rec.receiptNo || '',
+          docNo: rec.receipt_no || rec.receiptNo || '',
           type: '收款单',
           productName: '',
           quantity: 0,
           receivableAmount: 0,
           paidAmount: round2(Number(rec.amount || 0)),
           remark: rec.remark || '',
-          _timestamp: rec.createdAt || recDate
+          _timestamp: rec.created_at || rec.createdAt || recDate
+        })
+      }
+
+      const salesReturns = await db.getSalesReturns(1, 10000)
+      for (const rec of (salesReturns?.data || [])) {
+        const recCustomerId = rec.customerId || rec.customer_id
+        const recCustomerName = rec.customer_name || rec.customerName
+        if (recCustomerId !== partner.id && recCustomerName !== partner.name) continue
+        const recDate = rec.returnDate || rec.return_date || ''
+        if (!recDate) continue
+        const dateStr = recDate.slice(0, 10)
+        if (dateStr < startDate || dateStr > endDate) continue
+
+        let productName = ''
+        let quantity = 0
+        const items = rec.items || []
+        items.forEach((item: any) => {
+          productName = productName ? productName + '、' + (item.productName || item.product_name || '') : (item.productName || item.product_name || '')
+          quantity += Number(item.quantity || 0)
+        })
+
+        tempRecords.push({
+          date: dateStr,
+          docNo: rec.returnNo || rec.return_no || '',
+          type: '销售退货',
+          productName,
+          quantity,
+          receivableAmount: -round2(Number(rec.total_incl || rec.totalInc || rec.total_inc || rec.totalAmount || rec.total_amount || 0)),
+          paidAmount: 0,
+          remark: rec.return_reason || rec.remark || '',
+          _timestamp: rec.created_at || rec.createdAt || recDate
         })
       }
     } else {
       const inbounds = await db.getInboundList(1, 10000)
       for (const rec of (inbounds?.data || [])) {
-        if (rec.supplierId !== partner.id && rec.supplierName !== partner.name) continue
-        const recDate = rec.voucherDate || ''
+        const recSupplierId = rec.supplierId || rec.supplier_id
+        const recSupplierName = rec.supplierName || rec.supplier_name
+        if (recSupplierId !== partner.id && recSupplierName !== partner.name) continue
+        const recDate = rec.voucherDate || rec.inbound_date || ''
         if (!recDate) continue
         const dateStr = recDate.slice(0, 10)
         if (dateStr < startDate || dateStr > endDate) continue
@@ -427,43 +776,74 @@ const loadDetailRecords = async (partner: BalanceItem) => {
 
         tempRecords.push({
           date: dateStr,
-          docNo: rec.voucherNo || '',
+          docNo: rec.voucherNo || rec.inbound_no || '',
           type: '采购入库',
           productName,
           quantity,
-          receivableAmount: round2(Number(rec.totalAmount || 0)),
-          paidAmount: round2(Number(rec.paidAmount || rec.paid || 0)),
+          receivableAmount: round2(Number(rec.totalAmount || rec.total_amount || 0)),
+          paidAmount: round2(Number(rec.paidAmount || rec.paid_amount || 0)),
           remark: rec.remark || '',
-          _timestamp: rec.createdAt || recDate
+          _timestamp: rec.createdAt || rec.created_at || recDate
         })
       }
 
       const payments = await db.getPaymentList()
       for (const rec of (payments || [])) {
-        if (rec.supplierId !== partner.id && rec.supplierName !== partner.name) continue
-        const recDate = rec.paymentDate || ''
+        const recSupplierId = rec.supplier_id ?? rec.supplierId
+        const recSupplierName = rec.supplier_name || rec.supplierName
+        if (recSupplierId !== partner.id && recSupplierName !== partner.name) continue
+        const recDate = rec.payment_date || rec.paymentDate || ''
         if (!recDate) continue
         const dateStr = recDate.slice(0, 10)
         if (dateStr < startDate || dateStr > endDate) continue
 
         tempRecords.push({
           date: dateStr,
-          docNo: rec.paymentNo || '',
+          docNo: rec.payment_no || rec.paymentNo || '',
           type: '付款单',
           productName: '',
           quantity: 0,
           receivableAmount: 0,
           paidAmount: round2(Number(rec.amount || 0)),
           remark: rec.remark || '',
-          _timestamp: rec.createdAt || recDate
+          _timestamp: rec.created_at || rec.createdAt || recDate
+        })
+      }
+
+      const purchaseReturns = await db.getPurchaseReturns(1, 10000)
+      for (const rec of (purchaseReturns?.data || [])) {
+        const recSupplierId = rec.supplierId || rec.supplier_id
+        const recSupplierName = rec.supplier_name || rec.supplierName
+        if (recSupplierId !== partner.id && recSupplierName !== partner.name) continue
+        const recDate = rec.returnDate || rec.return_date || ''
+        if (!recDate) continue
+        const dateStr = recDate.slice(0, 10)
+        if (dateStr < startDate || dateStr > endDate) continue
+
+        let productName = ''
+        let quantity = 0
+        const items = rec.items || []
+        items.forEach((item: any) => {
+          productName = productName ? productName + '、' + (item.productName || item.product_name || '') : (item.productName || item.product_name || '')
+          quantity += Number(item.quantity || 0)
+        })
+
+        tempRecords.push({
+          date: dateStr,
+          docNo: rec.returnNo || rec.return_no || '',
+          type: '采购退货',
+          productName,
+          quantity,
+          receivableAmount: -round2(Number(rec.total_incl || rec.totalAmount || rec.total_amount || 0)),
+          paidAmount: 0,
+          remark: rec.return_reason || rec.remark || '',
+          _timestamp: rec.created_at || rec.createdAt || recDate
         })
       }
     }
   } catch (error) {
     console.error('加载明细记录失败:', error)
   }
-
-  console.log('排序前记录:', tempRecords.map(r => ({ date: r.date, docNo: r.docNo, _timestamp: r._timestamp })))
 
   tempRecords.sort((a, b) => {
     const dateA = new Date(a.date).getTime()
@@ -475,8 +855,6 @@ const loadDetailRecords = async (partner: BalanceItem) => {
     const timeB = b._timestamp ? new Date(b._timestamp).getTime() : dateB
     return timeA - timeB
   })
-
-  console.log('排序后记录:', tempRecords.map(r => ({ date: r.date, docNo: r.docNo, _timestamp: r._timestamp })))
 
   let balance = partner.openingBalance
   detailRecords.value = tempRecords.map((r: any) => {

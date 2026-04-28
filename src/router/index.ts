@@ -1,4 +1,4 @@
-import { createRouter, createWebHistory } from 'vue-router'
+import { createRouter, createWebHashHistory } from 'vue-router'
 import Layout from '@/layout/index.vue'
 
 const routes: any[] = [
@@ -208,21 +208,9 @@ const routes: any[] = [
   {
     path: '/system',
     component: Layout,
-    redirect: '/system/users',
+    redirect: '/system/employees',
     meta: { title: '系统设置', icon: 'Setting' },
     children: [
-      {
-        path: 'users',
-        name: 'SystemUsers',
-        component: () => import('@/views/system/users.vue'),
-        meta: { title: '用户管理', icon: 'User' }
-      },
-      {
-        path: 'roles',
-        name: 'SystemRoles',
-        component: () => import('@/views/system/roles.vue'),
-        meta: { title: '角色管理', icon: 'Avatar' }
-      },
       {
         path: 'employees',
         name: 'SystemEmployees',
@@ -258,7 +246,7 @@ const routes: any[] = [
 ]
 
 const router = createRouter({
-  history: createWebHistory(),
+  history: createWebHashHistory(),
   routes
 })
 
