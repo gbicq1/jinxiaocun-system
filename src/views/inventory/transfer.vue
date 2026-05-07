@@ -121,6 +121,7 @@
             v-model="formData.transferDate"
             type="date"
             placeholder="选择日期"
+            value-format="YYYY-MM-DD"
             style="width: 200px"
             :disabled="isViewMode"
             @change="handleTransferDateChange"
